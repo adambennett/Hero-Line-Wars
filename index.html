@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hero Line Wars</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+      <div id="hud" class="hidden">
+        <div id="hud-top">
+          <div id="hud-panel">
+            <div id="hud-gold">
+              <span class="coin-icon" aria-hidden="true"></span>
+              <span id="hud-gold-amount">0</span>
+              <span id="hud-income"></span>
+            </div>
+            <div id="hud-stats"></div>
+          </div>
+        </div>
+        <div id="hud-banner"></div>
+        <div id="hud-relics"></div>
+        <div id="hud-respawn" class="hidden"></div>
+        <div id="hud-bottom">
+          <div id="hud-toast"></div>
+          <div id="hud-hint"></div>
+        </div>
+      </div>
+
+      <div id="lane-chrome" class="hidden">
+        <div id="send-bar">
+          <div class="send-bar-label">Send (income) · Upgrade Base strengthens packs</div>
+          <div class="send-bar-row">
+            <button type="button" id="upgrade-base-btn" class="upgrade-base-btn">Upgrade Base</button>
+            <div id="send-bar-items"></div>
+          </div>
+        </div>
+        <div id="xp-bar" aria-label="Hero XP">
+          <div class="xp-bar-meta">
+            <span id="xp-level">Lv 1</span>
+            <span id="xp-text">0 / 40</span>
+          </div>
+          <div class="xp-track"><div id="xp-fill"></div></div>
+        </div>
+        <div id="hp-bar" aria-label="Hero HP">
+          <div class="hp-bar-meta">
+            <span id="hp-label">HP</span>
+            <span id="hp-text">0 / 0</span>
+          </div>
+          <div class="hp-track"><div id="hp-fill"></div></div>
+        </div>
+        <button type="button" id="pause-btn" title="Pause (Esc)">Pause</button>
+        <div id="hud-abilities"></div>
+        <button type="button" id="inv-btn" title="Inventory">Bag</button>
+      </div>
+
+      <aside id="inv-panel" class="hidden">
+        <h2>Inventory</h2>
+        <p class="panel-note">Owned relics &amp; shop gear this run.</p>
+        <div id="inv-list" class="panel-list"></div>
+        <button type="button" id="inv-close" class="menu-btn small">Close</button>
+      </aside>
+
+      <aside id="shop-panel" class="hidden">
+        <h2>Base Shop</h2>
+        <p id="shop-meta" class="panel-note">Rotating stock — gear + artifacts, refreshes twice per wave.</p>
+        <button type="button" id="shop-freeze-btn" class="shop-freeze-btn hidden">Freeze timer</button>
+        <div id="shop-items" class="panel-list"></div>
+        <p class="panel-note close-hint">F to close · hotkeys 4–6 for offered items (when shop open)</p>
+      </aside>
+
+      <div id="relic-draft" class="hidden">
+        <div class="relic-draft-card">
+          <h2 id="draft-title">Choose a Relic</h2>
+          <p id="draft-blurb">Pick one build-defining power for the rest of the run.</p>
+          <div id="relic-choices"></div>
+          <button type="button" id="relic-skip" class="menu-btn ghost wide hidden">Skip</button>
+        </div>
+      </div>
+
+      <div id="menus" aria-live="polite">
+        <!-- filled by MenuController -->
+      </div>
+
+      <div id="overlay" class="hidden">
+        <div id="overlay-card">
+          <h1 id="overlay-title"></h1>
+          <p id="overlay-body"></p>
+          <div id="overlay-actions"></div>
+        </div>
+      </div>
+
+      <div id="tooltip" class="hidden" role="tooltip"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

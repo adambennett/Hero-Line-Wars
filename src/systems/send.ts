@@ -1,0 +1,60 @@
+import type { SendPackId } from "../data/send";
+import {
+  SEND_PACKS,
+  baseLevelSendHpBonus,
+  baseUpgradePackMul,
+  unlockedSendPacks,
+} from "../data/send";
+import type { GameState, PendingSend } from "../game/state";
+import { sendCostMul, sendIncomeMul, sendRefundMul, sendHpMulFromRelics } from "./relics";
+import { playSfx } from "./audio";
+
+export function sendPackCost(state: GameState, packId: SendPackId): number {
+  const def = SEND_PACKS.find((p) => p.id === packId);
+  if (!def) return Infinity;
+  const mul = baseUpgradePackMul(state.baseLevel, def);
+  return Math.ceil(def.cost * mul.costMul * sendCostMul(state));
+}
+
+export function availableSendPacks(state: GameState) {
+  return unlockedSendPacks(state.baseLevel);
+}
+
+export function buySendPack(state: GameState, packId: SendPackId): string | null {
+  const def = SEND_PACKS.find((p) => p.id === packId);
+  if (!def) return "Unknown pack";
+  if (def.minBaseLevel > state.baseLevel) return "Upgrade your base to unlock";
+  const cost = sendPackCost(state, packId);
+  if (state.gold < cost) return "Not enough gold";
+
+  state.gold -= cost;
+  const refund = cost * sendRefundMul(state);
+  if (refund > 0) state.gold += refund;
+
+  const mul = baseUpgradePackMul(state.baseLevel, def);
+  const income = def.incomeBonus * mul.incomeMul * sendIncomeMul(state);
+  state.incomePerSec += income;
+
+  const hpScale =
+    def.hpScale *
+    mul.hpMul *
+    baseLevelSendHpBonus(state.baseLevel) *
+    sendHpMulFromRelics(state);
+
+  const pending: PendingSend = {
+    enemies: def.enemies,
+    hpScale,
+  };
+  state.pendingSends.push(pending);
+  state.sendsThisRun += 1;
+
+  state.toast = `Sent ${def.name} (+${income.toFixed(2)}/s)`;
+  state.toastTimer = 1.6;
+  playSfx("send");
+  return null;
+}
+
+export function consumePendingSends(state: GameState): PendingSend[] {
+  const batch = state.pendingSends.splice(0, state.pendingSends.length);
+  return batch;
+}
