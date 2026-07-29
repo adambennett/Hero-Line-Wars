@@ -774,6 +774,49 @@ body,
   font-size: 12px;
 }
 
+.shop-row.unaffordable {
+  border-color: #7a2a32;
+  background: #2a1218;
+  color: #c8a0a6;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.shop-row.unaffordable .shop-name {
+  color: #ff8a90;
+}
+
+.shop-row.unaffordable .shop-meta {
+  color: #a87880;
+}
+
+.shop-row.unaffordable .shop-cost {
+  color: #ff5f6a;
+  letter-spacing: 0.02em;
+}
+
+.shop-row.unaffordable.artifact {
+  border-color: #7a2a32;
+  background: #2a1410;
+}
+
+.shop-row.owned-max {
+  border-color: #2a3848;
+  background: #121820;
+  color: #7a8898;
+  cursor: default;
+  opacity: 0.72;
+}
+
+.shop-row.owned-max .shop-cost {
+  color: #8a9ab0;
+}
+
+.shop-row:disabled:not(.unaffordable):not(.owned-max) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 #overlay {
   position: absolute;
   inset: 0;

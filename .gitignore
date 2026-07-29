@@ -1,5 +1,10 @@
 node_modules
 dist
 dist-release
+dist-desktop
 *.local
 .DS_Store
+build/*.ico
+build/*.icns
+build/*.exe
+build/*.blockmap

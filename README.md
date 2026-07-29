@@ -43,7 +43,11 @@ Survive **10 waves**. High ground grants bonus damage. You **respawn** if downed
 |--------|--------|-----|
 | `npm run build:pages` | `dist/` | GitHub Pages (static multi-file) |
 | `npm run build:release` | `dist-release/` | Single HTML for GitHub Releases |
+| `npm run desktop:dev` | — | Vite + Electron window |
+| `npm run desktop:dist` | `dist-desktop/` | **itch / Steam** Windows packages |
 | `npm run preview` | — | Preview the Pages build |
+
+Desktop (itch upload + Steam roadmap): **[`DESKTOP.md`](./DESKTOP.md)**.
 
 ## Later
 

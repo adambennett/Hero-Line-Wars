@@ -628,12 +628,16 @@ export class Game {
         const row = document.createElement("button");
         row.type = "button";
         row.className =
-          "shop-row" + (maxed ? " owned-max" : "") + (item.category === "artifact" ? " artifact" : "");
+          "shop-row" +
+          (maxed ? " owned-max" : "") +
+          (broke && !maxed ? " unaffordable" : "") +
+          (item.category === "artifact" ? " artifact" : "");
         row.disabled = maxed || broke || this.state!.paused;
         const tag = item.category === "artifact" ? "ARTIFACT · " : "";
         const rarity = RARITY_LABEL[item.rarity];
-        row.innerHTML = `<span class="shop-name">[${i + 4}] ${item.name}</span><span class="shop-meta">${tag}${item.effect}</span><span class="shop-cost">${maxed ? `×${owned} max` : `${item.cost}g`}</span>`;
-        row.dataset.tip = `<strong style="color:${RARITY_COLOR[item.rarity]}">${item.name}</strong> · ${rarity}<br/>${item.effect}<br/>${item.cost}g · max ×${item.maxStacks}`;
+        const costLabel = maxed ? `×${owned} max` : broke ? `LOCKED ${item.cost}g` : `${item.cost}g`;
+        row.innerHTML = `<span class="shop-name">[${i + 4}] ${item.name}</span><span class="shop-meta">${tag}${item.effect}</span><span class="shop-cost">${costLabel}</span>`;
+        row.dataset.tip = `<strong style="color:${RARITY_COLOR[item.rarity]}">${item.name}</strong> · ${rarity}<br/>${item.effect}<br/>${item.cost}g · max ×${item.maxStacks}${broke && !maxed ? "<br/><span style=\"color:#ff6b6b\">Not enough gold</span>" : ""}`;
         const buyId = id;
         row.addEventListener("click", (ev) => {
           ev.preventDefault();
@@ -656,8 +660,12 @@ export class Game {
         const maxed = owned >= item.maxStacks;
         const broke = this.state!.gold < item.cost;
         row.disabled = maxed || broke || this.state!.paused;
+        row.classList.toggle("owned-max", maxed);
+        row.classList.toggle("unaffordable", broke && !maxed);
         const costEl = row.querySelector(".shop-cost");
-        if (costEl) costEl.textContent = maxed ? `×${owned} max` : `${item.cost}g`;
+        if (costEl) {
+          costEl.textContent = maxed ? `×${owned} max` : broke ? `LOCKED ${item.cost}g` : `${item.cost}g`;
+        }
       });
     }
 

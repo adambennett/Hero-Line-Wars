@@ -328,6 +328,13 @@ export class MenuController {
   }
 
   private quit(): void {
+    const desktop = (window as Window & {
+      heroLineWarsDesktop?: { quit?: () => void };
+    }).heroLineWarsDesktop;
+    if (desktop?.quit) {
+      desktop.quit();
+      return;
+    }
     window.close();
     this.setToast("Close this tab to quit (browser blocked auto-close).");
   }
