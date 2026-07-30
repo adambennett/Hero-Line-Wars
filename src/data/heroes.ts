@@ -7,7 +7,9 @@ export type HeroId =
   | "arbalest"
   | "prism"
   | "frost"
-  | "wizard";
+  | "wizard"
+  | "coil"
+  | "thorn";
 
 export type AbilityKind =
   | "dash"
@@ -23,7 +25,11 @@ export type AbilityKind =
   | "glide"
   | "frostnova"
   | "blinkrng"
-  | "chaosburst";
+  | "chaosburst"
+  | "zip"
+  | "stormcage"
+  | "burrow"
+  | "bloom";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -36,7 +42,17 @@ export type AttackStyle =
   | "heavy"
   | "beam"
   | "frostbolt"
-  | "chaos";
+  | "chaos"
+  | "chain"
+  | "vine";
+
+/**
+ * How basics / ults interact with attack range:
+ * - free: fire along aim anywhere (no range circle / no engage gate)
+ * - engage: must have an enemy inside attackRange to basic or ultimate
+ * - auto: Prism-style auto-aim beam within range
+ */
+export type AimMode = "free" | "engage" | "auto";
 
 export type AbilityDef = {
   id: AbilityKind;
@@ -66,6 +82,7 @@ export type HeroDef = {
   attackCooldown: number;
   projectileSpeed: number;
   attackStyle: AttackStyle;
+  aimMode: AimMode;
   /** Short line for UI / compendium. */
   attackHint: string;
   passive: HeroPassive;
@@ -88,7 +105,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.32,
     projectileSpeed: 560,
     attackStyle: "bolt",
-    attackHint: "Fast single bolt",
+    aimMode: "free",
+    attackHint: "Free-aim bolt (any direction)",
     passive: {
       id: "marksman",
       name: "Marksman",
@@ -125,7 +143,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.48,
     projectileSpeed: 0,
     attackStyle: "cleave",
-    attackHint: "Melee cleave arc",
+    aimMode: "engage",
+    attackHint: "Aimed melee cleave — need a foe in range",
     passive: {
       id: "bastion",
       name: "Bastion",
@@ -162,7 +181,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.55,
     projectileSpeed: 480,
     attackStyle: "shotgun",
-    attackHint: "5-pellet shotgun spread",
+    aimMode: "engage",
+    attackHint: "Aimed shotgun — need a foe in range",
     passive: {
       id: "close_quarters",
       name: "Close Quarters",
@@ -199,7 +219,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.85,
     projectileSpeed: 420,
     attackStyle: "heavy",
-    attackHint: "Slow piercing bolt",
+    aimMode: "free",
+    attackHint: "Free-aim piercing bolt",
     passive: {
       id: "siege_focus",
       name: "Siege Focus",
@@ -232,11 +253,13 @@ export const HEROES: Record<HeroId, HeroDef> = {
     speed: 215,
     maxHp: 90,
     attackRange: 155,
-    attackDamage: 14,
+    /** Nerf: continuous beam is easy to land — low per-tick damage. */
+    attackDamage: 6,
     attackCooldown: 0.12,
     projectileSpeed: 0,
     attackStyle: "beam",
-    attackHint: "Continuous beam DoT",
+    aimMode: "auto",
+    attackHint: "Auto-aim continuous beam",
     passive: {
       id: "refraction",
       name: "Refraction",
@@ -273,7 +296,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.38,
     projectileSpeed: 500,
     attackStyle: "frostbolt",
-    attackHint: "Ice bolt that slows on hit",
+    aimMode: "free",
+    attackHint: "Free-aim ice bolt (slows)",
     passive: {
       id: "cryostasis",
       name: "Cryostasis",
@@ -310,7 +334,8 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackCooldown: 0.4,
     projectileSpeed: 480,
     attackStyle: "chaos",
-    attackHint: "Cycles random attack modes each shot",
+    aimMode: "free",
+    attackHint: "Free-aim random attack modes",
     passive: {
       id: "wild_magic",
       name: "Wild Magic",
@@ -333,6 +358,82 @@ export const HEROES: Record<HeroId, HeroDef> = {
       },
     ],
   },
+  coil: {
+    id: "coil",
+    name: "Coil",
+    blurb: "Tesla caster — aimed sparks that jump between foes.",
+    color: "#ffd24a",
+    glowColor: "#fff0a8",
+    radius: 15,
+    speed: 220,
+    maxHp: 88,
+    attackRange: 160,
+    attackDamage: 13,
+    attackCooldown: 0.36,
+    projectileSpeed: 620,
+    attackStyle: "chain",
+    aimMode: "free",
+    attackHint: "Free-aim spark (chains on hit)",
+    passive: {
+      id: "overcharge",
+      name: "Overcharge",
+      blurb: "Kills grant +20% damage for 2s (refreshes).",
+    },
+    abilities: [
+      {
+        id: "zip",
+        slot: "mobility",
+        name: "Magnetic Zip",
+        cooldown: 5,
+        hint: "Snap toward aim (~130). Brief speed surge.",
+      },
+      {
+        id: "stormcage",
+        slot: "ultimate",
+        name: "Storm Cage",
+        cooldown: 10,
+        hint: "Drop a lightning cage that shreds and slows enemies inside.",
+      },
+    ],
+  },
+  thorn: {
+    id: "thorn",
+    name: "Thorn",
+    blurb: "Lane predator — vine shots that root, then bloom for blood.",
+    color: "#6bcf5a",
+    glowColor: "#b8f0a0",
+    radius: 16,
+    speed: 225,
+    maxHp: 105,
+    attackRange: 145,
+    attackDamage: 16,
+    attackCooldown: 0.4,
+    projectileSpeed: 480,
+    attackStyle: "vine",
+    aimMode: "free",
+    attackHint: "Free-aim vine bolt (roots)",
+    passive: {
+      id: "sap",
+      name: "Sap",
+      blurb: "Basic attacks heal for 12% of damage dealt.",
+    },
+    abilities: [
+      {
+        id: "burrow",
+        slot: "mobility",
+        name: "Burrow",
+        cooldown: 5.5,
+        hint: "Tunnel toward move/aim (~125) and gain a short bark barrier.",
+      },
+      {
+        id: "bloom",
+        slot: "ultimate",
+        name: "Blood Bloom",
+        cooldown: 9,
+        hint: "Burst of thorns — heavy AoE damage and self-heal.",
+      },
+    ],
+  },
 };
 
 export const HERO_LIST: HeroDef[] = [
@@ -343,6 +444,8 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.prism,
   HEROES.frost,
   HEROES.wizard,
+  HEROES.coil,
+  HEROES.thorn,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

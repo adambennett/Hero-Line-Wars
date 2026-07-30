@@ -1,15 +1,19 @@
 ﻿import { HERO_LIST, type HeroId } from "../data/heroes";
 import { MAP_LIST, type MapId } from "../data/maps";
+import { MAP_H, MAP_W } from "../data/constants";
 import { RELIC_LIST } from "../data/relics";
 import { SHOP_ITEMS } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
 import { ENEMY_DEFS, type EnemyKind } from "../data/enemies";
 import { RARITY_LABEL, RARITY_COLOR, RARITY_ORDER, type Rarity } from "../data/rarity";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
+import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import type { RunOptions } from "../game/state";
+import type { MatchMode, MatchPrivacy } from "../net/types";
 import {
   ACTION_HINTS,
   ACTION_LABELS,
+  DAMAGE_FX_LABELS,
   DEFAULT_KEYBINDS,
   bindingEquals,
   formatBinding,
@@ -18,7 +22,10 @@ import {
   type Binding,
   type ClientSettings,
   type CombatAction,
+  type DamageScreenFx,
 } from "./settings";
+
+export type { MatchMode, MatchPrivacy } from "../net/types";
 
 export type MenuScreen =
   | "main"
@@ -26,11 +33,10 @@ export type MenuScreen =
   | "multiplayer"
   | "mp-options"
   | "compendium"
+  | "game-info"
   | "settings"
   | "controls";
 
-export type MatchMode = "1v1" | "2v2" | "3v3" | "2p-pve" | "3p-pve";
-export type MatchPrivacy = "private" | "public";
 export type MatchRole = "host" | "join";
 
 export type LobbyDraft = {
@@ -41,10 +47,15 @@ export type LobbyDraft = {
   hostCode: string;
   mapChoice: MapId | "random";
   maxTurrets: number;
+  startingGold: number;
+  /** 0 = unlimited. */
+  wavesToWin: number;
+  friendlyFire: boolean;
 };
 
 export type MenuCallbacks = {
   onStartSingleplayer: (heroId: HeroId, opts?: Partial<RunOptions>) => void;
+  onOpenMultiplayer: (draft: LobbyDraft, heroId: HeroId) => void;
   onSettingsChanged?: () => void;
   onRunOptionsChanged?: (opts: Partial<RunOptions>) => void;
 };
@@ -82,8 +93,15 @@ export class MenuController {
     hostCode: randomLobbyCode(),
     mapChoice: "random",
     maxTurrets: DEFAULT_MAX_TURRETS,
+    startingGold: STARTING_GOLD,
+    wavesToWin: WIN_WAVES,
+    friendlyFire: false,
   };
   private spMapChoice: MapId | "random" = "random";
+  private spMaxTurrets = DEFAULT_MAX_TURRETS;
+  private spStartingGold = STARTING_GOLD;
+  private spWavesToWin = WIN_WAVES;
+  private spFriendlyFire = false;
   private settings: ClientSettings = loadSettings();
   private compendiumTab: CompTab = "heroes";
   private compSearch = "";
@@ -155,7 +173,10 @@ export class MenuController {
       case "play-sp":
         this.callbacks.onStartSingleplayer(this.selectedHero, {
           mapId: this.spMapChoice,
-          maxTurrets: DEFAULT_MAX_TURRETS,
+          maxTurrets: this.spMaxTurrets,
+          startingGold: this.spStartingGold,
+          wavesToWin: this.spWavesToWin,
+          friendlyFire: this.spFriendlyFire,
         });
         break;
       case "set-sp-map":
@@ -167,6 +188,9 @@ export class MenuController {
         this.callbacks.onRunOptionsChanged?.({
           mapId: this.lobby.mapChoice,
           maxTurrets: this.lobby.maxTurrets,
+          startingGold: this.lobby.startingGold,
+          wavesToWin: this.lobby.wavesToWin,
+          friendlyFire: this.lobby.friendlyFire,
         });
         this.render();
         break;
@@ -197,7 +221,8 @@ export class MenuController {
         this.go("mp-options");
         break;
       case "mp-stub":
-        this.setToast("Online play is not wired up yet — lobby UI only.");
+      case "mp-connect":
+        this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
         break;
       case "comp-tab":
         this.compendiumTab = t.dataset.tab as CompTab;
@@ -209,6 +234,7 @@ export class MenuController {
           showDamageNumbers: true,
           screenShake: true,
           reduceMotion: false,
+          damageScreenFx: "full",
           keybinds: { ...DEFAULT_KEYBINDS },
         };
         this.persist();
@@ -294,17 +320,29 @@ export class MenuController {
     }
     if (el.dataset.field === "mp-turrets") {
       this.lobby.maxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
-      this.callbacks.onRunOptionsChanged?.({
-        mapId: this.lobby.mapChoice,
-        maxTurrets: this.lobby.maxTurrets,
-      });
-      const label = this.root.querySelector("#turret-cap-label");
+      this.emitLobbyOpts();
+      const label = this.root.querySelector("#mp-turret-label");
       if (label) label.textContent = String(this.lobby.maxTurrets);
+    }
+    if (el.dataset.field === "sp-turrets") {
+      this.spMaxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
+      const label = this.root.querySelector("#sp-turret-label");
+      if (label) label.textContent = String(this.spMaxTurrets);
     }
     if (el.dataset.field === "comp-search") {
       this.compSearch = el.value;
       this.renderCompendiumListOnly();
     }
+  }
+
+  private emitLobbyOpts(): void {
+    this.callbacks.onRunOptionsChanged?.({
+      mapId: this.lobby.mapChoice,
+      maxTurrets: this.lobby.maxTurrets,
+      startingGold: this.lobby.startingGold,
+      wavesToWin: this.lobby.wavesToWin,
+      friendlyFire: this.lobby.friendlyFire,
+    });
   }
 
   private onChange(e: Event): void {
@@ -318,12 +356,30 @@ export class MenuController {
     } else if ((el as HTMLInputElement).dataset.setting === "reduceMotion") {
       this.settings.reduceMotion = (el as HTMLInputElement).checked;
       this.persist();
+    } else if (el.dataset.field === "damage-fx") {
+      this.settings.damageScreenFx = el.value as DamageScreenFx;
+      this.persist();
     } else if (el.dataset.field === "comp-rarity") {
       this.compRarity = el.value as Rarity | "all";
       this.renderCompendiumListOnly();
     } else if (el.dataset.field === "comp-sort") {
       this.compSort = el.value as "name" | "rarity";
       this.renderCompendiumListOnly();
+    } else if (el.dataset.field === "mp-starting-gold") {
+      this.lobby.startingGold = Number(el.value) || STARTING_GOLD;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-waves-to-win") {
+      this.lobby.wavesToWin = Number(el.value);
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-friendly-fire") {
+      this.lobby.friendlyFire = el.value === "1";
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "sp-starting-gold") {
+      this.spStartingGold = Number(el.value) || STARTING_GOLD;
+    } else if (el.dataset.field === "sp-waves-to-win") {
+      this.spWavesToWin = Number(el.value);
+    } else if (el.dataset.field === "sp-friendly-fire") {
+      this.spFriendlyFire = el.value === "1";
     }
   }
 
@@ -359,6 +415,9 @@ export class MenuController {
         break;
       case "compendium":
         body = this.renderCompendium();
+        break;
+      case "game-info":
+        body = this.renderGameInfo();
         break;
       case "settings":
         body = this.renderSettings();
@@ -401,8 +460,8 @@ export class MenuController {
       const h = (canvas.height = 72);
       ctx.fillStyle = "#0a0f1a";
       ctx.fillRect(0, 0, w, h);
-      const sx = w / 1600;
-      const sy = h / 560;
+      const sx = w / MAP_W;
+      const sy = h / MAP_H;
       ctx.fillStyle = "#152038";
       ctx.fillRect(0, m.laneTop * sy, w, (m.laneBottom - m.laneTop) * sy);
       ctx.fillStyle = "#3d5a8866";
@@ -439,9 +498,51 @@ export class MenuController {
         <button type="button" class="menu-btn primary" data-action="goto" data-screen="singleplayer">Singleplayer</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="multiplayer">Multiplayer</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="compendium">Compendium</button>
+        <button type="button" class="menu-btn" data-action="goto" data-screen="game-info">Game Info</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="settings">Settings</button>
         <button type="button" class="menu-btn ghost" data-action="quit">Quit</button>
       </nav>
+    `;
+  }
+
+  private runOptionsFields(scope: "sp" | "mp"): string {
+    const turrets = scope === "sp" ? this.spMaxTurrets : this.lobby.maxTurrets;
+    const gold = scope === "sp" ? this.spStartingGold : this.lobby.startingGold;
+    const waves = scope === "sp" ? this.spWavesToWin : this.lobby.wavesToWin;
+    const ff = scope === "sp" ? this.spFriendlyFire : this.lobby.friendlyFire;
+    const goldOpts = [45, 60, 80, 100, 150]
+      .map(
+        (g) =>
+          `<option value="${g}" ${gold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
+      )
+      .join("");
+    const waveOpts = [8, 10, 12, 15, 20, 0]
+      .map((w) => {
+        const label = w === 0 ? "Unlimited" : String(w);
+        const def = w === WIN_WAVES ? " (default)" : "";
+        return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
+      })
+      .join("");
+    return `
+      <label class="setting-row">
+        <span>Max turrets <em id="${scope}-turret-label">${turrets}</em></span>
+        <input type="range" min="1" max="6" step="1" value="${turrets}" data-field="${scope}-turrets" />
+      </label>
+      <label class="setting-row">
+        <span>Starting gold</span>
+        <select data-field="${scope}-starting-gold">${goldOpts}</select>
+      </label>
+      <label class="setting-row">
+        <span>Waves to win</span>
+        <select data-field="${scope}-waves-to-win">${waveOpts}</select>
+      </label>
+      <label class="setting-row">
+        <span>Friendly fire</span>
+        <select data-field="${scope}-friendly-fire">
+          <option value="0" ${!ff ? "selected" : ""}>Off</option>
+          <option value="1" ${ff ? "selected" : ""}>On</option>
+        </select>
+      </label>
     `;
   }
 
@@ -477,11 +578,15 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Singleplayer</h1>
-        <p class="menu-sub">Choose a hero. Map defaults to random each run.</p>
+        <p class="menu-sub">Choose a hero and tune the run.</p>
       </header>
       <section class="menu-section">
         <h2>Map</h2>
         <div class="choice-row wrap">${mapChips}</div>
+      </section>
+      <section class="menu-section muted-box">
+        <h2>Run Options</h2>
+        ${this.runOptionsFields("sp")}
       </section>
       <div class="hero-grid">${cards}</div>
       <div class="menu-footer">
@@ -505,7 +610,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Multiplayer</h1>
-        <p class="menu-sub">Lobby setup only for now — networking comes later.</p>
+        <p class="menu-sub">PeerJS online lobbies — private codes or public find-match.</p>
       </header>
       <section class="menu-section">
         <h2>Mode</h2>
@@ -534,7 +639,7 @@ export class MenuController {
       return `
         <section class="menu-section muted-box">
           <p>Public matchmaking will search for an open ${escapeHtml(labelForMode(this.lobby.mode))} lobby.</p>
-          <button type="button" class="menu-btn" data-action="mp-stub">${this.lobby.role === "host" ? "Create public lobby" : "Find match"}</button>
+          <button type="button" class="menu-btn" data-action="mp-connect">${this.lobby.role === "host" ? "Create public lobby" : "Find match"}</button>
         </section>
       `;
     }
@@ -573,16 +678,10 @@ export class MenuController {
         ? `
           <section class="menu-section muted-box">
             <h2>Game Options</h2>
-            <p class="menu-sub">Host-only run settings (stored for when online play lands).</p>
+            <p class="menu-sub">Host-only run settings applied when the match starts.</p>
             <h3 class="comp-subhead">Map</h3>
             <div class="choice-row wrap">${mapChips}</div>
-            <label class="setting-row">
-              <span>Max turrets <em id="turret-cap-label">${this.lobby.maxTurrets}</em></span>
-              <input type="range" min="1" max="6" step="1" value="${this.lobby.maxTurrets}" data-field="mp-turrets" />
-            </label>
-            <label class="setting-row"><span>Starting gold</span><select disabled><option>45 (default)</option><option>80</option></select></label>
-            <label class="setting-row"><span>Waves to win</span><select disabled><option>10</option><option>8</option><option>12</option></select></label>
-            <label class="setting-row"><span>Friendly fire</span><select disabled><option>Off</option><option>On</option></select></label>
+            ${this.runOptionsFields("mp")}
           </section>
         `
         : `
@@ -599,10 +698,10 @@ export class MenuController {
       </header>
       ${hostBits}
       <div class="menu-footer stack">
-        <button type="button" class="menu-btn primary wide" data-action="mp-stub">
-          ${this.lobby.role === "host" ? "Start lobby" : "Join lobby"}
+        <button type="button" class="menu-btn primary wide" data-action="mp-connect">
+          ${this.lobby.role === "host" ? "Open online lobby" : "Join online lobby"}
         </button>
-        <p class="menu-footnote">Online sessions are not connected yet.</p>
+        <p class="menu-footnote">Uses PeerJS relay · host simulates both lanes.</p>
       </div>
     `;
   }
@@ -624,93 +723,125 @@ export class MenuController {
   private compendiumContent(): string {
     const kb = this.settings.keybinds;
     if (this.compendiumTab === "heroes") {
-      return HERO_LIST.filter((h) => this.matchesFilter(h.name, h.blurb + " " + h.passive.blurb))
+      const cards = HERO_LIST.filter((h) => this.matchesFilter(h.name, h.blurb + " " + h.passive.blurb))
         .map((h) => {
           const [mobility, ultimate] = h.abilities;
           return `
-        <article class="comp-card">
-          <h3>${escapeHtml(h.name)}</h3>
+        <article class="comp-card hero-comp">
+          <div class="comp-card-top">
+            <span class="comp-swatch" style="background:${h.color}"></span>
+            <div>
+              <h3>${escapeHtml(h.name)}</h3>
+              <p class="comp-meta">HP ${h.maxHp} · Spd ${h.speed} · Atk ${h.attackDamage}</p>
+            </div>
+          </div>
           <p>${escapeHtml(h.blurb)}</p>
-          <p class="comp-meta">HP ${h.maxHp} · Speed ${h.speed} · Atk ${h.attackDamage}</p>
-          <ul>
-            <li><strong>Passive — ${escapeHtml(h.passive.name)}</strong> — ${escapeHtml(h.passive.blurb)}</li>
-            <li><strong>${formatBinding(kb.attack)} Attack</strong> — ${escapeHtml(h.attackHint)}</li>
-            <li><strong>${formatBinding(kb.mobility)} ${escapeHtml(mobility.name)}</strong> — ${escapeHtml(mobility.hint)}</li>
-            <li><strong>${formatBinding(kb.ultimate)} ${escapeHtml(ultimate.name)}</strong> — ${escapeHtml(ultimate.hint)}</li>
+          <ul class="comp-ability-list">
+            <li><strong>Passive — ${escapeHtml(h.passive.name)}</strong><span>${escapeHtml(h.passive.blurb)}</span></li>
+            <li><strong>${formatBinding(kb.attack)}</strong><span>${escapeHtml(h.attackHint)}</span></li>
+            <li><strong>${formatBinding(kb.mobility)} ${escapeHtml(mobility.name)}</strong><span>${escapeHtml(mobility.hint)}</span></li>
+            <li><strong>${formatBinding(kb.ultimate)} ${escapeHtml(ultimate.name)}</strong><span>${escapeHtml(ultimate.hint)}</span></li>
           </ul>
         </article>`;
         })
         .join("");
+      return `<div class="comp-grid heroes">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "items") {
       let items = SHOP_ITEMS.filter((i) => this.matchesFilter(i.name, i.effect, i.rarity));
       items = sortByRarityOrName(items, this.compSort, (i) => i.rarity, (i) => i.name);
-      return items
-        .map(
-          (i) => `
-          <article class="comp-card">
-            ${this.rarityBadge(i.rarity)}
-            <h3>${escapeHtml(i.name)}</h3>
-            <p>${escapeHtml(i.effect)}</p>
-            <p class="comp-meta">${i.cost}g · max ×${i.maxStacks} · ${i.category}</p>
-          </article>`,
-        )
+      const byCat = new Map<string, typeof items>();
+      for (const i of items) {
+        const list = byCat.get(i.category) ?? [];
+        list.push(i);
+        byCat.set(i.category, list);
+      }
+      const sections = [...byCat.entries()]
+        .map(([cat, list]) => {
+          const cards = list
+            .map(
+              (i) => `
+            <article class="comp-card compact">
+              ${this.rarityBadge(i.rarity)}
+              <h3>${escapeHtml(i.name)}</h3>
+              <p>${escapeHtml(i.effect)}</p>
+              <p class="comp-meta">${i.cost}g · max ×${i.maxStacks}</p>
+            </article>`,
+            )
+            .join("");
+          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(capitalize(cat))}</h2><div class="comp-grid">${cards}</div></section>`;
+        })
         .join("");
+      return sections || emptyComp();
     }
     if (this.compendiumTab === "relics") {
       let relics = RELIC_LIST.filter((r) => this.matchesFilter(r.name, r.blurb, r.rarity));
       relics = sortByRarityOrName(relics, this.compSort, (r) => r.rarity, (r) => r.name);
-      return relics
+      const cards = relics
         .map(
           (r) => `
-        <article class="comp-card">
+        <article class="comp-card compact">
           ${this.rarityBadge(r.rarity)}
           <h3>${escapeHtml(r.name)}</h3>
           <p>${escapeHtml(r.blurb)}</p>
-          <p class="comp-meta">${escapeHtml(r.tag)} · draft after elite/boss waves</p>
+          <p class="comp-meta">${escapeHtml(r.tag)} · after elite/boss</p>
         </article>`,
         )
         .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "enemies") {
-      return ENEMY_KINDS.filter((k) => {
+      const byRole = new Map<string, EnemyKind[]>();
+      for (const k of ENEMY_KINDS) {
         const d = ENEMY_DEFS[k];
-        return this.matchesFilter(d.name, `${d.intent} ${d.kind}`);
-      })
-        .map((k) => {
-          const d = ENEMY_DEFS[k];
-          return `
-          <article class="comp-card">
-            <h3>${escapeHtml(d.name)}</h3>
-            <p>Intent: <strong>${escapeHtml(d.intent)}</strong> · Role ${escapeHtml(d.kind)}</p>
-            <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s · Base hit ${d.baseDamage} · Gold ${d.goldReward}${d.ranged ? ` · Ranged ${d.attackDamage}` : ""}${d.slamRadius ? ` · Slam r${d.slamRadius}` : ""}</p>
-          </article>`;
+        if (!this.matchesFilter(d.name, `${d.intent} ${d.kind}`)) continue;
+        const list = byRole.get(d.kind) ?? [];
+        list.push(k);
+        byRole.set(d.kind, list);
+      }
+      const sections = [...byRole.entries()]
+        .map(([role, kinds]) => {
+          const cards = kinds
+            .map((k) => {
+              const d = ENEMY_DEFS[k];
+              return `
+            <article class="comp-card compact">
+              <h3>${escapeHtml(d.name)}</h3>
+              <p>Intent: <strong>${escapeHtml(d.intent)}</strong></p>
+              <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s · Gold ${d.goldReward}</p>
+            </article>`;
+            })
+            .join("");
+          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(capitalize(role))}</h2><div class="comp-grid">${cards}</div></section>`;
         })
         .join("");
+      return sections || emptyComp();
     }
     if (this.compendiumTab === "sends") {
-      return SEND_PACKS.filter((p) => this.matchesFilter(p.name, p.detail))
+      const cards = SEND_PACKS.filter((p) => this.matchesFilter(p.name, p.detail))
         .map(
           (p) => `
-          <article class="comp-card">
+          <article class="comp-card compact">
             <h3>${escapeHtml(p.name)}</h3>
             <p>${escapeHtml(p.detail)}</p>
-            <p class="comp-meta">${p.cost}g base · hotkey ${p.digit} · unlock Base Lv ${p.minBaseLevel} · ${p.enemies} creeps · +${p.incomeBonus}/s · HP×${p.hpScale}</p>
+            <p class="comp-meta">${p.cost}g · key ${p.digit} · Base Lv ${p.minBaseLevel}+ · ${p.enemies} creeps · +${p.incomeBonus}/s</p>
           </article>`,
         )
         .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
-    return MAP_LIST.filter((m) => this.matchesFilter(m.name, m.blurb))
+    const cards = MAP_LIST.filter((m) => this.matchesFilter(m.name, m.blurb))
       .map(
         (m) => `
-        <article class="comp-card">
+        <article class="comp-card map-comp">
           <div class="map-thumb"><canvas data-map="${m.id}"></canvas></div>
-          <h3>${escapeHtml(m.name)}</h3>
+          <h3>${escapeHtml(m.name)}${m.shiftingObstacles ? ` <em class="special-tag">Special</em>` : ""}</h3>
           <p>${escapeHtml(m.blurb)}</p>
-          <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Turret slots ${m.turretSlots.length}</p>
+          <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Turrets ${m.turretSlots.length}</p>
         </article>`,
       )
       .join("");
+    return `<div class="comp-grid maps">${cards || emptyComp()}</div>`;
   }
 
   private renderCompendium(): string {
@@ -736,7 +867,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Compendium</h1>
-        <p class="menu-sub">Browse heroes, gear, relics, enemies, sends, and maps.</p>
+        <p class="menu-sub">Browse by category — cards, sections, and quick filters.</p>
       </header>
       <div class="choice-row">${tabs}</div>
       <div class="comp-toolbar">
@@ -755,8 +886,51 @@ export class MenuController {
     `;
   }
 
+  private renderGameInfo(): string {
+    return `
+      <header class="menu-header compact">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <h1 class="menu-title">Game Info</h1>
+        <p class="menu-sub">How Hero Line Wars works — especially sending.</p>
+      </header>
+      <div class="info-stack">
+        <section class="info-block">
+          <h2>The line</h2>
+          <p>You defend your <strong>base</strong> on the left. Enemies spawn on the right and march toward you. Survive waves, spend gold, and outlast the enemy lane.</p>
+        </section>
+        <section class="info-block highlight">
+          <h2>Sending enemies (the core loop)</h2>
+          <p>Gold buys <strong>send packs</strong> (keys 1–3, or the send bar). Sending does two things:</p>
+          <ul>
+            <li><strong>Raises your income</strong> permanently for the run (+gold/sec).</li>
+            <li><strong>Adds those creeps to the enemy's next wave</strong> — pressuring their hero and base.</li>
+          </ul>
+          <p>The AI opponent does the same to you. Spending on sends is how you snowball economy <em>and</em> attack the other lane.</p>
+        </section>
+        <section class="info-block">
+          <h2>Shop, base, relics</h2>
+          <p>Walk to the shop pad and press <strong>F</strong>. Upgrade Base (<strong>U</strong>) unlocks stronger packs. After elite/boss waves, draft a relic. Level-ups offer passive drafts.</p>
+        </section>
+        <section class="info-block">
+          <h2>Combat</h2>
+          <p>WASD to move. Hold attack and <strong>aim with the mouse</strong> (Prism auto-aims his beam). Mobility and ultimate are mouse-bound by default (RMB / MMB).</p>
+        </section>
+        <section class="info-block">
+          <h2>Enemy lane panel</h2>
+          <p>Top-right shows opponent HP, level, income, fight status, and whether they are sending — without leaving your lane. <strong>View lane</strong> toggles a full flip to their lane; toggle again to return.</p>
+        </section>
+      </div>
+    `;
+  }
+
   private renderSettings(): string {
     const s = this.settings;
+    const fxOpts = (["full", "reduced", "off"] as DamageScreenFx[])
+      .map(
+        (v) =>
+          `<option value="${v}"${s.damageScreenFx === v ? " selected" : ""}>${DAMAGE_FX_LABELS[v]}</option>`,
+      )
+      .join("");
     return `
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
@@ -775,6 +949,10 @@ export class MenuController {
         <label class="setting-row check">
           <span>Show damage numbers</span>
           <input type="checkbox" data-setting="showDamageNumbers" ${s.showDamageNumbers ? "checked" : ""} />
+        </label>
+        <label class="setting-row">
+          <span>Damage screen effects<em>Flash / vignette / shake intensity</em></span>
+          <select data-field="damage-fx">${fxOpts}</select>
         </label>
         <label class="setting-row check">
           <span>Screen shake</span>
@@ -848,6 +1026,10 @@ function labelForMode(mode: MatchMode): string {
 
 function capitalize(s: string): string {
   return s.length ? s[0]!.toUpperCase() + s.slice(1) : s;
+}
+
+function emptyComp(): string {
+  return `<p class="comp-empty">No entries match.</p>`;
 }
 
 function escapeHtml(s: string): string {

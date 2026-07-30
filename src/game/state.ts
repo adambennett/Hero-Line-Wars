@@ -16,7 +16,8 @@ import {
   type WaveTier,
 } from "../data/enemies";
 import { HEROES, type HeroId } from "../data/heroes";
-import { getMap, resolveMapChoice, circleHitsObstacle, type MapDef, type MapId } from "../data/maps";
+import { getMap, resolveMapChoice, circleHitsObstacle, reshuffleObstacles, findClearSpot, blockedByObstacle, type MapDef, type MapId } from "../data/maps";
+import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
 import { draftRelicChoices, type RelicId } from "../data/relics";
 import { SEND_PACKS } from "../data/send";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
@@ -150,11 +151,22 @@ export type HeroRuntime = Unit & {
   luck: number;
   marksmanTimer?: number;
   chaosIndex?: number;
+  overchargeTimer?: number;
+  zipSpeedTimer?: number;
+  stormCageTimer?: number;
+  /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
+  controllerSlot?: number | null;
 };
 
 export type RunOptions = {
   mapId: MapId | "random";
   maxTurrets: number;
+  /** Starting gold for the run. */
+  startingGold: number;
+  /** Waves required to win. `0` = unlimited (base destruction only). */
+  wavesToWin: number;
+  /** Team modes: player projectiles can hurt allies. */
+  friendlyFire: boolean;
 };
 
 export type GameState = {
@@ -162,6 +174,10 @@ export type GameState = {
   map: MapDef;
   mapId: MapId;
   maxTurrets: number;
+  startingGold: number;
+  /** 0 = unlimited. */
+  wavesToWin: number;
+  friendlyFire: boolean;
   hero: HeroRuntime;
   enemies: EnemyUnit[];
   turrets: TurretUnit[];
@@ -212,6 +228,19 @@ export type GameState = {
   hitFlash: number;
   shake: number;
   pendingRelicDraft: boolean;
+  /** Mouse aim in world space (updated each frame from Input). */
+  aimWorldX: number;
+  aimWorldY: number;
+  /** Solo AI opponent lane summary + flip-view viz. */
+  opponent: OpponentState;
+  /** When true, canvas shows opponent lane instead of player lane. */
+  viewOpponentLane: boolean;
+  /** Extra human/AI heroes sharing this lane (multiplayer). */
+  allies: HeroRuntime[];
+  /** Multiplayer lane flag — skip solo opponent AI sim. */
+  mpLane?: boolean;
+  /** PvE enemy lane driven by simple AI intents. */
+  aiControlled?: boolean;
 };
 
 export function createState(
@@ -219,13 +248,20 @@ export function createState(
   opts?: Partial<RunOptions>,
 ): GameState {
   const mapId = resolveMapChoice(opts?.mapId ?? "random");
-  const map = getMap(mapId);
+  const map = structuredClone(getMap(mapId));
+  if (map.shiftingObstacles) reshuffleObstacles(map);
   const def = HEROES[heroId];
+  const startingGold = opts?.startingGold ?? STARTING_GOLD;
+  const wavesToWin = opts?.wavesToWin ?? WIN_WAVES;
+  const friendlyFire = opts?.friendlyFire ?? false;
   return {
     status: "playing",
     map,
     mapId,
     maxTurrets: opts?.maxTurrets ?? DEFAULT_MAX_TURRETS,
+    startingGold,
+    wavesToWin,
+    friendlyFire,
     hero: {
       id: 0,
       heroId,
@@ -254,7 +290,7 @@ export function createState(
     beam: null,
     baseHp: map.base.maxHp,
     baseLevel: 0,
-    gold: STARTING_GOLD,
+    gold: startingGold,
     incomePerSec: BASE_INCOME_GOLD_PER_SEC,
     wave: 0,
     waveTier: "normal",
@@ -294,6 +330,11 @@ export function createState(
     hitFlash: 0,
     shake: 0,
     pendingRelicDraft: false,
+    aimWorldX: map.base.x + 200,
+    aimWorldY: map.base.y,
+    opponent: createOpponent(heroId, map.base.maxHp, map.base.y),
+    viewOpponentLane: false,
+    allies: [],
   };
 }
 
@@ -303,6 +344,29 @@ function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean 
 }
 
 function startWave(state: GameState): void {
+  if (state.map.shiftingObstacles) {
+    const reserved = [
+      state.hero,
+      ...state.allies,
+      ...state.turrets.filter((t) => t.alive),
+    ].map((u) => ({ x: u.x, y: u.y, radius: u.radius }));
+    reshuffleObstacles(state.map, reserved);
+    // Eject anyone still inside rubble after the shift
+    for (const h of [state.hero, ...state.allies]) {
+      if (!h.alive && h !== state.hero) continue;
+      const clear = findClearSpot(state.map, h.x, h.y, h.radius);
+      h.x = clear.x;
+      h.y = clear.y;
+    }
+    for (const t of state.turrets) {
+      if (!t.alive) continue;
+      const clear = findClearSpot(state.map, t.x, t.y, t.radius);
+      t.x = clear.x;
+      t.y = clear.y;
+    }
+    state.toast = "Ground shifts…";
+    state.toastTimer = 1.4;
+  }
   state.wave += 1;
   state.waveTier = waveTier(state.wave);
   state.spawning = true;
@@ -315,6 +379,7 @@ function startWave(state: GameState): void {
   state.sentQueue = consumePendingSends(state);
   state.spawnCd = state.wave <= 2 ? 0.35 : 0;
   beginWaveShop(state);
+  onPlayerWaveStart(state);
 
   // Warden Bastion
   if (state.hero.heroId === "warden" && state.hero.alive) {
@@ -356,8 +421,15 @@ function remainingSpawns(state: GameState): number {
   return state.toSpawn + sentLeft;
 }
 
+export function waveVictoryReached(state: GameState): boolean {
+  if (state.wavesToWin <= 0) return false;
+  return state.wave >= state.wavesToWin;
+}
+
 export function heroMoveSpeed(state: GameState): number {
-  return HEROES[state.hero.heroId].speed + state.hero.speedBonus;
+  let spd = HEROES[state.hero.heroId].speed + state.hero.speedBonus;
+  if ((state.hero.zipSpeedTimer ?? 0) > 0) spd += 40;
+  return spd;
 }
 
 function respawnDelay(state: GameState): number {
@@ -430,12 +502,33 @@ function updateProjectiles(state: GameState, dt: number): void {
       continue;
     }
 
+    // Walls block all shots (player and enemy).
+    if (blockedByObstacle(state.map, p.x, p.y, p.radius)) {
+      p.alive = false;
+      continue;
+    }
+
     if (p.hostile) {
       if (state.hero.alive && dist(p, state.hero) <= state.hero.radius + p.radius) {
         applyPlayerDamage(state, p.damage);
         p.alive = false;
       }
       continue;
+    }
+
+    if (state.friendlyFire) {
+      for (const ally of state.allies) {
+        if (!ally.alive) continue;
+        if (dist(p, ally) <= ally.radius + p.radius) {
+          const prev = state.hero;
+          state.hero = ally;
+          applyPlayerDamage(state, p.damage);
+          state.hero = prev;
+          p.alive = false;
+          break;
+        }
+      }
+      if (!p.alive) continue;
     }
 
     for (const e of state.enemies) {
@@ -485,7 +578,7 @@ function afterWaveClear(state: GameState, input: Input): boolean {
   }
   applySecondWind(state);
   state.waveTimer = WAVE_BREAK_SEC;
-  if (state.wave >= WIN_WAVES) {
+  if (waveVictoryReached(state)) {
     state.status = "won";
     input.endFrame();
     return true;
@@ -583,6 +676,7 @@ export function update(state: GameState, input: Input, dt: number): void {
   updateProjectiles(state, dt);
   updateEnemies(state, dt);
   updateTurrets(state, dt);
+  updateOpponent(state, dt);
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);
@@ -634,7 +728,7 @@ export function chooseRelic(state: GameState, id: RelicId): void {
   if (!state.pausedForDraft) {
     applySecondWind(state);
   }
-  if (state.wave >= WIN_WAVES && !state.pausedForDraft) {
+  if (waveVictoryReached(state) && !state.pausedForDraft) {
     state.status = "won";
   }
 }
@@ -652,7 +746,7 @@ export function skipRelic(state: GameState): void {
   applySecondWind(state);
   state.toast = "Relic skipped";
   state.toastTimer = 1.4;
-  if (state.wave >= WIN_WAVES) state.status = "won";
+  if (waveVictoryReached(state)) state.status = "won";
 }
 
 export function chooseLevelUp(state: GameState, id: LevelPassiveId): void {
@@ -660,7 +754,7 @@ export function chooseLevelUp(state: GameState, id: LevelPassiveId): void {
   playSfx("levelup");
   if (!state.pausedForDraft) {
     applySecondWind(state);
-    if (state.wave >= WIN_WAVES) state.status = "won";
+    if (waveVictoryReached(state)) state.status = "won";
   }
 }
 

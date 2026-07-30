@@ -1,4 +1,4 @@
-import { MAP_W, WIN_WAVES } from "../data/constants";
+import { MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { canUpgradeBase } from "../data/baseUpgrades";
 import { waveTierLabel } from "../data/enemies";
 import { HEROES, type HeroId } from "../data/heroes";
@@ -13,7 +13,6 @@ import {
   chooseLevelUp,
   chooseRelic,
   createState,
-  pendingSendCount,
   skipRelic,
   update,
   type GameState,
@@ -26,9 +25,21 @@ import { xpProgress } from "../systems/xp";
 import { effectiveMaxTurrets, livingTurrets } from "../systems/turrets";
 import { Input } from "../systems/input";
 import { computeView, draw } from "../render/draw";
-import { MenuController } from "../ui/MenuController";
+import { MenuController, type LobbyDraft } from "../ui/MenuController";
 import { formatBinding, loadSettings } from "../ui/settings";
 import { playSfx, unlockAudio } from "../systems/audio";
+import { opponentStatusLabel } from "../systems/opponent";
+import { MultiplayerUi } from "../net/MultiplayerUi";
+import { buildMpMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
+import {
+  bindMatchHandlers,
+  disconnectNet,
+  netBroadcast,
+  netSendToHost,
+} from "../net/session";
+import { applyMatchSnap, buildMatchSnap } from "../net/sync";
+import { gatherLocalIntent, stepMpMatch } from "../net/mpSim";
+import type { CombatIntent, NetMsg } from "../net/types";
 
 export class Game {
   private readonly canvas: HTMLCanvasElement;
@@ -40,6 +51,9 @@ export class Game {
   private runDefaults: RunOptions = {
     mapId: "random",
     maxTurrets: DEFAULT_MAX_TURRETS,
+    startingGold: STARTING_GOLD,
+    wavesToWin: WIN_WAVES,
+    friendlyFire: false,
   };
 
   private readonly statsEl: HTMLElement;
@@ -50,7 +64,6 @@ export class Game {
   private readonly toastEl: HTMLElement;
   private readonly bannerEl: HTMLElement;
   private readonly respawnEl: HTMLElement;
-  private readonly relicsEl: HTMLElement;
   private readonly hud: HTMLElement;
   private readonly overlay: HTMLElement;
   private readonly overlayTitle: HTMLElement;
@@ -73,6 +86,16 @@ export class Game {
   private readonly hpBar: HTMLElement;
   private readonly hudPanel: HTMLElement;
   private readonly laneChrome: HTMLElement;
+  private readonly mapNameEl: HTMLElement;
+  private readonly waveBannerEl: HTMLElement;
+  private readonly waveNumberEl: HTMLElement;
+  private readonly waveTierEl: HTMLElement;
+  private readonly baseHpRail: HTMLElement;
+  private readonly baseHpFill: HTMLElement;
+  private readonly opponentPanel: HTMLElement;
+  private readonly oppNameEl: HTMLElement;
+  private readonly oppStatsEl: HTMLElement;
+  private readonly laneFlipBtn: HTMLButtonElement;
   private readonly relicDraft: HTMLElement;
   private readonly relicChoices: HTMLElement;
   private readonly relicSkip: HTMLButtonElement;
@@ -84,6 +107,12 @@ export class Game {
   private readonly invList: HTMLElement;
   private readonly tooltip: HTMLElement;
   private readonly menus: MenuController;
+  private mpUi: MultiplayerUi | null = null;
+  private mpMatch: MpMatch | null = null;
+  private mpHost = false;
+  private remoteIntents = new Map<number, CombatIntent>();
+  private intentSeq = 0;
+  private snapSeq = 0;
   private lastShopKey = "";
   private lastSendUnlockKey = "";
   private lastDraftKey = "";
@@ -104,7 +133,6 @@ export class Game {
     this.toastEl = document.querySelector("#hud-toast")!;
     this.bannerEl = document.querySelector("#hud-banner")!;
     this.respawnEl = document.querySelector("#hud-respawn")!;
-    this.relicsEl = document.querySelector("#hud-relics")!;
     this.hud = document.querySelector("#hud")!;
     this.overlay = document.querySelector("#overlay")!;
     this.overlayTitle = document.querySelector("#overlay-title")!;
@@ -127,6 +155,16 @@ export class Game {
     this.hpBar = document.querySelector("#hp-bar")!;
     this.hudPanel = document.querySelector("#hud-panel")!;
     this.laneChrome = document.querySelector("#lane-chrome")!;
+    this.mapNameEl = document.querySelector("#map-name-label")!;
+    this.waveBannerEl = document.querySelector("#wave-banner")!;
+    this.waveNumberEl = document.querySelector("#wave-number")!;
+    this.waveTierEl = document.querySelector("#wave-tier")!;
+    this.baseHpRail = document.querySelector("#base-hp-rail")!;
+    this.baseHpFill = document.querySelector("#base-hp-fill")!;
+    this.opponentPanel = document.querySelector("#opponent-panel")!;
+    this.oppNameEl = document.querySelector("#opp-name")!;
+    this.oppStatsEl = document.querySelector("#opp-stats")!;
+    this.laneFlipBtn = document.querySelector("#lane-flip-btn")!;
     this.relicDraft = document.querySelector("#relic-draft")!;
     this.relicChoices = document.querySelector("#relic-choices")!;
     this.relicSkip = document.querySelector("#relic-skip")!;
@@ -142,6 +180,7 @@ export class Game {
     if (!menusRoot) throw new Error("#menus missing");
     this.menus = new MenuController(menusRoot, {
       onStartSingleplayer: (heroId, opts) => this.beginRun(heroId, opts),
+      onOpenMultiplayer: (draft, heroId) => this.openMultiplayer(draft, heroId),
       onSettingsChanged: () => this.input.reloadBinds(),
       onRunOptionsChanged: (opts) => {
         this.runDefaults = { ...this.runDefaults, ...opts };
@@ -156,6 +195,22 @@ export class Game {
     });
     this.pauseBtn.addEventListener("click", () => this.togglePause());
     this.invBtn.addEventListener("click", () => this.toggleInventory());
+    this.laneFlipBtn.addEventListener("click", () => {
+      if (this.mpMatch) {
+        this.mpMatch.viewTeam = (1 - this.mpMatch.viewTeam) as 0 | 1;
+        this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+        this.laneFlipBtn.textContent =
+          this.mpMatch.viewTeam === this.mpMatch.myTeam ? "View lane" : "Your lane";
+        this.laneFlipBtn.classList.toggle("active", this.mpMatch.viewTeam !== this.mpMatch.myTeam);
+        playSfx("ui");
+        return;
+      }
+      if (!this.state || this.state.paused) return;
+      this.state.viewOpponentLane = !this.state.viewOpponentLane;
+      this.laneFlipBtn.textContent = this.state.viewOpponentLane ? "Your lane" : "View lane";
+      this.laneFlipBtn.classList.toggle("active", this.state.viewOpponentLane);
+      playSfx("ui");
+    });
     document.querySelector("#inv-close")!.addEventListener("click", () => {
       this.closeInventory();
     });
@@ -171,8 +226,16 @@ export class Game {
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
     });
-
-    for (const el of [this.shopPanel, this.sendBar, this.relicDraft, this.laneChrome, this.invPanel]) {
+    for (const el of [
+      this.shopPanel,
+      this.sendBar,
+      this.relicDraft,
+      this.laneChrome,
+      this.invPanel,
+      this.opponentPanel,
+      this.baseHpRail,
+      this.waveBannerEl,
+    ]) {
       el.addEventListener("mousedown", (e) => e.stopPropagation());
       el.addEventListener("mouseup", (e) => e.stopPropagation());
     }
@@ -244,10 +307,12 @@ export class Game {
   }
 
   private showMainMenu(): void {
+    this.endMultiplayer();
     this.state = null;
     this.pauseMode = "none";
     this.hud.classList.add("hidden");
     this.laneChrome.classList.add("hidden");
+    this.baseHpRail.classList.add("hidden");
     this.shopPanel.classList.add("hidden");
     this.relicDraft.classList.add("hidden");
     this.invPanel.classList.add("hidden");
@@ -258,10 +323,12 @@ export class Game {
   }
 
   private returnToMainMenu(): void {
+    this.endMultiplayer();
     this.state = null;
     this.pauseMode = "none";
     this.shopPanel.classList.add("hidden");
     this.laneChrome.classList.add("hidden");
+    this.baseHpRail.classList.add("hidden");
     this.relicDraft.classList.add("hidden");
     this.invPanel.classList.add("hidden");
     this.overlay.classList.add("hidden");
@@ -279,6 +346,9 @@ export class Game {
     const merged: RunOptions = {
       mapId: opts?.mapId ?? this.runDefaults.mapId ?? "random",
       maxTurrets: opts?.maxTurrets ?? this.runDefaults.maxTurrets ?? DEFAULT_MAX_TURRETS,
+      startingGold: opts?.startingGold ?? this.runDefaults.startingGold ?? STARTING_GOLD,
+      wavesToWin: opts?.wavesToWin ?? this.runDefaults.wavesToWin ?? WIN_WAVES,
+      friendlyFire: opts?.friendlyFire ?? this.runDefaults.friendlyFire ?? false,
     };
     this.state = createState(heroId, merged);
     this.pauseMode = "none";
@@ -287,7 +357,11 @@ export class Game {
     this.relicDraft.classList.add("hidden");
     this.invPanel.classList.add("hidden");
     this.laneChrome.classList.remove("hidden");
+    this.baseHpRail.classList.remove("hidden");
     this.hud.classList.remove("hidden");
+    this.laneFlipBtn.textContent = "View lane";
+    this.laneFlipBtn.classList.remove("active");
+    this.mapNameEl.textContent = this.state.map.name;
     this.lastDraftKey = "";
     this.lastShopKey = "";
     this.lastSendUnlockKey = "";
@@ -310,22 +384,38 @@ export class Game {
     const laneW = MAP_W * s;
     const laneLeft = mapLeft;
     const pad = 10;
-    const barStack = 36; // meta + track approximate height
+    const barStack = 36;
 
     const sendW = Math.min(laneW, window.innerWidth - 40);
     this.sendBar.style.width = `${sendW}px`;
     this.sendBar.style.left = `${(window.innerWidth - sendW) / 2}px`;
-    // Send sits above the XP bar, which sits just above the lane.
+
     this.xpBar.style.width = `${laneW}px`;
     this.xpBar.style.left = `${laneLeft}px`;
     this.xpBar.style.top = `${Math.max(pad, laneTopCss - barStack - 6)}px`;
 
     const xpTop = parseFloat(this.xpBar.style.top) || laneTopCss - barStack;
-    this.sendBar.style.top = `${Math.max(pad, xpTop - 78)}px`;
+    this.sendBar.style.top = `${Math.max(pad + 44, xpTop - 78)}px`;
+
+    // Wave banner sits directly above the send menu (centered).
+    const sendTop = parseFloat(this.sendBar.style.top) || pad + 44;
+    this.waveBannerEl.style.width = `${sendW}px`;
+    this.waveBannerEl.style.left = `${(window.innerWidth - sendW) / 2}px`;
+    this.waveBannerEl.style.top = `${Math.max(8, sendTop - 52)}px`;
 
     // Top-left stats panel sits just above the XP bar (aligned to lane left).
     this.hudPanel.style.left = `${laneLeft}px`;
-    this.hudPanel.style.top = `${Math.max(pad, xpTop - this.hudPanel.offsetHeight - 8)}px`;
+    this.hudPanel.style.top = `${Math.max(pad + 22, xpTop - this.hudPanel.offsetHeight - 8)}px`;
+
+    // Subtle map name — way top-left of the screen.
+    this.mapNameEl.style.left = `${Math.max(10, laneLeft)}px`;
+    this.mapNameEl.style.top = `8px`;
+
+    // Vertical base HP rail — same height as the playable lane strip (between XP and HP bars).
+    const railH = Math.max(60, laneBottomCss - laneTopCss);
+    this.baseHpRail.style.left = `${Math.max(4, laneLeft - 20)}px`;
+    this.baseHpRail.style.top = `${laneTopCss}px`;
+    this.baseHpRail.style.height = `${railH}px`;
 
     this.hpBar.style.width = `${laneW}px`;
     this.hpBar.style.left = `${laneLeft}px`;
@@ -339,10 +429,20 @@ export class Game {
     this.abilityEl.style.right = `${rightPad}px`;
     this.abilityEl.style.top = `${belowHp}px`;
 
-    // Bag centered under the HP bar
     this.invBtn.style.left = `${laneLeft + laneW / 2}px`;
     this.invBtn.style.right = "auto";
     this.invBtn.style.top = `${belowHp}px`;
+  }
+
+  private syncAimFromMouse(): void {
+    if (!this.state) return;
+    const view = computeView(this.canvas);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = (this.input.mouseClientX - rect.left) * dpr;
+    const sy = (this.input.mouseClientY - rect.top) * dpr;
+    this.state.aimWorldX = (sx - view.offsetX) / view.scale;
+    this.state.aimWorldY = (sy - view.offsetY) / view.scale;
   }
 
   private togglePause(): void {
@@ -519,7 +619,7 @@ export class Game {
     const mapName = this.state.map.name;
     this.overlayTitle.textContent = won ? "Lane held!" : "Base fallen";
     this.overlayBody.textContent = won
-      ? `${heroName} cleared ${WIN_WAVES} waves on ${mapName} (Lv ${this.state.level}, base ${this.state.baseLevel}) with ${Math.floor(this.state.gold)} gold, ${this.state.sendsThisRun} sends. Relics: ${relicNames}.`
+      ? `${heroName} cleared ${this.state.wavesToWin <= 0 ? this.state.wave : this.state.wavesToWin} waves on ${mapName} (Lv ${this.state.level}, base ${this.state.baseLevel}) with ${Math.floor(this.state.gold)} gold, ${this.state.sendsThisRun} sends. Relics: ${relicNames}.`
       : `${heroName} fell on wave ${this.state.wave} (${mapName}). Deaths ${this.state.deathCount}. Relics: ${relicNames}.`;
     this.overlayActions.innerHTML = "";
 
@@ -530,6 +630,7 @@ export class Game {
       this.state = null;
       this.hud.classList.add("hidden");
       this.laneChrome.classList.add("hidden");
+      this.baseHpRail.classList.add("hidden");
       this.shopPanel.classList.add("hidden");
       this.relicDraft.classList.add("hidden");
       this.overlay.classList.add("hidden");
@@ -757,9 +858,12 @@ export class Game {
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
 
-    if (this.state) {
+    if (this.mpMatch) {
+      this.frameMultiplayer(dt);
+    } else if (this.state) {
       // Don't sim while pause settings menu is open either
       const menusOpen = this.menus.isVisible() && this.state.paused;
+      this.syncAimFromMouse();
       if (!menusOpen) update(this.state, this.input, dt);
       else this.input.endFrame();
 
@@ -781,12 +885,210 @@ export class Game {
       this.toastEl.textContent = "";
       this.bannerEl.textContent = "";
       this.respawnEl.textContent = "";
-      this.relicsEl.textContent = "";
       this.goldAmountEl.textContent = "0";
       this.incomeEl.textContent = "";
     }
 
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  private openMultiplayer(draft: LobbyDraft, heroId: HeroId): void {
+    unlockAudio();
+    this.menus.hide();
+    const menusRoot = document.querySelector<HTMLElement>("#menus")!;
+    this.mpUi = new MultiplayerUi(menusRoot, {
+      onBack: () => {
+        this.mpUi?.destroy();
+        this.mpUi = null;
+        this.showMainMenu();
+      },
+      onMatchStart: (start, mySlot, isHost) => this.beginMultiplayerMatch(start, mySlot, isHost),
+    });
+    this.mpUi.show({
+      mode: draft.mode,
+      privacy: draft.privacy,
+      role: draft.role,
+      mapChoice: draft.mapChoice,
+      maxTurrets: draft.maxTurrets,
+      startingGold: draft.startingGold,
+      wavesToWin: draft.wavesToWin,
+      friendlyFire: draft.friendlyFire,
+      heroId,
+    });
+  }
+
+  private beginMultiplayerMatch(
+    start: Extract<NetMsg, { k: "start" }>,
+    mySlot: number,
+    isHost: boolean,
+  ): void {
+    this.mpUi?.destroy();
+    this.mpUi = null;
+    this.menus.hide();
+    this.mpHost = isHost;
+    this.remoteIntents.clear();
+    this.state = null;
+    this.mpMatch = buildMpMatch(start.lobby, start.mapId, start.maxTurrets, start.seed, mySlot, {
+      startingGold: start.startingGold ?? start.lobby.startingGold,
+      wavesToWin: start.wavesToWin ?? start.lobby.wavesToWin,
+      friendlyFire: start.friendlyFire ?? start.lobby.friendlyFire,
+    });
+    this.pauseMode = "none";
+    this.hud.classList.remove("hidden");
+    this.laneChrome.classList.remove("hidden");
+    this.baseHpRail.classList.remove("hidden");
+    this.opponentPanel.classList.remove("hidden");
+    this.waveBannerEl.classList.remove("hidden");
+    this.overlay.classList.add("hidden");
+    this.refreshHint();
+
+    // Focus local hero for HUD
+    const local = heroForSlot(this.mpMatch.lanes[this.mpMatch.myTeam], mySlot);
+    if (local && local !== this.mpMatch.lanes[this.mpMatch.myTeam].hero) {
+      // Swap so HUD/draw focus the controlled hero
+      const lane = this.mpMatch.lanes[this.mpMatch.myTeam];
+      const idx = lane.allies.indexOf(local);
+      if (idx >= 0) {
+        lane.allies[idx] = lane.hero;
+        lane.hero = local;
+      }
+    }
+    this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+
+    bindMatchHandlers({
+      onState: (msg) => {
+        if (this.mpHost || !this.mpMatch) return;
+        applyMatchSnap(this.mpMatch, msg.snap);
+        this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+      },
+      onIntent: (seat, intent) => {
+        if (!this.mpHost) return;
+        this.remoteIntents.set(seat, intent);
+      },
+    });
+  }
+
+  private frameMultiplayer(dt: number): void {
+    if (!this.mpMatch) return;
+    const view = computeView(this.canvas);
+
+    const lane = this.mpMatch.lanes[this.mpMatch.viewTeam];
+    const controlled =
+      heroForSlot(this.mpMatch.lanes[this.mpMatch.myTeam], this.mpMatch.mySlot) ??
+      this.mpMatch.lanes[this.mpMatch.myTeam].hero;
+
+    // Aim in world space
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = this.canvas.width / Math.max(1, rect.width);
+    const sx = (this.input.mouseClientX - rect.left) * dpr;
+    const sy = (this.input.mouseClientY - rect.top) * dpr;
+    const aim = {
+      x: (sx - view.offsetX) / view.scale,
+      y: (sy - view.offsetY) / view.scale,
+    };
+
+    const local = gatherLocalIntent(this.input, aim, controlled);
+    // Shop slots when shop open: digits 4-6
+    if (lane.shopOpen && local.sendDigit != null && local.sendDigit >= 4) {
+      local.shopSlot = local.sendDigit - 4;
+      local.sendDigit = null;
+    }
+
+    if (this.mpHost) {
+      const intents = new Map<number, CombatIntent>();
+      intents.set(this.mpMatch.mySlot, local);
+      for (const [seat, intent] of this.remoteIntents) {
+        if (seat !== this.mpMatch.mySlot) intents.set(seat, intent);
+      }
+      stepMpMatch(this.mpMatch, intents, dt);
+      this.snapSeq++;
+      netBroadcast({
+        k: "state",
+        snap: buildMatchSnap(this.mpMatch, this.mpMatch.viewTeam),
+        seq: this.snapSeq,
+      });
+    } else {
+      this.intentSeq++;
+      netSendToHost({
+        k: "intent",
+        seat: this.mpMatch.mySlot,
+        intent: local,
+        seq: this.intentSeq,
+      });
+    }
+    this.input.endFrame();
+
+    this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+    // Ensure draw focuses controlled hero on my team view
+    if (this.mpMatch.viewTeam === this.mpMatch.myTeam && controlled) {
+      const L = this.state;
+      if (L.hero !== controlled && L.allies.includes(controlled)) {
+        const idx = L.allies.indexOf(controlled);
+        L.allies[idx] = L.hero;
+        L.hero = controlled;
+      }
+    }
+
+    draw(this.ctx, this.state, view);
+    this.layoutLaneChrome();
+    this.syncHudMp();
+    this.syncShopPanel();
+    this.refreshSendBar();
+    this.syncDraft();
+
+    if (this.mpMatch.ended) this.showMpEndOverlay();
+  }
+
+  private syncHudMp(): void {
+    if (!this.mpMatch || !this.state) return;
+    this.syncHud();
+    const other = this.mpMatch.lanes[(1 - this.mpMatch.myTeam) as 0 | 1];
+    this.oppNameEl.textContent = other.aiControlled
+      ? `AI · ${HEROES[other.hero.heroId].name}`
+      : `Enemy · ${HEROES[other.hero.heroId].name}`;
+    const sendIn = other.pendingSends.reduce((n, p) => n + p.enemies, 0);
+    this.oppStatsEl.innerHTML = [
+      `<div>HP ${Math.ceil(other.hero.hp)}/${Math.ceil(other.hero.maxHp)} · Lv ${other.level}</div>`,
+      `<div>Base ${Math.ceil(other.baseHp)} · Wave ${other.wave}</div>`,
+      `<div>Gold ${Math.floor(other.gold)} · +${other.incomePerSec.toFixed(1)}/s</div>`,
+      `<div>${other.status === "playing" ? (other.spawning || other.enemies.length ? "Fighting" : "Between waves") : other.status}</div>`,
+      sendIn > 0 ? `<div class="opp-alert">Incoming sends: ${sendIn}</div>` : "",
+    ]
+      .filter(Boolean)
+      .join("");
+  }
+
+  private showMpEndOverlay(): void {
+    if (!this.mpMatch) return;
+    const win = this.mpMatch.winnerTeam === this.mpMatch.myTeam;
+    this.overlay.classList.remove("hidden");
+    this.overlayTitle.textContent = win ? "Victory" : "Defeat";
+    this.overlayBody.textContent = win
+      ? "Your side broke the enemy base / outlasted them."
+      : "Your base fell — or the enemy cleared the win wave first.";
+    this.overlayActions.innerHTML = `<button type="button" class="menu-btn primary" id="mp-done">Back to Menu</button>`;
+    document.querySelector("#mp-done")!.addEventListener("click", () => {
+      this.endMultiplayer();
+      this.showMainMenu();
+    });
+    this.mpMatch = null;
+    this.state = null;
+    bindMatchHandlers(null);
+  }
+
+  private endMultiplayer(): void {
+    this.mpMatch = null;
+    this.state = null;
+    bindMatchHandlers(null);
+    disconnectNet();
+    this.mpUi?.destroy();
+    this.mpUi = null;
+    this.hud.classList.add("hidden");
+    this.laneChrome.classList.add("hidden");
+    this.baseHpRail.classList.add("hidden");
+    this.opponentPanel.classList.add("hidden");
+    this.waveBannerEl.classList.add("hidden");
+    this.overlay.classList.add("hidden");
   }
 
   private syncShopPanel(): void {
@@ -805,30 +1107,73 @@ export class Game {
     const hero = HEROES[s.hero.heroId];
     const kb = loadSettings().keybinds;
     const tier = waveTierLabel(s.waveTier);
-    const waveLabel = s.spawning
-      ? `Wave ${s.wave}${tier ? ` · ${tier}` : ""}`
-      : s.wave === 0
-        ? "Get ready…"
-        : s.pausedForDraft
-          ? s.levelDraft
-            ? `Level up — choose a passive`
-            : `Wave ${s.wave} cleared — choose a relic`
-          : s.paused
-            ? "Paused"
-            : `Wave ${s.wave} cleared — next in ${Math.max(0, s.waveTimer).toFixed(1)}s`;
-    const queued = pendingSendCount(s);
+    const incoming = s.opponent.incomingFromPlayer;
+    const aiSend = s.pendingSends.reduce((n, p) => n + p.enemies, 0);
 
     this.goldAmountEl.textContent = `${Math.floor(s.gold)}`;
     this.incomeEl.textContent = `+${s.incomePerSec.toFixed(1)}/s`;
 
+    this.mapNameEl.textContent = s.map.name;
+
+    // Wave banner above send menu
+    if (s.wave === 0) {
+      this.waveNumberEl.textContent = "Get ready…";
+    } else if (s.pausedForDraft) {
+      this.waveNumberEl.textContent = s.levelDraft
+        ? `Level up`
+        : `Wave ${s.wave} cleared`;
+    } else if (s.paused) {
+      this.waveNumberEl.textContent = "Paused";
+    } else if (!s.spawning && s.enemies.length === 0) {
+      this.waveNumberEl.textContent = `Wave ${s.wave} · next ${Math.max(0, s.waveTimer).toFixed(1)}s`;
+    } else {
+      this.waveNumberEl.textContent = `Wave ${s.wave}`;
+    }
+
+    if (tier && (s.spawning || s.enemies.length > 0)) {
+      this.waveTierEl.textContent = tier;
+      this.waveTierEl.classList.remove("hidden");
+      this.waveTierEl.classList.toggle("boss", s.waveTier === "boss");
+      this.waveTierEl.classList.toggle("elite", s.waveTier === "elite");
+    } else {
+      this.waveTierEl.textContent = "";
+      this.waveTierEl.classList.add("hidden");
+    }
+
+    // Simplified top-left panel (no map / wave / base·hero HP labels)
     this.statsEl.innerHTML = [
       `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}</div>`,
-      `<div class="hud-line">${waveLabel}</div>`,
-      `<div class="hud-line">${s.map.name} · Base Lv ${s.baseLevel}</div>`,
-      `<div class="hud-line">Base HP ${Math.ceil(s.baseHp)}/${s.map.base.maxHp} · Hero ${s.hero.alive ? `${Math.ceil(s.hero.hp)}/${s.hero.maxHp}` : "DOWN"}${queued ? ` · Queued ${queued}` : ""}</div>`,
+      `<div class="hud-line">Base Lv ${s.baseLevel}${incoming ? ` · Sent ${incoming}` : ""}${aiSend ? ` · Incoming ${aiSend}` : ""}</div>`,
     ].join("");
 
-    // HTML banner as backup — keep clear of XP bar
+    // Vertical base HP
+    const baseRatio = Math.max(0, Math.min(1, s.baseHp / Math.max(1, s.map.base.maxHp)));
+    this.baseHpFill.style.height = `${Math.round(baseRatio * 100)}%`;
+    this.baseHpFill.classList.toggle("low", baseRatio <= 0.35);
+    this.baseHpRail.title = `Base HP ${Math.ceil(s.baseHp)} / ${s.map.base.maxHp}`;
+
+    // Opponent panel (always visible — no flip required)
+    const opp = s.opponent;
+    this.oppNameEl.textContent = opp.name;
+    this.oppNameEl.style.color = opp.color;
+    const sendLine =
+      opp.sendFlash > 0 && opp.lastSendLabel
+        ? `<div class="opp-alert">Sending ${opp.lastSendLabel}!</div>`
+        : aiSend > 0
+          ? `<div class="opp-alert">Queued ${aiSend} to your next wave</div>`
+          : `<div class="opp-muted">No active send</div>`;
+    this.oppStatsEl.innerHTML = [
+      `<div>HP ${Math.ceil(opp.heroHp)}/${Math.ceil(opp.heroMaxHp)} · Lv ${opp.level}</div>`,
+      `<div>Base ${Math.ceil(opp.baseHp)}/${opp.baseMaxHp} · BLv ${opp.baseLevel}</div>`,
+      `<div>+${opp.incomePerSec.toFixed(1)}/s · ${Math.floor(opp.gold)}g</div>`,
+      `<div class="opp-status status-${opp.fightStatus}">${opponentStatusLabel(opp.fightStatus)}</div>`,
+      sendLine,
+      incoming > 0 ? `<div class="opp-muted">Your sends inbound: ${incoming}</div>` : "",
+    ].join("");
+
+    this.laneFlipBtn.textContent = s.viewOpponentLane ? "Your lane" : "View lane";
+    this.laneFlipBtn.classList.toggle("active", s.viewOpponentLane);
+
     this.bannerEl.textContent = "";
     this.bannerEl.className = "";
 
@@ -839,16 +1184,6 @@ export class Game {
       this.respawnEl.textContent = "";
       this.respawnEl.classList.add("hidden");
     }
-
-    this.relicsEl.innerHTML =
-      s.relics.length > 0
-        ? `Relics: ${s.relics
-            .map((id) => {
-              const r = RELICS[id];
-              return `<span class="relic-chip" data-tip="<strong>${r.name}</strong><br/>${r.blurb}" style="color:${RARITY_COLOR[r.rarity]}">${r.name}</span>`;
-            })
-            .join(" · ")}`
-        : "";
 
     const labels = [formatBinding(kb.mobility), formatBinding(kb.ultimate)];
     const abilityKey = `${s.hero.abilityCds.map((c) => c.toFixed(1)).join(",")}:${s.hero.alive}`;

@@ -92,5 +92,8 @@
   "allowScripts": {
     "electron@37.10.3": true,
     "electron-winstaller@5.4.0": true
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
   }
 }

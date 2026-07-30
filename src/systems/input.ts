@@ -1,7 +1,7 @@
 import { loadSettings, type Binding, type CombatAction, type Keybinds } from "../ui/settings";
 
 const UI_ROOT_SELECTORS =
-  "#menus, #shop-panel, #overlay, #send-bar, #relic-draft, #pause-btn, #hud-abilities, #inv-panel, #lane-chrome";
+  "#menus, #shop-panel, #overlay, #send-bar, #relic-draft, #pause-btn, #hud-abilities, #inv-panel, #lane-chrome, #opponent-panel, #wave-banner, #base-hp-rail, #lane-flip-btn";
 
 function isUiTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(UI_ROOT_SELECTORS));
@@ -13,6 +13,9 @@ export class Input {
   private readonly mouseDown = new Set<number>();
   private readonly mouseJustPressed = new Set<number>();
   private binds: Keybinds = loadSettings().keybinds;
+  /** Client (CSS) pixel coords relative to the game canvas. */
+  mouseClientX = 0;
+  mouseClientY = 0;
 
   constructor(target: Window = window) {
     target.addEventListener("keydown", (e) => {
@@ -50,6 +53,10 @@ export class Input {
     );
     target.addEventListener("contextmenu", (e) => {
       if (!isUiTarget(e.target)) e.preventDefault();
+    });
+    target.addEventListener("mousemove", (e) => {
+      this.mouseClientX = e.clientX;
+      this.mouseClientY = e.clientY;
     });
     target.addEventListener("blur", () => {
       this.keys.clear();

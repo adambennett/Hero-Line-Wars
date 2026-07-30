@@ -1,8 +1,9 @@
 import { MAP_H, MAP_W } from "../data/constants";
-import { ENEMY_DEFS, waveTierLabel } from "../data/enemies";
+import { ENEMY_DEFS } from "../data/enemies";
 import { HEROES } from "../data/heroes";
 import { TURRET_DEFS } from "../data/turrets";
-import { heroOnHighGround, type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
+import { type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
+import { inHighGround } from "../systems/combat";
 import { loadSettings } from "../ui/settings";
 
 export type View = {
@@ -150,17 +151,27 @@ function mixTint(a: string, b: string, t: number): string {
 
 function drawFeedbackOverlay(ctx: CanvasRenderingContext2D, state: GameState): void {
   const settings = loadSettings();
+  const fx = settings.damageScreenFx ?? "full";
+  if (fx === "off" || settings.reduceMotion) {
+    if (!state.hero.alive) {
+      ctx.fillStyle = "rgba(8, 10, 18, 0.35)";
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
+    return;
+  }
+
+  const mul = fx === "reduced" ? 0.35 : 1;
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
-  if (state.damageFlash > 0 && !settings.reduceMotion) {
-    const a = Math.min(0.35, state.damageFlash * 1.2);
+  if (state.damageFlash > 0) {
+    const a = Math.min(0.35, state.damageFlash * 1.2) * mul;
     ctx.fillStyle = `rgba(180, 20, 30, ${a})`;
     ctx.fillRect(0, 0, w, h);
   }
 
   if (state.vignette > 0) {
-    const a = Math.min(0.55, state.vignette * 1.1);
+    const a = Math.min(0.55, state.vignette * 1.1) * mul;
     const g = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.72);
     g.addColorStop(0, "rgba(0,0,0,0)");
     g.addColorStop(1, `rgba(120, 0, 20, ${a})`);
@@ -184,8 +195,10 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
 
   let shakeX = 0;
   let shakeY = 0;
-  if (state.shake > 0 && settings.screenShake && !settings.reduceMotion) {
-    const amp = 7 * (state.shake / 0.22);
+  const fx = settings.damageScreenFx ?? "full";
+  const shakeOk = settings.screenShake && !settings.reduceMotion && fx !== "off";
+  if (state.shake > 0 && shakeOk && !state.viewOpponentLane) {
+    const amp = 7 * (state.shake / 0.22) * (fx === "reduced" ? 0.4 : 1);
     shakeX = (Math.random() * 2 - 1) * amp;
     shakeY = (Math.random() * 2 - 1) * amp;
   }
@@ -194,6 +207,13 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   ctx.save();
   ctx.translate(origin.x + shakeX, origin.y + shakeY);
   ctx.scale(view.scale, view.scale);
+
+  if (state.viewOpponentLane) {
+    drawOpponentLaneWorld(ctx, state);
+    ctx.restore();
+    drawFeedbackOverlay(ctx, state);
+    return;
+  }
 
   // Lane floor
   ctx.fillStyle = "#152038";
@@ -323,49 +343,54 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     drawEnemyShape(ctx, e);
   }
 
-  // Hero
-  if (state.hero.alive) {
-    const def = HEROES[state.hero.heroId];
-    const heroGlow = heroOnHighGround(state);
-    ctx.beginPath();
-    ctx.arc(state.hero.x, state.hero.y, state.hero.radius, 0, Math.PI * 2);
-    ctx.fillStyle =
-      state.hitFlash > 0 ? "#ffffff" : heroGlow ? def.glowColor : def.color;
-    ctx.fill();
-    ctx.strokeStyle = "#d8fbff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    if (state.hero.barrierTimer > 0) {
+  // Heroes (primary + allies)
+  const heroesToDraw = [state.hero, ...(state.allies ?? [])];
+  for (const h of heroesToDraw) {
+    const def = HEROES[h.heroId];
+    if (h.alive) {
+      const heroGlow = inHighGround(state, h);
       ctx.beginPath();
-      ctx.arc(state.hero.x, state.hero.y, state.hero.radius + 8, 0, Math.PI * 2);
-      ctx.strokeStyle = "#ffe08acc";
-      ctx.lineWidth = 3;
+      ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+      ctx.fillStyle =
+        h === state.hero && state.hitFlash > 0 ? "#ffffff" : heroGlow ? def.glowColor : def.color;
+      ctx.fill();
+      ctx.strokeStyle = h === state.hero ? "#d8fbff" : "#ffffff88";
+      ctx.lineWidth = h === state.hero ? 2 : 1.5;
       ctx.stroke();
-    }
-    if (state.hero.whirlwindTimer > 0) {
+
+      if (h.barrierTimer > 0) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius + 8, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffe08acc";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      if (h.whirlwindTimer > 0) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, 72, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffb06055";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (h === state.hero && def.aimMode !== "free") {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, def.attackRange, 0, Math.PI * 2);
+        ctx.strokeStyle = def.aimMode === "auto" ? "#5ef0a828" : "#ffffff18";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    } else {
       ctx.beginPath();
-      ctx.arc(state.hero.x, state.hero.y, 72, 0, Math.PI * 2);
-      ctx.strokeStyle = "#ffb06055";
+      ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffffff44";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
     }
-
-    ctx.beginPath();
-    ctx.arc(state.hero.x, state.hero.y, def.attackRange, 0, Math.PI * 2);
-    ctx.strokeStyle = "#ffffff18";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.arc(state.hero.x, state.hero.y, state.hero.radius, 0, Math.PI * 2);
-    ctx.strokeStyle = "#ffffff44";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
   }
 
   // Projectiles
@@ -381,6 +406,9 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   if (state.hero.alive) {
     drawHpBar(ctx, view, state.hero.x, state.hero.y, state.hero.radius, state.hero.hp, state.hero.maxHp);
   }
+  for (const h of state.allies ?? []) {
+    if (h.alive) drawHpBar(ctx, view, h.x, h.y, h.radius, h.hp, h.maxHp);
+  }
   for (const e of state.enemies) {
     drawHpBar(ctx, view, e.x, e.y, e.radius, e.hp, e.maxHp);
   }
@@ -389,19 +417,90 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   }
   drawHpBar(ctx, view, base.x, base.y, base.radius, state.baseHp, base.maxHp);
 
-  // Wave banner drawn above the playfield (XP bar sits just above lane)
-  const banner = waveTierLabel(state.waveTier);
-  if (banner && (state.spawning || state.enemies.length > 0)) {
-    ctx.save();
-    ctx.font = "bold 26px Segoe UI, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = state.waveTier === "boss" ? "#ff6a4a" : "#d090ff";
-    ctx.shadowColor = "#000";
-    ctx.shadowBlur = 10;
-    const bannerY = Math.max(36, view.offsetY - 48);
-    ctx.fillText(banner, ctx.canvas.width / 2, bannerY);
-    ctx.restore();
+  // Wave / boss banner is HTML (#wave-banner) above the send menu — keep canvas clear.
+  drawFeedbackOverlay(ctx, state);
+}
+
+function drawOpponentLaneWorld(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const map = state.map;
+  const opp = state.opponent;
+
+  ctx.fillStyle = "#1a1428";
+  ctx.fillRect(0, map.laneTop, MAP_W, map.laneBottom - map.laneTop);
+
+  ctx.strokeStyle = "#4a3560";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, map.laneTop);
+  ctx.lineTo(MAP_W, map.laneTop);
+  ctx.moveTo(0, map.laneBottom);
+  ctx.lineTo(MAP_W, map.laneBottom);
+  ctx.stroke();
+
+  for (const hg of map.highGrounds) {
+    ctx.fillStyle = "#5a3d8822";
+    ctx.strokeStyle = "#b08fff66";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.fillRect(hg.x, hg.y, hg.w, hg.h);
+    ctx.strokeRect(hg.x, hg.y, hg.w, hg.h);
+    ctx.setLineDash([]);
   }
 
-  drawFeedbackOverlay(ctx, state);
+  for (const o of map.obstacles) {
+    ctx.fillStyle = "#241828";
+    ctx.strokeStyle = "#6a5078";
+    ctx.lineWidth = 2;
+    ctx.fillRect(o.x, o.y, o.w, o.h);
+    ctx.strokeRect(o.x, o.y, o.w, o.h);
+  }
+
+  // Opponent base (same pad)
+  const base = map.base;
+  ctx.beginPath();
+  ctx.arc(base.x, base.y, base.radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#6a2f90";
+  ctx.fill();
+  ctx.strokeStyle = "#d0a0ff";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = "#f0e0ff";
+  ctx.font = "bold 11px Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`ENEMY BASE`, base.x, base.y + 4);
+
+  ctx.beginPath();
+  ctx.arc(map.spawner.x, map.spawner.y, map.spawner.radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#3a2040";
+  ctx.fill();
+  ctx.strokeStyle = "#c070ff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#e8c8ff";
+  ctx.fillText("SPAWN", map.spawner.x, map.spawner.y + 4);
+
+  for (const e of opp.vizEnemies) {
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+    ctx.fillStyle = e.sent ? "#a34bd4" : e.color;
+    ctx.fill();
+    ctx.strokeStyle = "#fff6";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.beginPath();
+  ctx.arc(opp.vizHeroX, opp.vizHeroY, 16, 0, Math.PI * 2);
+  ctx.fillStyle = opp.color;
+  ctx.fill();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 10px Segoe UI, sans-serif";
+  ctx.fillText(opp.name, opp.vizHeroX, opp.vizHeroY - 24);
+
+  ctx.fillStyle = "#c8b0e8aa";
+  ctx.font = "bold 14px Segoe UI, sans-serif";
+  ctx.fillText("ENEMY LANE", MAP_W / 2, map.laneTop + 22);
 }

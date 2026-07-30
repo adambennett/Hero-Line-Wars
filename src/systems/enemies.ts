@@ -3,16 +3,41 @@ import { circleHitsObstacle, pointBlocked } from "../data/maps";
 import { ENEMY_DEFS, type EnemyKind } from "../data/enemies";
 import { ENEMY_STUCK_SEC, MAP_W, WAVE_SCALE } from "../data/constants";
 import { clamp, dist, normalize } from "../game/math";
-import type { EnemyUnit, GameState, TurretUnit } from "../game/state";
+import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
 import { addFx, applyPlayerDamage, pushProjectile } from "./combat";
 import { baseDamageTakenMul } from "./relics";
 import { damageTurret, livingTurrets } from "./turrets";
 import { playSfx } from "./audio";
 
+function livingHeroes(state: GameState): HeroRuntime[] {
+  const list = [state.hero, ...(state.allies ?? [])];
+  return list.filter((h) => h.alive);
+}
+
+function nearestLivingHero(state: GameState, from: { x: number; y: number }): HeroRuntime | null {
+  let best: HeroRuntime | null = null;
+  let bestD = Infinity;
+  for (const h of livingHeroes(state)) {
+    const d = dist(from, h);
+    if (d < bestD) {
+      bestD = d;
+      best = h;
+    }
+  }
+  return best;
+}
+
+function damageHero(state: GameState, hero: HeroRuntime, amount: number): void {
+  const prev = state.hero;
+  state.hero = hero;
+  applyPlayerDamage(state, amount);
+  if (prev !== hero) state.hero = prev;
+}
+
 function resolveTarget(
   state: GameState,
   e: EnemyUnit,
-): { x: number; y: number; kind: "base" | "hero" | "turret"; turret?: TurretUnit } {
+): { x: number; y: number; kind: "base" | "hero" | "turret"; turret?: TurretUnit; hero?: HeroRuntime } {
   const base = state.map.base;
   const turrets = livingTurrets(state);
 
@@ -31,21 +56,29 @@ function resolveTarget(
   }
 
   if (e.intent === "hero") {
-    if (state.hero.alive) return { x: state.hero.x, y: state.hero.y, kind: "hero" };
+    const h = nearestLivingHero(state, e);
+    if (h) return { x: h.x, y: h.y, kind: "hero", hero: h };
     return { x: base.x, y: base.y, kind: "base" };
   }
 
-  type Cand = { x: number; y: number; kind: "base" | "hero" | "turret"; d: number; turret?: TurretUnit };
+  type Cand = {
+    x: number;
+    y: number;
+    kind: "base" | "hero" | "turret";
+    d: number;
+    turret?: TurretUnit;
+    hero?: HeroRuntime;
+  };
   const cands: Cand[] = [{ x: base.x, y: base.y, kind: "base", d: dist(e, base) }];
-  if (state.hero.alive) {
-    cands.push({ x: state.hero.x, y: state.hero.y, kind: "hero", d: dist(e, state.hero) });
+  for (const h of livingHeroes(state)) {
+    cands.push({ x: h.x, y: h.y, kind: "hero", d: dist(e, h), hero: h });
   }
   for (const t of turrets) {
     cands.push({ x: t.x, y: t.y, kind: "turret", d: dist(e, t), turret: t });
   }
   cands.sort((a, b) => a.d - b.d);
   const best = cands[0]!;
-  return { x: best.x, y: best.y, kind: best.kind, turret: best.turret };
+  return { x: best.x, y: best.y, kind: best.kind, turret: best.turret, hero: best.hero };
 }
 
 function nearestTurret(from: { x: number; y: number }, turrets: TurretUnit[]): TurretUnit | null {
@@ -256,8 +289,8 @@ export function updateEnemies(state: GameState, dt: number): void {
         addFx(state, e.x, e.y, rad, "#ff4040aa", 0.35);
         state.shake = Math.max(state.shake, e.kind === "boss" ? 0.55 : 0.32);
         playSfx("boss_slam");
-        if (state.hero.alive && dist(e, state.hero) <= rad + state.hero.radius) {
-          applyPlayerDamage(state, dmg);
+        for (const h of livingHeroes(state)) {
+          if (dist(e, h) <= rad + h.radius) damageHero(state, h, dmg);
         }
         for (const t of livingTurrets(state)) {
           if (dist(e, t) <= rad + t.radius) {
@@ -271,10 +304,11 @@ export function updateEnemies(state: GameState, dt: number): void {
     const target = resolveTarget(state, e);
     moveWithPathing(map, e, target.x, target.y, e.speed * speedMul, dt);
 
-    if (e.ranged && state.hero.alive) {
+    const focusHero = target.hero ?? nearestLivingHero(state, e);
+    if (e.ranged && focusHero) {
       e.attackCd = Math.max(0, e.attackCd - dt);
-      if (e.attackCd <= 0 && dist(e, state.hero) <= (e.attackRange || 150)) {
-        const dir = normalize(state.hero.x - e.x, state.hero.y - e.y);
+      if (e.attackCd <= 0 && dist(e, focusHero) <= (e.attackRange || 150)) {
+        const dir = normalize(focusHero.x - e.x, focusHero.y - e.y);
         const spd = e.projectileSpeed || 280;
         pushProjectile(state, {
           x: e.x,
@@ -291,18 +325,18 @@ export function updateEnemies(state: GameState, dt: number): void {
       }
     }
 
-    if (e.slamCooldown && state.hero.alive) {
+    if (e.slamCooldown && focusHero) {
       e.slamCd = Math.max(0, (e.slamCd ?? 0) - dt);
-      if ((e.slamCd ?? 0) <= 0 && dist(e, state.hero) <= (e.slamRadius ?? 70) * 0.85) {
+      if ((e.slamCd ?? 0) <= 0 && dist(e, focusHero) <= (e.slamRadius ?? 70) * 0.85) {
         e.telegraph = 0.55;
         e.slamCd = e.slamCooldown;
         addFx(state, e.x, e.y, (e.slamRadius ?? 70) * 0.9, "#ff808044", 0.55);
       }
     }
 
-    if (state.hero.alive && dist(e, state.hero) <= e.radius + state.hero.radius) {
-      const contactMul = state.hero.barrierTimer > 0 ? 0.35 : 1;
-      applyPlayerDamage(state, e.contactDamage * contactMul * dt);
+    if (focusHero && dist(e, focusHero) <= e.radius + focusHero.radius) {
+      const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
+      damageHero(state, focusHero, e.contactDamage * contactMul * dt);
     }
 
     if (target.kind === "turret" && target.turret?.alive) {

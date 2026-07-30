@@ -7,6 +7,7 @@ import {
   addFx,
   attackDamage,
   damageEnemiesInRadius,
+  enemyInAttackRange,
   nearestEnemy,
   pushProjectile,
   applySlow,
@@ -193,6 +194,44 @@ function castBeamstorm(state: GameState): boolean {
   return true;
 }
 
+function castZip(state: GameState, move: Vec2): boolean {
+  const aim = normalize(state.aimWorldX - state.hero.x, state.aimWorldY - state.hero.y);
+  const dir =
+    Math.hypot(aim.x, aim.y) > 0.1
+      ? aim
+      : Math.hypot(move.x, move.y) > 0.1
+        ? normalize(move.x, move.y)
+        : { x: 1, y: 0 };
+  dashHero(state, dir, 130, "#ffd24a");
+  state.hero.zipSpeedTimer = 1.2;
+  return true;
+}
+
+function castStormCage(state: GameState): boolean {
+  state.hero.stormCageTimer = 2.2;
+  addFx(state, state.hero.x, state.hero.y, 95, "#ffd24a66", 0.45);
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 95, attackDamage(state) * 1.4);
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) <= 95 + e.radius) applySlow(e, 0.5, 1.8);
+  }
+  return true;
+}
+
+function castBurrow(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 125, "#6bcf5a");
+  state.hero.barrierTimer = Math.max(state.hero.barrierTimer, 1.5);
+  return true;
+}
+
+function castBloom(state: GameState): boolean {
+  const dmg = attackDamage(state) * 2.1;
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 100, dmg);
+  state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + state.hero.maxHp * 0.22);
+  addFx(state, state.hero.x, state.hero.y, 100, "#6bcf5a88", 0.5);
+  return true;
+}
+
 const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = {
   dash: (s, m) => castDash(s, m),
   slide: (s, m) => castSlide(s, m),
@@ -208,6 +247,10 @@ const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = 
   beamstorm: (s) => castBeamstorm(s),
   frostnova: (s) => castFrostNova(s),
   chaosburst: (s) => castChaosBurst(s),
+  zip: (s, m) => castZip(s, m),
+  stormcage: (s) => castStormCage(s),
+  burrow: (s, m) => castBurrow(s, m),
+  bloom: (s) => castBloom(s),
 };
 
 export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2): void {
@@ -216,6 +259,11 @@ export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2):
   if (index < 0) return;
   const ability = hero.abilities[index]!;
   if (state.hero.abilityCds[index]! > 0) return;
+
+  // Engage heroes need a foe in range for ultimates (mobility always ok).
+  if (slot === "ultimate" && hero.aimMode === "engage" && !enemyInAttackRange(state)) {
+    return;
+  }
 
   const ok = CASTERS[ability.id](state, move);
   if (ok) {
@@ -245,6 +293,20 @@ export function tickAbilityEffects(state: GameState, dt: number): void {
   }
   if ((state.hero.marksmanTimer ?? 0) > 0) {
     state.hero.marksmanTimer = Math.max(0, (state.hero.marksmanTimer ?? 0) - dt);
+  }
+  if ((state.hero.overchargeTimer ?? 0) > 0) {
+    state.hero.overchargeTimer = Math.max(0, (state.hero.overchargeTimer ?? 0) - dt);
+  }
+  if ((state.hero.zipSpeedTimer ?? 0) > 0) {
+    state.hero.zipSpeedTimer = Math.max(0, (state.hero.zipSpeedTimer ?? 0) - dt);
+  }
+  if ((state.hero.stormCageTimer ?? 0) > 0) {
+    state.hero.stormCageTimer = Math.max(0, (state.hero.stormCageTimer ?? 0) - dt);
+    const dmg = attackDamage(state) * 0.7 * dt;
+    damageEnemiesInRadius(state, state.hero.x, state.hero.y, 95, dmg);
+    if (Math.floor(state.hero.stormCageTimer * 8) !== Math.floor((state.hero.stormCageTimer + dt) * 8)) {
+      addFx(state, state.hero.x, state.hero.y, 95, "#ffd24a33", 0.12);
+    }
   }
 }
 

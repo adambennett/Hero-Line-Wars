@@ -1,4 +1,4 @@
-const STORAGE_KEY = "hlw-settings-v2";
+const STORAGE_KEY = "hlw-settings-v3";
 
 /** Mouse: 0 left, 1 middle, 2 right. Keyboard: KeyboardEvent.code */
 export type Binding =
@@ -9,11 +9,15 @@ export type CombatAction = "attack" | "mobility" | "ultimate";
 
 export type Keybinds = Record<CombatAction, Binding>;
 
+/** Screen flash / vignette / shake intensity when the hero takes damage. */
+export type DamageScreenFx = "off" | "reduced" | "full";
+
 export type ClientSettings = {
   masterVolume: number;
   showDamageNumbers: boolean;
   screenShake: boolean;
   reduceMotion: boolean;
+  damageScreenFx: DamageScreenFx;
   keybinds: Keybinds;
 };
 
@@ -28,17 +32,23 @@ const DEFAULTS: ClientSettings = {
   showDamageNumbers: true,
   screenShake: true,
   reduceMotion: false,
+  damageScreenFx: "full",
   keybinds: { ...DEFAULT_KEYBINDS },
 };
 
 export function loadSettings(): ClientSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem("hlw-settings-v1");
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem("hlw-settings-v2") ??
+      localStorage.getItem("hlw-settings-v1");
     if (!raw) return structuredClone(DEFAULTS);
     const parsed = JSON.parse(raw) as Partial<ClientSettings>;
+    const fx = parsed.damageScreenFx;
     return {
       ...DEFAULTS,
       ...parsed,
+      damageScreenFx: fx === "off" || fx === "reduced" || fx === "full" ? fx : DEFAULTS.damageScreenFx,
       keybinds: {
         ...DEFAULT_KEYBINDS,
         ...(parsed.keybinds ?? {}),
@@ -96,7 +106,13 @@ export const ACTION_LABELS: Record<CombatAction, string> = {
 };
 
 export const ACTION_HINTS: Record<CombatAction, string> = {
-  attack: "Basic attack (hold)",
+  attack: "Basic attack (hold) — aim with mouse (Prism auto-aims)",
   mobility: "Movement / utility ability",
   ultimate: "Big cooldown ability",
+};
+
+export const DAMAGE_FX_LABELS: Record<DamageScreenFx, string> = {
+  full: "Full",
+  reduced: "Reduced",
+  off: "Off",
 };

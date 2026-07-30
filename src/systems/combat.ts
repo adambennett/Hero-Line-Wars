@@ -1,6 +1,7 @@
 import { HEROES, type AttackStyle, type HeroId } from "../data/heroes";
 import type { RelicId } from "../data/relics";
 import type { HighGroundZone } from "../data/maps";
+import { hasLineOfSight, rayObstacleHitT } from "../data/maps";
 import { dist, normalize, type Vec2 } from "../game/math";
 import type { EnemyUnit, GameState, Projectile } from "../game/state";
 import { hasRelic } from "./relics";
@@ -60,6 +61,8 @@ export function attackDamage(state: GameState): number {
     if (near) dmg *= 1.3;
   }
 
+  if ((state.hero.overchargeTimer ?? 0) > 0) dmg *= 1.2;
+
   if (state.hero.luck > 0 && Math.random() < state.hero.luck) {
     dmg *= 1.75;
   }
@@ -104,6 +107,10 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
   if (state.hero.heroId === "ranger") {
     state.hero.marksmanTimer = 2.5;
   }
+  // Coil Overcharge
+  if (state.hero.heroId === "coil") {
+    state.hero.overchargeTimer = 2;
+  }
 }
 
 export function damageEnemy(
@@ -122,11 +129,22 @@ export function damageEnemy(
   e.hp -= dmg;
   if (opts?.fromBasic || dmg >= 3) playSfx("hit");
 
-  if (opts?.lifesteal || (opts?.fromBasic && hasRelic(state, "hungry_blade"))) {
-    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + dmg * 0.18);
+  if (
+    opts?.lifesteal ||
+    (opts?.fromBasic && hasRelic(state, "hungry_blade")) ||
+    (opts?.fromBasic && state.hero.heroId === "thorn")
+  ) {
+    const steal = state.hero.heroId === "thorn" && opts?.fromBasic ? 0.12 : 0.18;
+    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + dmg * steal);
   }
-  if (opts?.slow || (opts?.fromBasic && (state.hero.heroId === "frost" || hasRelic(state, "frost_sigil")))) {
-    applySlow(e, state.hero.heroId === "frost" ? 0.6 : 0.75, state.hero.heroId === "frost" ? 1.5 : 1.2);
+  if (
+    opts?.slow ||
+    (opts?.fromBasic &&
+      (state.hero.heroId === "frost" || state.hero.heroId === "thorn" || hasRelic(state, "frost_sigil")))
+  ) {
+    const mul = state.hero.heroId === "thorn" ? 0.35 : state.hero.heroId === "frost" ? 0.6 : 0.75;
+    const dur = state.hero.heroId === "thorn" ? 0.85 : state.hero.heroId === "frost" ? 1.5 : 1.2;
+    applySlow(e, mul, dur);
   }
   if ((opts?.splash || (opts?.fromBasic && hasRelic(state, "splinter_tip"))) && e.alive) {
     const splash = dmg * 0.4;
@@ -168,9 +186,12 @@ export function damageEnemiesInRadius(
   return hits;
 }
 
-function aimAngle(state: GameState, target: EnemyUnit | null): number {
-  if (target) return Math.atan2(target.y - state.hero.y, target.x - state.hero.x);
-  return 0;
+function aimDirFromMouse(state: GameState): Vec2 {
+  const dx = state.aimWorldX - state.hero.x;
+  const dy = state.aimWorldY - state.hero.y;
+  const n = normalize(dx, dy);
+  if (n.x === 0 && n.y === 0) return { x: 1, y: 0 };
+  return n;
 }
 
 const CHAOS_STYLES: AttackStyle[] = ["bolt", "shotgun", "cleave", "heavy"];
@@ -178,21 +199,20 @@ const CHAOS_STYLES: AttackStyle[] = ["bolt", "shotgun", "cleave", "heavy"];
 function fireStyle(
   state: GameState,
   style: AttackStyle,
-  target: EnemyUnit,
-  dmg: number,
+  facing: Vec2,
   angle: number,
+  dmg: number,
   bounce: number,
 ): void {
   const heroDef = HEROES[state.hero.heroId as HeroId];
   switch (style) {
     case "bolt":
     case "frostbolt": {
-      const n = normalize(target.x - state.hero.x, target.y - state.hero.y);
       pushProjectile(state, {
         x: state.hero.x,
         y: state.hero.y,
-        vx: n.x * (heroDef.projectileSpeed || 500),
-        vy: n.y * (heroDef.projectileSpeed || 500),
+        vx: facing.x * (heroDef.projectileSpeed || 500),
+        vy: facing.y * (heroDef.projectileSpeed || 500),
         damage: dmg,
         radius: style === "frostbolt" ? 5 : 4,
         kind: "bolt",
@@ -204,11 +224,11 @@ function fireStyle(
       break;
     }
     case "cleave": {
-      const facing = normalize(target.x - state.hero.x, target.y - state.hero.y);
       addFx(state, state.hero.x + facing.x * 28, state.hero.y + facing.y * 28, 42, "#ffe08a88", 0.2);
       for (const e of state.enemies) {
         if (!e.alive) continue;
         if (dist(state.hero, e) > heroDef.attackRange + e.radius) continue;
+        if (!hasLineOfSight(state.map, state.hero.x, state.hero.y, e.x, e.y)) continue;
         const toE = normalize(e.x - state.hero.x, e.y - state.hero.y);
         const dot = facing.x * toE.x + facing.y * toE.y;
         if (dot > 0.25) damageEnemy(state, e, dmg, { fromBasic: true });
@@ -236,12 +256,11 @@ function fireStyle(
       break;
     }
     case "heavy": {
-      const n = normalize(target.x - state.hero.x, target.y - state.hero.y);
       pushProjectile(state, {
         x: state.hero.x,
         y: state.hero.y,
-        vx: n.x * (heroDef.projectileSpeed || 420),
-        vy: n.y * (heroDef.projectileSpeed || 420),
+        vx: facing.x * (heroDef.projectileSpeed || 420),
+        vy: facing.y * (heroDef.projectileSpeed || 420),
         damage: dmg,
         radius: 7,
         kind: "heavy",
@@ -253,12 +272,15 @@ function fireStyle(
       break;
     }
     case "beam": {
-      const n = normalize(target.x - state.hero.x, target.y - state.hero.y);
-      const len = heroDef.attackRange;
+      let len = heroDef.attackRange;
+      const endX = state.hero.x + facing.x * len;
+      const endY = state.hero.y + facing.y * len;
+      const hitT = rayObstacleHitT(state.map, state.hero.x, state.hero.y, endX, endY, 6);
+      if (hitT != null) len *= Math.max(0.05, hitT);
       addFx(
         state,
-        state.hero.x + n.x * (len * 0.45),
-        state.hero.y + n.y * (len * 0.45),
+        state.hero.x + facing.x * (len * 0.45),
+        state.hero.y + facing.y * (len * 0.45),
         18,
         "#5ef0a888",
         0.1,
@@ -266,24 +288,56 @@ function fireStyle(
       state.beam = {
         x1: state.hero.x,
         y1: state.hero.y,
-        x2: state.hero.x + n.x * len,
-        y2: state.hero.y + n.y * len,
+        x2: state.hero.x + facing.x * len,
+        y2: state.hero.y + facing.y * len,
         life: 0.08,
       };
       for (const e of state.enemies) {
         if (!e.alive) continue;
-        const dx = n.x * len;
-        const dy = n.y * len;
+        const dx = facing.x * len;
+        const dy = facing.y * len;
         const t = Math.max(
           0,
-          Math.min(1, ((e.x - state.hero.x) * dx + (e.y - state.hero.y) * dy) / (len * len)),
+          Math.min(1, ((e.x - state.hero.x) * dx + (e.y - state.hero.y) * dy) / (len * len || 1)),
         );
         const px = state.hero.x + dx * t;
         const py = state.hero.y + dy * t;
         if (dist({ x: px, y: py }, e) <= e.radius + 10) {
-          damageEnemy(state, e, dmg * 0.55, { fromBasic: true });
+          // Extra beam tick multiplier kept low after Prism base-damage nerf.
+          damageEnemy(state, e, dmg * 0.45, { fromBasic: true });
         }
       }
+      break;
+    }
+    case "chain": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 620),
+        vy: facing.y * (heroDef.projectileSpeed || 620),
+        damage: dmg,
+        radius: 4.5,
+        kind: "bolt",
+        color: "#ffd24a",
+        bouncesLeft: Math.max(2, bounce + 2),
+        fromBasic: true,
+      });
+      break;
+    }
+    case "vine": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 480),
+        vy: facing.y * (heroDef.projectileSpeed || 480),
+        damage: dmg,
+        radius: 5,
+        kind: "bolt",
+        color: "#6bcf5a",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        appliesSlow: true,
+      });
       break;
     }
     case "chaos":
@@ -291,14 +345,37 @@ function fireStyle(
   }
 }
 
-/** Fire the hero's unique basic attack toward the nearest in-range enemy. */
+export function enemyInAttackRange(state: GameState): boolean {
+  const heroDef = HEROES[state.hero.heroId as HeroId];
+  const range = heroDef.attackRange;
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) <= range + e.radius) return true;
+  }
+  return false;
+}
+
+/**
+ * Fire basic attack.
+ * - auto (Prism): beam auto-aims nearest foe in range
+ * - free: fire along mouse aim with no engage gate
+ * - engage: must have an enemy inside attackRange
+ */
 export function tryBasicAttack(state: GameState): boolean {
   const heroDef = HEROES[state.hero.heroId as HeroId];
-  const target = nearestEnemy(state);
-  if (!target || dist(state.hero, target) > heroDef.attackRange) return false;
 
+  let facing: Vec2;
+  if (heroDef.aimMode === "auto") {
+    const target = nearestEnemy(state);
+    if (!target || dist(state.hero, target) > heroDef.attackRange) return false;
+    facing = normalize(target.x - state.hero.x, target.y - state.hero.y);
+  } else {
+    if (heroDef.aimMode === "engage" && !enemyInAttackRange(state)) return false;
+    facing = aimDirFromMouse(state);
+  }
+
+  const angle = Math.atan2(facing.y, facing.x);
   const dmg = attackDamage(state);
-  const angle = aimAngle(state, target);
   const bounce = hasRelic(state, "chain_spark") ? 1 : 0;
 
   let style = heroDef.attackStyle;
@@ -308,7 +385,7 @@ export function tryBasicAttack(state: GameState): boolean {
     state.hero.chaosIndex = idx + 1;
   }
 
-  fireStyle(state, style, target, dmg, angle, bounce);
+  fireStyle(state, style, facing, angle, dmg, bounce);
   state.hero.attackCd = attackCooldown(state);
   return true;
 }
@@ -317,6 +394,7 @@ export function bounceProjectile(state: GameState, p: Projectile, hitId: number)
   if ((p.bouncesLeft ?? 0) <= 0) return false;
   const next = nearestEnemy(state, p, hitId);
   if (!next) return false;
+  if (!hasLineOfSight(state.map, p.x, p.y, next.x, next.y, p.radius)) return false;
   p.bouncesLeft = (p.bouncesLeft ?? 0) - 1;
   p.damage *= 0.6;
   const n = normalize(next.x - p.x, next.y - p.y);

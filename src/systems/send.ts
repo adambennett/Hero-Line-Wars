@@ -7,6 +7,7 @@ import {
 } from "../data/send";
 import type { GameState, PendingSend } from "../game/state";
 import { sendCostMul, sendIncomeMul, sendRefundMul, sendHpMulFromRelics } from "./relics";
+import { queueSendToOpponent } from "./opponent";
 import { playSfx } from "./audio";
 
 export function sendPackCost(state: GameState, packId: SendPackId): number {
@@ -45,10 +46,16 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
     enemies: def.enemies,
     hpScale,
   };
-  state.pendingSends.push(pending);
+  if (state.mpLane) {
+    // Multiplayer: host exchanges pendingSends across lanes after the tick.
+    state.pendingSends.push(pending);
+  } else {
+    // Solo: abstract opponent receives pressure; AI sends arrive via pendingSends.
+    queueSendToOpponent(state, pending, def.name);
+  }
   state.sendsThisRun += 1;
 
-  state.toast = `Sent ${def.name} (+${income.toFixed(2)}/s)`;
+  state.toast = `Sent ${def.name} to enemy (+${income.toFixed(2)}/s)`;
   state.toastTimer = 1.6;
   playSfx("send");
   return null;
@@ -56,5 +63,9 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
 
 export function consumePendingSends(state: GameState): PendingSend[] {
   const batch = state.pendingSends.splice(0, state.pendingSends.length);
+  if (state.opponent) {
+    const n = batch.reduce((sum, s) => sum + s.enemies, 0);
+    state.opponent.sendingToPlayer = Math.max(0, state.opponent.sendingToPlayer - n);
+  }
   return batch;
 }

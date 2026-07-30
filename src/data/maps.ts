@@ -2,7 +2,17 @@
 
 import { MAP_H, MAP_W } from "./constants";
 
-export type MapId = "classic" | "split_ridge" | "narrow_pass" | "open_flank";
+export type MapId =
+  | "classic"
+  | "split_ridge"
+  | "narrow_pass"
+  | "open_flank"
+  | "twin_gates"
+  | "serpentine"
+  | "fortress"
+  | "crossfire"
+  | "island_hop"
+  | "shifting_grounds";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -41,6 +51,8 @@ export type MapDef = {
   obstacles: Obstacle[];
   /** Preferred auto-turret placement points near the base. */
   turretSlots: TurretSlot[];
+  /** Between waves, obstacles are reshuffled within the lane. */
+  shiftingObstacles?: boolean;
 };
 
 /** Scale Y coords authored against the old 560-tall map. */
@@ -154,6 +166,158 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: sy(160) },
     ],
   },
+  twin_gates: {
+    id: "twin_gates",
+    name: "Twin Gates",
+    blurb: "Paired gatehouses split the lane into upper and lower approaches.",
+    laneTop: sy(80),
+    laneBottom: MAP_H - sy(80),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 125 },
+    shop: { x: 155, y: sy(130), radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 54, y: MID_Y, radius: 30 },
+    highGrounds: [HG(480, 100, 160, 120), HG(480, 320, 160, 120)],
+    obstacles: [
+      { x: 380, y: MID_Y - sh(55), w: 50, h: sh(110), label: "gate" },
+      { x: 700, y: sy(100), w: 44, h: sh(70) },
+      { x: 700, y: sy(380), w: 44, h: sh(70) },
+      { x: 1050, y: MID_Y - sh(50), w: 55, h: sh(100), label: "gate" },
+      { x: 1280, y: sy(120), w: 40, h: sh(55) },
+      { x: 1280, y: sy(370), w: 40, h: sh(55) },
+    ],
+    turretSlots: [
+      { x: 125, y: sy(175) },
+      { x: 125, y: sy(385) },
+      { x: 205, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+  },
+  serpentine: {
+    id: "serpentine",
+    name: "Serpentine",
+    blurb: "Staggered cover forces a zigzag path down the line.",
+    laneTop: sy(95),
+    laneBottom: MAP_H - sy(95),
+    base: { x: 55, y: MID_Y, radius: 44, maxHp: 120 },
+    shop: { x: 150, y: MAP_H - sy(130), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 30 },
+    highGrounds: [HG(900, 200, 200, 140)],
+    obstacles: [
+      { x: 280, y: sy(110), w: 70, h: sh(55) },
+      { x: 420, y: sy(340), w: 70, h: sh(55) },
+      { x: 580, y: sy(140), w: 55, h: sh(80) },
+      { x: 760, y: sy(320), w: 55, h: sh(80) },
+      { x: 1120, y: sy(120), w: 48, h: sh(60) },
+      { x: 1120, y: sy(360), w: 48, h: sh(60) },
+      { x: 1350, y: MID_Y - sh(35), w: 42, h: sh(70) },
+    ],
+    turretSlots: [
+      { x: 118, y: sy(200) },
+      { x: 118, y: sy(360) },
+      { x: 200, y: MID_Y },
+    ],
+  },
+  fortress: {
+    id: "fortress",
+    name: "Fortress Approach",
+    blurb: "Heavy cover near base — hold the walls, then push into open ground.",
+    laneTop: sy(75),
+    laneBottom: MAP_H - sy(75),
+    base: { x: 58, y: MID_Y, radius: 48, maxHp: 140 },
+    shop: { x: 165, y: MID_Y + sy(95), radius: 38, interactRange: 58 },
+    spawner: { x: MAP_W - 50, y: MID_Y, radius: 30 },
+    highGrounds: [HG(220, 160, 180, 220)],
+    obstacles: [
+      { x: 240, y: sy(100), w: 36, h: sh(90), label: "wall" },
+      { x: 240, y: sy(350), w: 36, h: sh(90), label: "wall" },
+      { x: 340, y: MID_Y - sh(40), w: 50, h: sh(80) },
+      { x: 860, y: sy(150), w: 60, h: sh(50) },
+      { x: 860, y: sy(360), w: 60, h: sh(50) },
+      { x: 1200, y: MID_Y - sh(45), w: 80, h: sh(90), label: "barricade" },
+    ],
+    turretSlots: [
+      { x: 130, y: sy(170) },
+      { x: 130, y: sy(390) },
+      { x: 210, y: MID_Y },
+      { x: 100, y: MID_Y },
+      { x: 185, y: sy(220) },
+    ],
+  },
+  crossfire: {
+    id: "crossfire",
+    name: "Crossfire",
+    blurb: "Side high grounds overlook a cluttered mid — angles everywhere.",
+    laneTop: sy(60),
+    laneBottom: MAP_H - sy(60),
+    base: { x: 56, y: MID_Y, radius: 44, maxHp: 118 },
+    shop: { x: 145, y: sy(100), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 30 },
+    highGrounds: [HG(350, 70, 180, 100), HG(350, 380, 180, 100), HG(1000, 200, 160, 140)],
+    obstacles: [
+      { x: 520, y: MID_Y - sh(70), w: 38, h: sh(140) },
+      { x: 680, y: sy(130), w: 50, h: sh(50) },
+      { x: 680, y: sy(370), w: 50, h: sh(50) },
+      { x: 850, y: MID_Y - sh(30), w: 44, h: sh(60) },
+      { x: 1220, y: sy(140), w: 40, h: sh(70) },
+      { x: 1220, y: sy(340), w: 40, h: sh(70) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(185) },
+      { x: 120, y: sy(375) },
+      { x: 200, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+  },
+  island_hop: {
+    id: "island_hop",
+    name: "Island Hop",
+    blurb: "Scattered cover islands — lots of open ground between safe pockets.",
+    laneTop: sy(85),
+    laneBottom: MAP_H - sy(85),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 122 },
+    shop: { x: 152, y: MID_Y - sy(100), radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 54, y: MID_Y, radius: 30 },
+    highGrounds: [HG(450, 220, 140, 120), HG(950, 180, 140, 140)],
+    obstacles: [
+      { x: 300, y: MID_Y - sh(28), w: 55, h: sh(56), label: "isle" },
+      { x: 520, y: sy(120), w: 48, h: sh(48), label: "isle" },
+      { x: 520, y: sy(380), w: 48, h: sh(48), label: "isle" },
+      { x: 750, y: MID_Y - sh(32), w: 60, h: sh(64), label: "isle" },
+      { x: 1100, y: sy(140), w: 50, h: sh(50), label: "isle" },
+      { x: 1100, y: sy(360), w: 50, h: sh(50), label: "isle" },
+      { x: 1320, y: MID_Y - sh(30), w: 48, h: sh(60), label: "isle" },
+    ],
+    turretSlots: [
+      { x: 125, y: sy(195) },
+      { x: 125, y: sy(365) },
+      { x: 205, y: MID_Y },
+    ],
+  },
+  shifting_grounds: {
+    id: "shifting_grounds",
+    name: "Shifting Grounds",
+    blurb: "Special — cover and rubble reposition randomly between every wave.",
+    laneTop: sy(90),
+    laneBottom: MAP_H - sy(90),
+    base: { x: 55, y: MID_Y, radius: 45, maxHp: 120 },
+    shop: { x: 150, y: MID_Y + sy(95), radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 30 },
+    highGrounds: [HG(700, 200, 220, 160)],
+    obstacles: [
+      { x: 320, y: sy(130), w: 46, h: sh(60), label: "rubble" },
+      { x: 320, y: sy(350), w: 46, h: sh(60), label: "rubble" },
+      { x: 560, y: MID_Y - sh(40), w: 50, h: sh(80), label: "rubble" },
+      { x: 900, y: sy(140), w: 42, h: sh(55), label: "rubble" },
+      { x: 900, y: sy(360), w: 42, h: sh(55), label: "rubble" },
+      { x: 1180, y: MID_Y - sh(35), w: 55, h: sh(70), label: "rubble" },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(190) },
+      { x: 120, y: sy(370) },
+      { x: 200, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+    shiftingObstacles: true,
+  },
 };
 
 export const MAP_LIST: MapDef[] = Object.values(MAPS);
@@ -189,4 +353,149 @@ export function pointBlocked(map: MapDef, x: number, y: number, radius: number):
   if (x < radius || x > MAP_W - radius) return true;
   if (y < map.laneTop + radius || y > map.laneBottom - radius) return true;
   return map.obstacles.some((o) => circleHitsObstacle(x, y, radius, o));
+}
+
+/** True if a circle overlaps any map obstacle. */
+export function blockedByObstacle(
+  map: MapDef,
+  x: number,
+  y: number,
+  radius: number,
+): boolean {
+  return map.obstacles.some((o) => circleHitsObstacle(x, y, radius, o));
+}
+
+/**
+ * Segment vs AABB — returns distance t in [0,1] to first hit, or null if clear.
+ * Uses a small radius for thick rays (projectiles / beams).
+ */
+export function rayObstacleHitT(
+  map: MapDef,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  radius = 2,
+): number | null {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return null;
+  // Sample along the ray; dense enough for game-scale obstacles
+  const steps = Math.max(4, Math.ceil(len / 6));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = x1 + dx * t;
+    const y = y1 + dy * t;
+    if (map.obstacles.some((o) => circleHitsObstacle(x, y, radius, o))) return t;
+  }
+  return null;
+}
+
+/** Clear line of sight between two points (not blocked by obstacles). */
+export function hasLineOfSight(
+  map: MapDef,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  radius = 2,
+): boolean {
+  return rayObstacleHitT(map, x1, y1, x2, y2, radius) == null;
+}
+
+/** Reposition obstacles randomly within the lane (for shifting maps). */
+export function reshuffleObstacles(
+  map: MapDef,
+  reserved: { x: number; y: number; radius: number }[] = [],
+): void {
+  if (!map.shiftingObstacles || map.obstacles.length === 0) return;
+  const pad = 24;
+  const minX = map.base.x + map.base.radius + 80;
+  const maxX = map.spawner.x - map.spawner.radius - 80;
+  const minY = map.laneTop + pad;
+  const maxY = map.laneBottom - pad;
+
+  const hitsReserved = (o: Obstacle): boolean =>
+    reserved.some((r) => circleHitsObstacle(r.x, r.y, r.radius + 6, o));
+
+  for (const o of map.obstacles) {
+    const spanX = Math.max(10, maxX - minX - o.w);
+    const spanY = Math.max(10, maxY - minY - o.h);
+    let placed = false;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      o.x = minX + Math.random() * spanX;
+      o.y = minY + Math.random() * spanY;
+      // Keep clear of shop pad
+      if (circleHitsObstacle(map.shop.x, map.shop.y, map.shop.radius + 10, o)) continue;
+      if (hitsReserved(o)) continue;
+      placed = true;
+      break;
+    }
+    if (!placed) {
+      o.x = minX + Math.random() * spanX;
+      o.y = minY + Math.random() * spanY;
+    }
+  }
+
+  // Light de-overlap pass
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < map.obstacles.length; i++) {
+      const a = map.obstacles[i]!;
+      for (let j = i + 1; j < map.obstacles.length; j++) {
+        const b = map.obstacles[j]!;
+        const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+        const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+        if (overlapX > 0 && overlapY > 0) {
+          for (let attempt = 0; attempt < 12; attempt++) {
+            b.x = minX + Math.random() * Math.max(10, maxX - minX - b.w);
+            b.y = minY + Math.random() * Math.max(10, maxY - minY - b.h);
+            if (!hitsReserved(b)) break;
+          }
+        }
+      }
+    }
+  }
+}
+
+/** Push a circle out of obstacles / lane bounds to the nearest clear spot. */
+export function findClearSpot(
+  map: MapDef,
+  x: number,
+  y: number,
+  radius: number,
+): { x: number; y: number } {
+  if (!pointBlocked(map, x, y, radius)) return { x, y };
+
+  // Prefer ejecting to the nearest rect edge of any overlapping obstacle
+  for (const o of map.obstacles) {
+    if (!circleHitsObstacle(x, y, radius, o)) continue;
+    const candidates = [
+      { x: o.x - radius - 2, y },
+      { x: o.x + o.w + radius + 2, y },
+      { x, y: o.y - radius - 2 },
+      { x, y: o.y + o.h + radius + 2 },
+    ];
+    candidates.sort(
+      (a, b) => (a.x - x) ** 2 + (a.y - y) ** 2 - ((b.x - x) ** 2 + (b.y - y) ** 2),
+    );
+    for (const c of candidates) {
+      if (!pointBlocked(map, c.x, c.y, radius)) return c;
+    }
+  }
+
+  // Spiral search outward
+  for (let r = 12; r <= 220; r += 10) {
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 10) {
+      const nx = x + Math.cos(a) * r;
+      const ny = y + Math.sin(a) * r;
+      if (!pointBlocked(map, nx, ny, radius)) return { x: nx, y: ny };
+    }
+  }
+
+  // Last resort: near base
+  return {
+    x: Math.min(MAP_W - radius, map.base.x + map.base.radius + 80),
+    y: map.base.y,
+  };
 }

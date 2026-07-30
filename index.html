@@ -9,6 +9,7 @@
     <div id="app">
       <canvas id="game"></canvas>
       <div id="hud" class="hidden">
+        <div id="map-name-label"></div>
         <div id="hud-top">
           <div id="hud-panel">
             <div id="hud-gold">
@@ -18,9 +19,15 @@
             </div>
             <div id="hud-stats"></div>
           </div>
+          <aside id="opponent-panel" aria-label="Enemy lane">
+            <div class="opp-head">
+              <strong id="opp-name">Enemy</strong>
+              <button type="button" id="lane-flip-btn" title="Toggle enemy lane view">View lane</button>
+            </div>
+            <div id="opp-stats" class="opp-stats"></div>
+          </aside>
         </div>
         <div id="hud-banner"></div>
-        <div id="hud-relics"></div>
         <div id="hud-respawn" class="hidden"></div>
         <div id="hud-bottom">
           <div id="hud-toast"></div>
@@ -28,9 +35,18 @@
         </div>
       </div>
 
+      <div id="base-hp-rail" class="hidden" aria-label="Base HP">
+        <div class="base-hp-track"><div id="base-hp-fill"></div></div>
+        <span id="base-hp-label">BASE</span>
+      </div>
+
       <div id="lane-chrome" class="hidden">
+        <div id="wave-banner">
+          <div id="wave-number">Wave 0</div>
+          <div id="wave-tier" class="hidden"></div>
+        </div>
         <div id="send-bar">
-          <div class="send-bar-label">Send (income) · Upgrade Base strengthens packs</div>
+          <div class="send-bar-label">Send to enemy lane (raises your income)</div>
           <div class="send-bar-row">
             <button type="button" id="upgrade-base-btn" class="upgrade-base-btn">Upgrade Base</button>
             <div id="send-bar-items"></div>
