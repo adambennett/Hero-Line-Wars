@@ -10,7 +10,7 @@ import {
   type HeroRuntime,
 } from "../game/state";
 import { tryCastAbility, tickAbilityEffects } from "../systems/abilities";
-import { tryBasicAttack, nearestEnemy } from "../systems/combat";
+import { tryBasicAttack } from "../systems/combat";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { buyShopItem } from "../systems/shop";
 import { buySendPack } from "../systems/send";
@@ -33,11 +33,13 @@ import { HEROES } from "../data/heroes";
 import { draftRelicChoices } from "../data/relics";
 import { applySecondWind } from "../systems/relics";
 import { openLevelDraft } from "../systems/xp";
-import { bounceProjectile, applyPlayerDamage, applySlow, damageEnemy } from "../systems/combat";
+import { bounceProjectile, applyPlayerDamage, applySlow, damageEnemy, resolveHostileProjectile } from "../systems/combat";
+import { setLaneSfxEnabled } from "../systems/audio";
 import type { CombatIntent } from "./types";
 import { emptyIntent } from "./types";
 import type { MpMatch } from "./matchFactory";
 import { allLaneHeroes, heroForSlot } from "./matchFactory";
+import { scriptedIntent, thinkNeural, type NeuralLaneAi } from "../ai/runtime";
 
 function moveHeroObj(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
@@ -146,7 +148,8 @@ function startWave(state: GameState): void {
   state.waveTier = waveTier(state.wave);
   state.spawning = true;
   const count = Math.round(
-    ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave,
+    (ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave) *
+      state.modifiers.enemyCountMul,
   );
   state.toSpawn = count;
   if (state.waveTier === "elite") state.toSpawn = Math.max(3, Math.floor(state.toSpawn * 0.75));
@@ -199,7 +202,7 @@ function remainingSpawns(state: GameState): number {
 function respawnDelay(state: GameState): number {
   const t =
     RESPAWN.baseSec + state.wave * RESPAWN.waveFactor + state.deathCount * RESPAWN.deathFactor;
-  return Math.min(RESPAWN.maxSec, t);
+  return Math.min(RESPAWN.maxSec, t) * state.modifiers.respawnMul;
 }
 
 function killHeroObj(state: GameState, hero: HeroRuntime): void {
@@ -237,7 +240,13 @@ function updateProjectilesMp(state: GameState, dt: number): void {
     if (p.life !== undefined) {
       p.life -= dt;
       if (p.life <= 0) {
-        p.alive = false;
+        if (p.hostile && (p.aoeRadius ?? 0) > 0) {
+          resolveHostileProjectile(state, p, heroes, (h, dmg) => {
+            withHero(state, h as HeroRuntime, () => applyPlayerDamage(state, dmg));
+          });
+        } else {
+          p.alive = false;
+        }
         continue;
       }
     }
@@ -247,7 +256,13 @@ function updateProjectilesMp(state: GameState, dt: number): void {
     }
 
     if (blockedByObstacle(state.map, p.x, p.y, p.radius)) {
-      p.alive = false;
+      if (p.hostile && (p.aoeRadius ?? 0) > 0) {
+        resolveHostileProjectile(state, p, heroes, (h, dmg) => {
+          withHero(state, h as HeroRuntime, () => applyPlayerDamage(state, dmg));
+        });
+      } else {
+        p.alive = false;
+      }
       continue;
     }
 
@@ -255,8 +270,9 @@ function updateProjectilesMp(state: GameState, dt: number): void {
       for (const h of heroes) {
         if (!h.alive) continue;
         if (dist(p, h) <= h.radius + p.radius) {
-          withHero(state, h, () => applyPlayerDamage(state, p.damage));
-          p.alive = false;
+          resolveHostileProjectile(state, p, heroes, (hh, dmg) => {
+            withHero(state, hh as HeroRuntime, () => applyPlayerDamage(state, dmg));
+          });
           break;
         }
       }
@@ -266,7 +282,6 @@ function updateProjectilesMp(state: GameState, dt: number): void {
     if (state.friendlyFire) {
       for (const h of heroes) {
         if (!h.alive || h === state.hero) continue;
-        // Don't FF the shooter — approximate: damage other allies only
         if (dist(p, h) <= h.radius + p.radius) {
           withHero(state, h, () => applyPlayerDamage(state, p.damage));
           p.alive = false;
@@ -305,51 +320,26 @@ function afterWaveClearMp(state: GameState): void {
       state.pausedForDraft = true;
       state.pendingRelicDraft = true;
       state.draftKind = "relic";
-      state.waveTimer = WAVE_BREAK_SEC;
+      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
       if (state.pendingLevelUps > 0) openLevelDraft(state);
       return;
     }
   }
   if (state.pendingLevelUps > 0) {
     openLevelDraft(state);
-    state.waveTimer = WAVE_BREAK_SEC;
+    state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
     return;
   }
   applySecondWind(state);
-  state.waveTimer = WAVE_BREAK_SEC;
+  state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
   }
 }
 
-function aiIntentFor(state: GameState): CombatIntent {
-  const intent = emptyIntent();
-  const target = nearestEnemy(state);
-  if (!state.hero.alive) return intent;
-  if (target) {
-    const n = normalize(target.x - state.hero.x, target.y - state.hero.y);
-    intent.aimX = n.x;
-    intent.aimY = n.y;
-    const d = dist(state.hero, target);
-    if (d > 90) {
-      intent.moveX = n.x;
-      intent.moveY = n.y;
-    } else if (d < 50) {
-      intent.moveX = -n.x;
-      intent.moveY = -n.y;
-    }
-    intent.attackHeld = true;
-    if (state.hero.abilityCds[0]! <= 0 && Math.random() < 0.02) intent.mobility = true;
-    if (state.hero.abilityCds[1]! <= 0 && Math.random() < 0.015) intent.ultimate = true;
-  } else {
-    intent.moveX = 0.2;
-  }
-  // Occasional sends
-  if (state.gold > 40 && Math.random() < 0.008) {
-    const pack = SEND_PACKS.find((p) => p.minBaseLevel <= state.baseLevel && p.cost <= state.gold);
-    if (pack) intent.sendDigit = pack.digit;
-  }
-  return intent;
+function resolveAiIntent(state: GameState, neural: NeuralLaneAi | null | undefined, dt: number): CombatIntent {
+  if (neural) return thinkNeural(state, neural, dt);
+  return scriptedIntent(state);
 }
 
 function updateLaneMp(
@@ -357,12 +347,18 @@ function updateLaneMp(
   intents: Map<number, CombatIntent>,
   dt: number,
   outboundSends: GameState["pendingSends"],
+  neural?: NeuralLaneAi | null,
+  /** Unlimited dual-lane: hold next wave until both lanes are ready. */
+  holdNextWave = false,
 ): void {
   if (state.status !== "playing") return;
   if (state.pausedForDraft && (state.relicDraft || state.levelDraft)) {
     state.elapsed += dt;
-    // Still allow draft picks from intents
-    for (const intent of intents.values()) applyLaneUiIntent(state, intent);
+    if (state.aiControlled) {
+      applyLaneUiIntent(state, resolveAiIntent(state, neural, dt));
+    } else {
+      for (const intent of intents.values()) applyLaneUiIntent(state, intent);
+    }
     return;
   }
 
@@ -391,6 +387,12 @@ function updateLaneMp(
         h.attackCd -= dt;
         if (h.attackCd <= 0) respawnHeroObj(state, h);
       }
+    } else if ((h.slowTimer ?? 0) > 0) {
+      h.slowTimer = (h.slowTimer ?? 0) - dt;
+      if ((h.slowTimer ?? 0) <= 0) {
+        h.slowTimer = 0;
+        h.slowMul = 1;
+      }
     }
   }
 
@@ -401,7 +403,7 @@ function updateLaneMp(
   const beforeSends = state.pendingSends.length;
 
   if (state.aiControlled) {
-    const ai = aiIntentFor(state);
+    const ai = resolveAiIntent(state, neural, dt);
     applyLaneUiIntent(state, ai);
     applyHeroCombat(state, state.hero, ai, dt);
   } else {
@@ -447,7 +449,13 @@ function updateLaneMp(
     }
   } else if (!state.pausedForDraft) {
     state.waveTimer -= dt;
-    if (state.waveTimer <= 0) startWave(state);
+    if (state.waveTimer <= 0) {
+      if (holdNextWave) {
+        state.waveTimer = 0;
+      } else {
+        startWave(state);
+      }
+    }
   }
 
   if (state.baseHp <= 0) {
@@ -460,6 +468,14 @@ function updateLaneMp(
   }
 }
 
+/** Lane is between waves and ready to roll the next one (timer expired). */
+function laneReadyToStartWave(state: GameState): boolean {
+  if (state.status !== "playing") return false;
+  if (state.pausedForDraft) return false;
+  if (state.spawning || state.enemies.length > 0) return false;
+  return state.waveTimer <= 0;
+}
+
 /** Host: step both lanes, exchange sends, resolve win/loss. */
 export function stepMpMatch(
   match: MpMatch,
@@ -470,13 +486,27 @@ export function stepMpMatch(
 
   const out0: GameState["pendingSends"] = [];
   const out1: GameState["pendingSends"] = [];
+  // Unlimited: keep both lanes on the same wave cadence so one can't soft-lock forever alone
+  const syncWaves = match.lanes[0].wavesToWin <= 0 || match.lanes[1].wavesToWin <= 0;
 
-  updateLaneMp(match.lanes[0], intents, dt, out0);
-  updateLaneMp(match.lanes[1], intents, dt, out1);
+  setLaneSfxEnabled(match.viewTeam === 0);
+  updateLaneMp(match.lanes[0], intents, dt, out0, match.laneAi[0], syncWaves);
+  setLaneSfxEnabled(match.viewTeam === 1);
+  updateLaneMp(match.lanes[1], intents, dt, out1, match.laneAi[1], syncWaves);
+  setLaneSfxEnabled(true);
 
   // Player sends from lane0 hit lane1 and vice versa
   match.lanes[1].pendingSends.push(...out0);
   match.lanes[0].pendingSends.push(...out1);
+
+  if (syncWaves && laneReadyToStartWave(match.lanes[0]) && laneReadyToStartWave(match.lanes[1])) {
+    // Keep wave indices aligned if somehow drifted
+    const w = Math.max(match.lanes[0].wave, match.lanes[1].wave);
+    match.lanes[0].wave = w;
+    match.lanes[1].wave = w;
+    startWave(match.lanes[0]);
+    startWave(match.lanes[1]);
+  }
 
   if (match.lanes[0].status === "lost" || match.lanes[1].status === "won") {
     match.ended = true;

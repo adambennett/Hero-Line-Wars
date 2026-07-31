@@ -120,6 +120,11 @@ function drawEnemyShape(ctx: CanvasRenderingContext2D, e: EnemyUnit): void {
     ctx.font = "bold 9px Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(e.kind === "boss" ? "BOSS" : "ELITE", e.x, e.y + 3);
+  } else if (e.kind === "sniper" || e.kind === "mortar" || e.kind === "hexer") {
+    ctx.fillStyle = "#ffffff66";
+    ctx.font = "bold 8px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(e.kind === "sniper" ? "SNP" : e.kind === "mortar" ? "MRT" : "HEX", e.x, e.y + 3);
   }
 }
 

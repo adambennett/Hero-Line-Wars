@@ -404,6 +404,25 @@ export function hasLineOfSight(
   return rayObstacleHitT(map, x1, y1, x2, y2, radius) == null;
 }
 
+/** First obstacle intersecting the thick segment, or null if clear. */
+export function firstBlockingObstacle(
+  map: MapDef,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  radius: number,
+): Obstacle | null {
+  const t = rayObstacleHitT(map, x1, y1, x2, y2, radius);
+  if (t == null) return null;
+  const x = x1 + (x2 - x1) * t;
+  const y = y1 + (y2 - y1) * t;
+  for (const o of map.obstacles) {
+    if (circleHitsObstacle(x, y, radius, o)) return o;
+  }
+  return null;
+}
+
 /** Reposition obstacles randomly within the lane (for shifting maps). */
 export function reshuffleObstacles(
   map: MapDef,

@@ -1,7 +1,19 @@
-import type { MapDef } from "../data/maps";
-import { circleHitsObstacle, pointBlocked } from "../data/maps";
-import { ENEMY_DEFS, type EnemyKind } from "../data/enemies";
-import { ENEMY_STUCK_SEC, MAP_W, WAVE_SCALE } from "../data/constants";
+import type { MapDef, Obstacle } from "../data/maps";
+import {
+  circleHitsObstacle,
+  firstBlockingObstacle,
+  hasLineOfSight,
+  pointBlocked,
+} from "../data/maps";
+import { ENEMY_DEFS, type EnemyDef, type EnemyKind } from "../data/enemies";
+import {
+  ENEMY_CAMP_BREAK_SEC,
+  ENEMY_STUCK_DESPAWN_SEC,
+  ENEMY_STUCK_ESCALATE,
+  ENEMY_STUCK_SEC,
+  MAP_W,
+  WAVE_SCALE,
+} from "../data/constants";
 import { clamp, dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
 import { addFx, applyPlayerDamage, pushProjectile } from "./combat";
@@ -117,7 +129,68 @@ function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
   return false;
 }
 
-/** Slide around obstacles using angled probes + stuck teleport. */
+function clampLanePoint(map: MapDef, x: number, y: number, r: number): { x: number; y: number } {
+  return {
+    x: clamp(x, r, MAP_W - r),
+    y: clamp(y, map.laneTop + r, map.laneBottom - r),
+  };
+}
+
+/** Clear corner waypoints around an AABB so units route instead of ramming. */
+function bypassWaypoints(
+  map: MapDef,
+  e: EnemyUnit,
+  obs: Obstacle,
+  tx: number,
+): { top: { x: number; y: number }; bot: { x: number; y: number } } {
+  const pad = e.radius + 18;
+  const goingLeft = tx <= e.x;
+  // Approach the near face, then clear past the far face toward the goal.
+  const nearX = goingLeft ? obs.x + obs.w + pad : obs.x - pad;
+  const farX = goingLeft ? obs.x - pad : obs.x + obs.w + pad;
+  // Prefer the far side once we're already beside the rock vertically.
+  const beside =
+    e.y <= obs.y - e.radius * 0.35 || e.y >= obs.y + obs.h + e.radius * 0.35;
+  const aimX = beside ? farX : nearX;
+  return {
+    top: clampLanePoint(map, aimX, obs.y - pad, e.radius),
+    bot: clampLanePoint(map, aimX, obs.y + obs.h + pad, e.radius),
+  };
+}
+
+function pickBypassPoint(
+  map: MapDef,
+  e: EnemyUnit,
+  obs: Obstacle,
+  tx: number,
+  ty: number,
+): { x: number; y: number } {
+  const { top, bot } = bypassWaypoints(map, e, obs, tx);
+  const score = (p: { x: number; y: number }, side: -1 | 1): number => {
+    let s = 0;
+    if (hasLineOfSight(map, e.x, e.y, p.x, p.y, e.radius)) s += 120;
+    else s -= 40;
+    if (hasLineOfSight(map, p.x, p.y, tx, ty, e.radius)) s += 80;
+    s -= dist(p, { x: tx, y: ty }) * 0.15;
+    if (e.pathSide === side) s += 55;
+    if ((side === -1 && ty < e.y) || (side === 1 && ty > e.y)) s += 12;
+    if (pointBlocked(map, p.x, p.y, e.radius)) s -= 200;
+    return s;
+  };
+  const topScore = score(top, -1);
+  const botScore = score(bot, 1);
+  if (topScore >= botScore) {
+    e.pathSide = -1;
+    return top;
+  }
+  e.pathSide = 1;
+  return bot;
+}
+
+/**
+ * Obstacle-aware steering: go direct when LOS is clear, otherwise route around
+ * the first blocking rock via sticky top/bottom bypass waypoints.
+ */
 function moveWithPathing(
   map: MapDef,
   e: EnemyUnit,
@@ -128,20 +201,39 @@ function moveWithPathing(
 ): void {
   const prevX = e.x;
   const prevY = e.y;
-  const n = normalize(tx - e.x, ty - e.y);
   const step = speed * dt;
+  const clear = hasLineOfSight(map, e.x, e.y, tx, ty, e.radius);
 
+  let aimX = tx;
+  let aimY = ty;
+  if (clear) {
+    e.pathSide = undefined;
+    e.preferAngle = undefined;
+  } else {
+    const blocker = firstBlockingObstacle(map, e.x, e.y, tx, ty, e.radius);
+    if (blocker) {
+      const wp = pickBypassPoint(map, e, blocker, tx, ty);
+      aimX = wp.x;
+      aimY = wp.y;
+    }
+  }
+
+  const n = normalize(aimX - e.x, aimY - e.y);
   let moved = tryMove(map, e, e.x + n.x * step, e.y + n.y * step);
 
+  // Local slide if the immediate step clips a corner
   if (!moved) {
-    // Probe alternate angles (slide around)
     const baseAng = Math.atan2(n.y, n.x);
-    const offsets = [0.55, -0.55, 1.1, -1.1, 1.6, -1.6, Math.PI * 0.5, -Math.PI * 0.5];
+    const prefer = e.pathSide === -1 ? -1 : e.pathSide === 1 ? 1 : 0;
+    const offsets =
+      prefer === 0
+        ? [0.4, -0.4, 0.85, -0.85, 1.35, -1.35, Math.PI * 0.5, -Math.PI * 0.5]
+        : prefer < 0
+          ? [-0.45, -0.9, -1.4, 0.45, 0.9, Math.PI * 0.5, -Math.PI * 0.5]
+          : [0.45, 0.9, 1.4, -0.45, -0.9, -Math.PI * 0.5, Math.PI * 0.5];
     for (const off of offsets) {
       const a = baseAng + off;
-      const mx = e.x + Math.cos(a) * step;
-      const my = e.y + Math.sin(a) * step;
-      if (tryMove(map, e, mx, my)) {
+      if (tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step)) {
         moved = true;
         e.preferAngle = a;
         break;
@@ -149,59 +241,67 @@ function moveWithPathing(
     }
   }
 
-  // Keep preferred slide angle briefly
   if (!moved && e.preferAngle !== undefined) {
     const a = e.preferAngle;
     moved = tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step);
   }
 
   const traveled = Math.hypot(e.x - prevX, e.y - prevY);
-  if (traveled < step * 0.12) {
+  const towardX = Math.sign(tx - prevX) || Math.sign(tx - e.x);
+  const progressX = towardX * (e.x - prevX);
+  // Stuck if blocked, or scraping a wall with almost no forward progress
+  const scraping =
+    traveled < step * 0.55 && progressX < step * 0.12 && !clear;
+  if ((!moved && traveled < Math.max(0.8, step * 0.15)) || scraping) {
     e.stuckTimer = (e.stuckTimer ?? 0) + dt;
+    e.stuckTotal = (e.stuckTotal ?? 0) + dt;
   } else {
     e.stuckTimer = 0;
+    if (moved && traveled > step * 0.4) {
+      e.stuckCount = 0;
+      e.stuckTotal = Math.max(0, (e.stuckTotal ?? 0) - dt * 1.5);
+    }
   }
 
   if ((e.stuckTimer ?? 0) >= ENEMY_STUCK_SEC) {
-    unstuckTeleport(map, e, tx, ty);
+    unstuckToBypass(map, e, tx, ty);
     e.stuckTimer = 0;
     e.preferAngle = undefined;
   }
 }
 
-function unstuckTeleport(map: MapDef, e: EnemyUnit, tx: number, ty: number): void {
+/** Last-resort hop onto a computed bypass point (not a blind base leap). */
+function unstuckToBypass(map: MapDef, e: EnemyUnit, tx: number, ty: number): void {
+  e.stuckCount = (e.stuckCount ?? 0) + 1;
+  const escalate = (e.stuckCount ?? 0) >= ENEMY_STUCK_ESCALATE;
   const r = e.radius + 2;
+
+  const tryPos = (nx: number, ny: number): boolean => {
+    const p = clampLanePoint(map, nx, ny, r);
+    if (pointBlocked(map, p.x, p.y, r)) return false;
+    e.x = p.x;
+    e.y = p.y;
+    return true;
+  };
+
+  const blocker = firstBlockingObstacle(map, e.x, e.y, tx, ty, e.radius);
+  if (blocker) {
+    const { top, bot } = bypassWaypoints(map, e, blocker, tx);
+    const order = e.pathSide === 1 ? [bot, top] : [top, bot];
+    for (const p of order) {
+      if (tryPos(p.x, p.y)) return;
+    }
+    const pad = escalate ? 36 : 22;
+    if (tryPos(blocker.x + blocker.w * 0.5, blocker.y - pad)) return;
+    if (tryPos(blocker.x + blocker.w * 0.5, blocker.y + blocker.h + pad)) return;
+  }
+
   const toward = normalize(tx - e.x, ty - e.y);
-  // Try nudging past obstacle toward target
-  const distances = [40, 70, 110, 160];
-  for (const d of distances) {
-    const nx = clamp(e.x + toward.x * d, r, MAP_W - r);
-    const ny = clamp(e.y + toward.y * d, map.laneTop + r, map.laneBottom - r);
-    if (!pointBlocked(map, nx, ny, r)) {
-      e.x = nx;
-      e.y = ny;
-      return;
-    }
-  }
-  // Lateral hop
-  for (const side of [1, -1]) {
-    const nx = clamp(e.x, r, MAP_W - r);
-    const ny = clamp(e.y + side * 55, map.laneTop + r, map.laneBottom - r);
-    if (!pointBlocked(map, nx, ny, r)) {
-      e.x = nx;
-      e.y = ny;
-      return;
-    }
-  }
-  // Last resort: snap toward open lane center near current x
-  e.y = clamp((map.laneTop + map.laneBottom) / 2, map.laneTop + r, map.laneBottom - r);
-  e.x = clamp(e.x - 50, r, MAP_W - r);
-  if (pointBlocked(map, e.x, e.y, r)) {
-    // Walk left until clear (toward base)
-    for (let i = 0; i < 20; i++) {
-      e.x = clamp(e.x - 30, r, MAP_W - r);
-      if (!pointBlocked(map, e.x, e.y, r)) break;
-    }
+  const perpX = -toward.y;
+  const perpY = toward.x;
+  for (const d of escalate ? [28, 48, 72, 96] : [18, 32, 48, 64]) {
+    if (tryPos(e.x + perpX * d, e.y + perpY * d)) return;
+    if (tryPos(e.x - perpX * d, e.y - perpY * d)) return;
   }
 }
 
@@ -229,9 +329,10 @@ export function createEnemy(
 
   const waveScale = 1 + (state.wave - 1) * WAVE_SCALE.hpPerWave;
   let tierMul = 1;
-  if (kind === "elite") tierMul = WAVE_SCALE.eliteHpMul;
-  if (kind === "boss") tierMul = WAVE_SCALE.bossHpMul;
-  const hpScale = (opts?.hpScale ?? 1) * waveScale * tierMul;
+  if (kind === "elite") tierMul = WAVE_SCALE.eliteHpMul * state.modifiers.eliteBossHpExtra;
+  if (kind === "boss") tierMul = WAVE_SCALE.bossHpMul * state.modifiers.eliteBossHpExtra;
+  const hpScale =
+    (opts?.hpScale ?? 1) * waveScale * tierMul * state.modifiers.enemyHpMul;
   return {
     id: state.nextId++,
     x,
@@ -243,18 +344,21 @@ export function createEnemy(
     sent: opts?.sent ?? false,
     kind,
     intent: def.intent,
-    speed: def.speed * (1 + (state.wave - 1) * 0.028),
-    contactDamage: def.contactDamage * (1 + (state.wave - 1) * 0.04),
-    baseDamage: def.baseDamage,
-    goldReward: def.goldReward,
+    speed: def.speed * (1 + (state.wave - 1) * 0.028) * state.modifiers.enemySpeedMul,
+    contactDamage: def.contactDamage * (1 + (state.wave - 1) * 0.04) * state.modifiers.enemyDamageMul,
+    baseDamage: def.baseDamage * state.modifiers.enemyDamageMul,
+    goldReward: Math.max(1, Math.round(def.goldReward * state.modifiers.goldRewardMul)),
     ranged: def.ranged ?? false,
     attackRange: def.attackRange ?? 0,
     attackCooldown: def.attackCooldown ?? 1,
     attackCd: Math.random() * 0.6,
-    attackDamage: (def.attackDamage ?? 0) * (1 + (state.wave - 1) * 0.05),
+    attackDamage:
+      (def.attackDamage ?? 0) * (1 + (state.wave - 1) * 0.05) * state.modifiers.enemyDamageMul,
     projectileSpeed: def.projectileSpeed ?? 0,
     slamRadius: def.slamRadius,
-    slamDamage: def.slamDamage ? def.slamDamage * (1 + (state.wave - 1) * 0.06) : undefined,
+    slamDamage: def.slamDamage
+      ? def.slamDamage * (1 + (state.wave - 1) * 0.06) * state.modifiers.enemyDamageMul
+      : undefined,
     slamCooldown: def.slamCooldown,
     slamCd: def.slamCooldown ? def.slamCooldown * 0.6 : 0,
     telegraph: 0,
@@ -262,7 +366,43 @@ export function createEnemy(
     slowTimer: 0,
     slowMul: 1,
     stuckTimer: 0,
+    stuckTotal: 0,
+    stuckCount: 0,
+    dashTimer: 0,
+    dashCd: def.dashCooldown ? Math.random() * def.dashCooldown : 0,
   };
+}
+
+function fireEnemyShot(
+  state: GameState,
+  e: EnemyUnit,
+  focus: { x: number; y: number },
+  def: EnemyDef,
+): void {
+  const baseAng = Math.atan2(focus.y - e.y, focus.x - e.x);
+  const count = Math.max(1, def.projectileCount ?? 1);
+  const spread = def.projectileSpread ?? 0;
+  const spd = e.projectileSpeed || def.projectileSpeed || 280;
+
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+    const ang = baseAng + t * spread;
+    pushProjectile(state, {
+      x: e.x,
+      y: e.y,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd,
+      damage: e.attackDamage * (count > 1 ? 0.85 : 1),
+      radius: def.projectileRadius ?? 4,
+      kind: "enemy",
+      color: def.projectileColor ?? "#88b0ff",
+      hostile: true,
+      aoeRadius: def.projectileAoe,
+      life: def.projectileLife,
+      heroSlowMul: def.heroSlowMul,
+      heroSlowDuration: def.heroSlowDuration,
+    });
+  }
 }
 
 export function updateEnemies(state: GameState, dt: number): void {
@@ -302,25 +442,58 @@ export function updateEnemies(state: GameState, dt: number): void {
     }
 
     const target = resolveTarget(state, e);
-    moveWithPathing(map, e, target.x, target.y, e.speed * speedMul, dt);
-
+    const def = ENEMY_DEFS[e.kind];
     const focusHero = target.hero ?? nearestLivingHero(state, e);
+
+    // Charger dash
+    e.dashCd = Math.max(0, (e.dashCd ?? 0) - dt);
+    if ((e.dashTimer ?? 0) > 0) {
+      e.dashTimer = (e.dashTimer ?? 0) - dt;
+      if (focusHero) {
+        const d = normalize(focusHero.x - e.x, focusHero.y - e.y);
+        const dashSpd = (def.dashSpeed ?? e.speed * 2.5) * speedMul;
+        tryMove(map, e, e.x + d.x * dashSpd * dt, e.y + d.y * dashSpd * dt);
+      }
+    } else {
+      if (
+        def.dashSpeed &&
+        focusHero &&
+        (e.dashCd ?? 0) <= 0 &&
+        dist(e, focusHero) <= (def.dashRange ?? 140)
+      ) {
+        e.dashTimer = def.dashDuration ?? 0.35;
+        e.dashCd = def.dashCooldown ?? 2.8;
+        addFx(state, e.x, e.y, 28, "#ff606066", 0.25);
+      }
+      // Hold to shoot only with clear LOS — otherwise keep routing around cover.
+      // After camping too long, force a push so corner peeks don't soft-lock the lane.
+      const holdToShoot =
+        e.ranged &&
+        focusHero &&
+        dist(e, focusHero) <= (e.attackRange || 150) * 0.9 &&
+        hasLineOfSight(map, e.x, e.y, focusHero.x, focusHero.y, 3);
+      if (holdToShoot) {
+        e.campTimer = (e.campTimer ?? 0) + dt;
+        if ((e.campTimer ?? 0) >= ENEMY_CAMP_BREAK_SEC) {
+          // Push toward base (not just the hero) to clear the corner
+          moveWithPathing(map, e, base.x, base.y, e.speed * speedMul * 0.85, dt);
+        } else {
+          e.stuckTimer = 0;
+        }
+      } else {
+        e.campTimer = 0;
+        moveWithPathing(map, e, target.x, target.y, e.speed * speedMul, dt);
+      }
+    }
+
     if (e.ranged && focusHero) {
       e.attackCd = Math.max(0, e.attackCd - dt);
-      if (e.attackCd <= 0 && dist(e, focusHero) <= (e.attackRange || 150)) {
-        const dir = normalize(focusHero.x - e.x, focusHero.y - e.y);
-        const spd = e.projectileSpeed || 280;
-        pushProjectile(state, {
-          x: e.x,
-          y: e.y,
-          vx: dir.x * spd,
-          vy: dir.y * spd,
-          damage: e.attackDamage,
-          radius: 4,
-          kind: "enemy",
-          color: "#88b0ff",
-          hostile: true,
-        });
+      if (
+        e.attackCd <= 0 &&
+        dist(e, focusHero) <= (e.attackRange || 150) &&
+        hasLineOfSight(map, e.x, e.y, focusHero.x, focusHero.y, 3)
+      ) {
+        fireEnemyShot(state, e, focusHero, def);
         e.attackCd = e.attackCooldown;
       }
     }
@@ -358,6 +531,16 @@ export function updateEnemies(state: GameState, dt: number): void {
       state.damageFlash = Math.max(state.damageFlash, 0.2);
       state.toast = "Base hit!";
       state.toastTimer = 0.9;
+    }
+
+    // Soft-lock breaker: despawn if stuck forever behind geometry
+    if (e.alive && (e.stuckTotal ?? 0) >= ENEMY_STUCK_DESPAWN_SEC) {
+      e.alive = false;
+      addFx(state, e.x, e.y, 22, "#8899aa88", 0.35);
+      if (!state.aiControlled) {
+        state.toast = "Creep lost in the rubble…";
+        state.toastTimer = 1.2;
+      }
     }
   }
 

@@ -162,8 +162,8 @@ export function updateOpponent(state: GameState, dt: number): void {
   } else {
     opp.enemiesAlive = 0;
     opp.enemiesMax = 0;
-    opp.incomingFromPlayer = 0;
-    opp.sendingToPlayer = 0;
+    // Keep incomingFromPlayer — player sends wait for the next enemy-lane wave.
+    // Keep sendingToPlayer in sync with pending packs still on the player state.
     opp.pressure = Math.max(0, opp.pressure * 0.92);
     // Heal a bit between waves
     opp.heroHp = Math.min(opp.heroMaxHp, opp.heroHp + 8 * dt);
@@ -182,30 +182,36 @@ export function updateOpponent(state: GameState, dt: number): void {
 
   // AI send decisions between waves or mid-wave when flush
   if (opp.thinkCd <= 0) {
-    opp.thinkCd = 3.5 + Math.random() * 4;
+    const agg = state.modifiers.opponentAggressionMul;
+    opp.thinkCd = (3.5 + Math.random() * 4) / agg;
     const shouldSend =
       opp.gold > 40 &&
-      (Math.random() < 0.45 || (!waveActive && Math.random() < 0.7) || opp.sendingToPlayer === 0);
+      (Math.random() < 0.45 * agg ||
+        (!waveActive && Math.random() < 0.7) ||
+        opp.sendingToPlayer === 0);
     if (shouldSend) tryAiSend(state);
   }
 
-  // Viz for flipped lane
+  // Viz for flipped lane — show live creeps + queued player sends waiting
   const map = state.map;
   const mid = (map.laneTop + map.laneBottom) / 2;
   opp.vizHeroY = mid + Math.sin(state.elapsed * 1.3) * 18;
   opp.vizHeroX = 160 + Math.sin(state.elapsed * 0.7) * 40;
 
-  const count = Math.min(12, Math.ceil(opp.enemiesAlive || (waveActive ? 3 : 0)));
+  const queued = opp.incomingFromPlayer;
+  const live = Math.ceil(opp.enemiesAlive);
+  const count = Math.min(14, Math.max(live + (queued > 0 && !waveActive ? Math.min(8, queued) : 0), waveActive ? 1 : queued > 0 ? 1 : 0));
   const colors = ["#c45c5c", "#d08040", "#a34bd4", "#6a90c8"];
   opp.vizEnemies = [];
   for (let i = 0; i < count; i++) {
     const t = count <= 1 ? 0.5 : i / (count - 1);
+    const isSent = waveActive ? i < Math.min(queued, count) : i < count;
     opp.vizEnemies.push({
       x: 500 + t * 900 + Math.sin(state.elapsed * 2 + i) * 20,
       y: mid + Math.sin(state.elapsed * 1.5 + i * 1.7) * ((map.laneBottom - map.laneTop) * 0.28),
       r: 10 + (i % 3) * 3,
-      color: colors[i % colors.length]!,
-      sent: i < opp.incomingFromPlayer,
+      color: isSent ? "#a34bd4" : colors[i % colors.length]!,
+      sent: isSent,
     });
   }
 }
@@ -213,13 +219,20 @@ export function updateOpponent(state: GameState, dt: number): void {
 export function onPlayerWaveStart(state: GameState): void {
   const opp = state.opponent;
   const wave = state.wave;
-  const baseCount = Math.round(ENEMIES_PER_WAVE_BASE + (wave - 1) * WAVE_SCALE.enemiesPerWave);
+  const baseCount = Math.round(
+    (ENEMIES_PER_WAVE_BASE + (wave - 1) * WAVE_SCALE.enemiesPerWave) * state.modifiers.enemyCountMul,
+  );
   const incoming = opp.incomingFromPlayer;
   opp.enemiesMax = baseCount + incoming;
   opp.enemiesAlive = opp.enemiesMax;
   opp.pressure = Math.min(1, 0.2 + incoming * 0.06 + (wave - 1) * 0.03);
   // Consume tracked incoming — they are "in" the opponent's wave now
   opp.incomingFromPlayer = 0;
+}
+
+/** Alive creeps + queued player sends still waiting for the enemy lane. */
+export function opponentEnemiesRemaining(opp: OpponentState): number {
+  return Math.max(0, Math.ceil(opp.enemiesAlive) + opp.incomingFromPlayer);
 }
 
 export function opponentStatusLabel(status: FightStatus): string {

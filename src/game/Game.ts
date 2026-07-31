@@ -1,5 +1,4 @@
 import { MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
-import { canUpgradeBase } from "../data/baseUpgrades";
 import { waveTierLabel } from "../data/enemies";
 import { HEROES, type HeroId } from "../data/heroes";
 import { RELICS } from "../data/relics";
@@ -13,12 +12,13 @@ import {
   chooseLevelUp,
   chooseRelic,
   createState,
+  laneEnemiesRemaining,
   skipRelic,
   update,
   type GameState,
   type RunOptions,
 } from "./state";
-import { buyShopItem, toggleShopFreeze } from "../systems/shop";
+import { buyShopItem, toggleShopFreeze, shopItemCost } from "../systems/shop";
 import { availableSendPacks, buySendPack, sendPackCost } from "../systems/send";
 import { tryUpgradeBase, upgradeBaseCost } from "../systems/baseUpgrade";
 import { xpProgress } from "../systems/xp";
@@ -28,9 +28,8 @@ import { computeView, draw } from "../render/draw";
 import { MenuController, type LobbyDraft } from "../ui/MenuController";
 import { formatBinding, loadSettings } from "../ui/settings";
 import { playSfx, unlockAudio } from "../systems/audio";
-import { opponentStatusLabel } from "../systems/opponent";
+import { opponentStatusLabel, opponentEnemiesRemaining } from "../systems/opponent";
 import { MultiplayerUi } from "../net/MultiplayerUi";
-import { buildMpMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
 import {
   bindMatchHandlers,
   disconnectNet,
@@ -40,6 +39,13 @@ import {
 import { applyMatchSnap, buildMatchSnap } from "../net/sync";
 import { gatherLocalIntent, stepMpMatch } from "../net/mpSim";
 import type { CombatIntent, NetMsg } from "../net/types";
+import { createNeuralLaneAi } from "../ai/runtime";
+import { resolveSelectedOpponent } from "../ai/store";
+import { applyRunStartExtras } from "../meta/apply";
+import { composeRunModifiers } from "../meta/modifiers";
+import { applyRunPayout, loadMetaStore } from "../meta/store";
+import { ascensionLabel } from "../meta/ascension";
+import { buildMpMatch, buildSoloVsAiMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
 
 export class Game {
   private readonly canvas: HTMLCanvasElement;
@@ -54,6 +60,7 @@ export class Game {
     startingGold: STARTING_GOLD,
     wavesToWin: WIN_WAVES,
     friendlyFire: false,
+    ascension: 0,
   };
 
   private readonly statsEl: HTMLElement;
@@ -90,6 +97,7 @@ export class Game {
   private readonly waveBannerEl: HTMLElement;
   private readonly waveNumberEl: HTMLElement;
   private readonly waveTierEl: HTMLElement;
+  private readonly laneEnemyCountsEl: HTMLElement;
   private readonly baseHpRail: HTMLElement;
   private readonly baseHpFill: HTMLElement;
   private readonly opponentPanel: HTMLElement;
@@ -159,6 +167,7 @@ export class Game {
     this.waveBannerEl = document.querySelector("#wave-banner")!;
     this.waveNumberEl = document.querySelector("#wave-number")!;
     this.waveTierEl = document.querySelector("#wave-tier")!;
+    this.laneEnemyCountsEl = document.querySelector("#lane-enemy-counts")!;
     this.baseHpRail = document.querySelector("#base-hp-rail")!;
     this.baseHpFill = document.querySelector("#base-hp-fill")!;
     this.opponentPanel = document.querySelector("#opponent-panel")!;
@@ -310,13 +319,7 @@ export class Game {
     this.endMultiplayer();
     this.state = null;
     this.pauseMode = "none";
-    this.hud.classList.add("hidden");
-    this.laneChrome.classList.add("hidden");
-    this.baseHpRail.classList.add("hidden");
-    this.shopPanel.classList.add("hidden");
-    this.relicDraft.classList.add("hidden");
-    this.invPanel.classList.add("hidden");
-    this.overlay.classList.add("hidden");
+    this.hideCombatChrome();
     this.input.reloadBinds();
     this.refreshHint();
     this.menus.show();
@@ -326,13 +329,7 @@ export class Game {
     this.endMultiplayer();
     this.state = null;
     this.pauseMode = "none";
-    this.shopPanel.classList.add("hidden");
-    this.laneChrome.classList.add("hidden");
-    this.baseHpRail.classList.add("hidden");
-    this.relicDraft.classList.add("hidden");
-    this.invPanel.classList.add("hidden");
-    this.overlay.classList.add("hidden");
-    this.hud.classList.add("hidden");
+    this.hideCombatChrome();
     this.input.reloadBinds();
     this.refreshHint();
     this.menus.show();
@@ -343,14 +340,28 @@ export class Game {
     this.menus.hide();
     this.input.reloadBinds();
     this.refreshHint();
+    const ascension = opts?.ascension ?? this.runDefaults.ascension ?? 0;
+    const meta = loadMetaStore();
+    const playerMods = composeRunModifiers(ascension, meta.ranks, true);
     const merged: RunOptions = {
       mapId: opts?.mapId ?? this.runDefaults.mapId ?? "random",
       maxTurrets: opts?.maxTurrets ?? this.runDefaults.maxTurrets ?? DEFAULT_MAX_TURRETS,
       startingGold: opts?.startingGold ?? this.runDefaults.startingGold ?? STARTING_GOLD,
       wavesToWin: opts?.wavesToWin ?? this.runDefaults.wavesToWin ?? WIN_WAVES,
       friendlyFire: opts?.friendlyFire ?? this.runDefaults.friendlyFire ?? false,
+      ascension,
+      modifiers: playerMods,
     };
+
+    const opp = resolveSelectedOpponent();
+    if (opp.kind === "neural") {
+      this.beginSoloVsAi(heroId, merged, opp);
+      return;
+    }
+
+    this.mpMatch = null;
     this.state = createState(heroId, merged);
+    applyRunStartExtras(this.state, playerMods);
     this.pauseMode = "none";
     this.overlay.classList.add("hidden");
     this.shopPanel.classList.add("hidden");
@@ -358,7 +369,63 @@ export class Game {
     this.invPanel.classList.add("hidden");
     this.laneChrome.classList.remove("hidden");
     this.baseHpRail.classList.remove("hidden");
+    this.opponentPanel.classList.remove("hidden");
     this.hud.classList.remove("hidden");
+    this.waveBannerEl.classList.remove("hidden");
+    this.laneFlipBtn.textContent = "View lane";
+    this.laneFlipBtn.classList.remove("active");
+    this.mapNameEl.textContent = this.state.map.name;
+    this.lastDraftKey = "";
+    this.lastShopKey = "";
+    this.lastSendUnlockKey = "";
+    this.lastAbilityKey = "";
+    this.buildSendBar();
+    this.layoutLaneChrome();
+    this.last = performance.now();
+  }
+
+  /** Dual-lane offline match vs a trained (or scripted) AI — base death wins on unlimited. */
+  private beginSoloVsAi(
+    heroId: HeroId,
+    opts: RunOptions,
+    opp: Extract<ReturnType<typeof resolveSelectedOpponent>, { kind: "neural" }>,
+  ): void {
+    this.mpHost = true;
+    this.remoteIntents.clear();
+    const meta = loadMetaStore();
+    const playerMods = opts.modifiers ?? composeRunModifiers(opts.ascension, meta.ranks, true);
+    const enemyMods = composeRunModifiers(opts.ascension, meta.ranks, false);
+    const agg = playerMods.opponentAggressionMul;
+    const neural = createNeuralLaneAi(
+      opp.genome,
+      Math.max(0, opp.hesitation / agg),
+      opp.label,
+    );
+    this.mpMatch = buildSoloVsAiMatch({
+      playerHeroId: heroId,
+      mapId: opts.mapId,
+      maxTurrets: opts.maxTurrets,
+      seed: (Math.random() * 1e9) | 0,
+      startingGold: opts.startingGold,
+      wavesToWin: opts.wavesToWin,
+      friendlyFire: opts.friendlyFire,
+      neural,
+      opponentLabel: opp.label,
+      playerModifiers: playerMods,
+      enemyModifiers: enemyMods,
+    });
+    applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
+    this.state = this.mpMatch.lanes[0];
+    this.pauseMode = "none";
+    this.overlay.classList.add("hidden");
+    this.shopPanel.classList.add("hidden");
+    this.relicDraft.classList.add("hidden");
+    this.invPanel.classList.add("hidden");
+    this.laneChrome.classList.remove("hidden");
+    this.baseHpRail.classList.remove("hidden");
+    this.opponentPanel.classList.remove("hidden");
+    this.hud.classList.remove("hidden");
+    this.waveBannerEl.classList.remove("hidden");
     this.laneFlipBtn.textContent = "View lane";
     this.laneFlipBtn.classList.remove("active");
     this.mapNameEl.textContent = this.state.map.name;
@@ -617,10 +684,21 @@ export class Game {
     const heroName = HEROES[this.state.hero.heroId].name;
     const relicNames = this.state.relics.map((id) => RELICS[id].name).join(", ") || "none";
     const mapName = this.state.map.name;
+    const payout = applyRunPayout({
+      won,
+      wave: this.state.wave,
+      sends: this.state.sendsThisRun,
+      ascension: this.state.ascension,
+      deaths: this.state.deathCount,
+      unlimited: this.state.wavesToWin <= 0,
+    });
+    const crestLine = `+${payout.crests} War Crests (${payout.store.crests} total)${
+      payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""
+    }`;
     this.overlayTitle.textContent = won ? "Lane held!" : "Base fallen";
     this.overlayBody.textContent = won
-      ? `${heroName} cleared ${this.state.wavesToWin <= 0 ? this.state.wave : this.state.wavesToWin} waves on ${mapName} (Lv ${this.state.level}, base ${this.state.baseLevel}) with ${Math.floor(this.state.gold)} gold, ${this.state.sendsThisRun} sends. Relics: ${relicNames}.`
-      : `${heroName} fell on wave ${this.state.wave} (${mapName}). Deaths ${this.state.deathCount}. Relics: ${relicNames}.`;
+      ? `${heroName} cleared ${this.state.wavesToWin <= 0 ? this.state.wave : this.state.wavesToWin} waves on ${mapName} (Lv ${this.state.level}, ${ascensionLabel(this.state.ascension)}). Relics: ${relicNames}. ${crestLine}`
+      : `${heroName} fell on wave ${this.state.wave} (${mapName}, ${ascensionLabel(this.state.ascension)}). Deaths ${this.state.deathCount}. ${crestLine}`;
     this.overlayActions.innerHTML = "";
 
     const again = document.createElement("button");
@@ -637,6 +715,21 @@ export class Game {
       this.menus.show("singleplayer");
     });
     this.overlayActions.appendChild(again);
+
+    const barracks = document.createElement("button");
+    barracks.type = "button";
+    barracks.textContent = "Barracks";
+    barracks.addEventListener("click", () => {
+      this.state = null;
+      this.hud.classList.add("hidden");
+      this.laneChrome.classList.add("hidden");
+      this.baseHpRail.classList.add("hidden");
+      this.shopPanel.classList.add("hidden");
+      this.relicDraft.classList.add("hidden");
+      this.overlay.classList.add("hidden");
+      this.menus.show("barracks");
+    });
+    this.overlayActions.appendChild(barracks);
 
     const menu = document.createElement("button");
     menu.type = "button";
@@ -690,14 +783,13 @@ export class Game {
       row.dataset.tip = `<strong>${full.name}</strong><br/>${full.detail}<br/>Current cost ${cost}g · Base Lv ${this.state!.baseLevel}`;
     });
 
-    const maxed = !canUpgradeBase(this.state.baseLevel);
     const cost = upgradeBaseCost(this.state);
-    this.upgradeBaseBtn.disabled = maxed || this.state.gold < cost || this.state.paused;
-    this.upgradeBaseBtn.textContent = maxed
-      ? `Base Max (Lv ${this.state.baseLevel})`
-      : `Upgrade Base · ${cost}g (Lv ${this.state.baseLevel} → ${this.state.baseLevel + 1})`;
+    this.upgradeBaseBtn.disabled = this.state.gold < cost || this.state.paused;
+    this.upgradeBaseBtn.textContent = `Upgrade Base · ${cost}g (Lv ${this.state.baseLevel} → ${this.state.baseLevel + 1})`;
     this.upgradeBaseBtn.dataset.tip =
-      "Raises base level: unlocks packs and strengthens existing send costs, income, and HP.";
+      this.state.baseLevel >= 4
+        ? "No max level — each upgrade further strengthens unlocked send packs (cost, income, HP)."
+        : "Raises base level: unlocks packs and strengthens existing send costs, income, and HP.";
 
     const xp = xpProgress(this.state);
     this.xpLevelEl.textContent = `Lv ${this.state.level}`;
@@ -725,7 +817,8 @@ export class Game {
         if (!item) return;
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
-        const broke = this.state!.gold < item.cost;
+        const cost = shopItemCost(this.state!, item.cost);
+        const broke = this.state!.gold < cost;
         const row = document.createElement("button");
         row.type = "button";
         row.className =
@@ -736,9 +829,9 @@ export class Game {
         row.disabled = maxed || broke || this.state!.paused;
         const tag = item.category === "artifact" ? "ARTIFACT · " : "";
         const rarity = RARITY_LABEL[item.rarity];
-        const costLabel = maxed ? `×${owned} max` : broke ? `LOCKED ${item.cost}g` : `${item.cost}g`;
+        const costLabel = maxed ? `×${owned} max` : broke ? `LOCKED ${cost}g` : `${cost}g`;
         row.innerHTML = `<span class="shop-name">[${i + 4}] ${item.name}</span><span class="shop-meta">${tag}${item.effect}</span><span class="shop-cost">${costLabel}</span>`;
-        row.dataset.tip = `<strong style="color:${RARITY_COLOR[item.rarity]}">${item.name}</strong> · ${rarity}<br/>${item.effect}<br/>${item.cost}g · max ×${item.maxStacks}${broke && !maxed ? "<br/><span style=\"color:#ff6b6b\">Not enough gold</span>" : ""}`;
+        row.dataset.tip = `<strong style="color:${RARITY_COLOR[item.rarity]}">${item.name}</strong> · ${rarity}<br/>${item.effect}<br/>${cost}g · max ×${item.maxStacks}${broke && !maxed ? "<br/><span style=\"color:#ff6b6b\">Not enough gold</span>" : ""}`;
         const buyId = id;
         row.addEventListener("click", (ev) => {
           ev.preventDefault();
@@ -759,13 +852,14 @@ export class Game {
         if (!row) return;
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
-        const broke = this.state!.gold < item.cost;
+        const cost = shopItemCost(this.state!, item.cost);
+        const broke = this.state!.gold < cost;
         row.disabled = maxed || broke || this.state!.paused;
         row.classList.toggle("owned-max", maxed);
         row.classList.toggle("unaffordable", broke && !maxed);
         const costEl = row.querySelector(".shop-cost");
         if (costEl) {
-          costEl.textContent = maxed ? `×${owned} max` : broke ? `LOCKED ${item.cost}g` : `${item.cost}g`;
+          costEl.textContent = maxed ? `×${owned} max` : broke ? `LOCKED ${cost}g` : `${cost}g`;
         }
       });
     }
@@ -894,6 +988,7 @@ export class Game {
 
   private openMultiplayer(draft: LobbyDraft, heroId: HeroId): void {
     unlockAudio();
+    this.hideCombatChrome();
     this.menus.hide();
     const menusRoot = document.querySelector<HTMLElement>("#menus")!;
     this.mpUi = new MultiplayerUi(menusRoot, {
@@ -914,7 +1009,22 @@ export class Game {
       wavesToWin: draft.wavesToWin,
       friendlyFire: draft.friendlyFire,
       heroId,
+      preferredCode: draft.hostCode,
+      joinCode: draft.joinCode,
     });
+  }
+
+  /** Hide all in-match chrome so lobby/menu never looks half-combat. */
+  private hideCombatChrome(): void {
+    this.hud.classList.add("hidden");
+    this.laneChrome.classList.add("hidden");
+    this.baseHpRail.classList.add("hidden");
+    this.opponentPanel.classList.add("hidden");
+    this.waveBannerEl.classList.add("hidden");
+    this.shopPanel.classList.add("hidden");
+    this.relicDraft.classList.add("hidden");
+    this.invPanel.classList.add("hidden");
+    this.overlay.classList.add("hidden");
   }
 
   private beginMultiplayerMatch(
@@ -933,6 +1043,15 @@ export class Game {
       wavesToWin: start.wavesToWin ?? start.lobby.wavesToWin,
       friendlyFire: start.friendlyFire ?? start.lobby.friendlyFire,
     });
+
+    // Attach trained AI to PvE enemy lane when a school is selected
+    if (this.mpMatch.lanes[1].aiControlled) {
+      const opp = resolveSelectedOpponent();
+      if (opp.kind === "neural") {
+        this.mpMatch.laneAi[1] = createNeuralLaneAi(opp.genome, opp.hesitation, opp.label);
+        this.mpMatch.opponentLabel = opp.label;
+      }
+    }
     this.pauseMode = "none";
     this.hud.classList.remove("hidden");
     this.laneChrome.classList.remove("hidden");
@@ -994,27 +1113,32 @@ export class Game {
       local.sendDigit = null;
     }
 
-    if (this.mpHost) {
-      const intents = new Map<number, CombatIntent>();
-      intents.set(this.mpMatch.mySlot, local);
-      for (const [seat, intent] of this.remoteIntents) {
-        if (seat !== this.mpMatch.mySlot) intents.set(seat, intent);
+    const paused = !!this.mpMatch.lanes[this.mpMatch.myTeam].paused;
+    if (!paused) {
+      if (this.mpHost) {
+        const intents = new Map<number, CombatIntent>();
+        intents.set(this.mpMatch.mySlot, local);
+        for (const [seat, intent] of this.remoteIntents) {
+          if (seat !== this.mpMatch.mySlot) intents.set(seat, intent);
+        }
+        stepMpMatch(this.mpMatch, intents, dt);
+        this.snapSeq++;
+        if (!this.mpMatch.soloOffline) {
+          netBroadcast({
+            k: "state",
+            snap: buildMatchSnap(this.mpMatch, this.mpMatch.viewTeam),
+            seq: this.snapSeq,
+          });
+        }
+      } else {
+        this.intentSeq++;
+        netSendToHost({
+          k: "intent",
+          seat: this.mpMatch.mySlot,
+          intent: local,
+          seq: this.intentSeq,
+        });
       }
-      stepMpMatch(this.mpMatch, intents, dt);
-      this.snapSeq++;
-      netBroadcast({
-        k: "state",
-        snap: buildMatchSnap(this.mpMatch, this.mpMatch.viewTeam),
-        seq: this.snapSeq,
-      });
-    } else {
-      this.intentSeq++;
-      netSendToHost({
-        k: "intent",
-        seat: this.mpMatch.mySlot,
-        intent: local,
-        seq: this.intentSeq,
-      });
     }
     this.input.endFrame();
 
@@ -1043,14 +1167,24 @@ export class Game {
     if (!this.mpMatch || !this.state) return;
     this.syncHud();
     const other = this.mpMatch.lanes[(1 - this.mpMatch.myTeam) as 0 | 1];
-    this.oppNameEl.textContent = other.aiControlled
-      ? `AI · ${HEROES[other.hero.heroId].name}`
-      : `Enemy · ${HEROES[other.hero.heroId].name}`;
+    this.oppNameEl.textContent = this.mpMatch.opponentLabel
+      ? this.mpMatch.opponentLabel
+      : other.aiControlled
+        ? `AI · ${HEROES[other.hero.heroId].name}`
+        : `Enemy · ${HEROES[other.hero.heroId].name}`;
     const sendIn = other.pendingSends.reduce((n, p) => n + p.enemies, 0);
+    const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
+    const myLeft = laneEnemiesRemaining(myLane);
+    const theirLeft = laneEnemiesRemaining(other);
+    this.laneEnemyCountsEl.innerHTML =
+      `<span class="yours">Your lane ${myLeft}</span>` +
+      `<span class="sep">·</span>` +
+      `<span class="theirs">Enemy lane ${theirLeft}</span>`;
     this.oppStatsEl.innerHTML = [
       `<div>HP ${Math.ceil(other.hero.hp)}/${Math.ceil(other.hero.maxHp)} · Lv ${other.level}</div>`,
       `<div>Base ${Math.ceil(other.baseHp)} · Wave ${other.wave}</div>`,
       `<div>Gold ${Math.floor(other.gold)} · +${other.incomePerSec.toFixed(1)}/s</div>`,
+      `<div>Enemies left: ${theirLeft}</div>`,
       `<div>${other.status === "playing" ? (other.spawning || other.enemies.length ? "Fighting" : "Between waves") : other.status}</div>`,
       sendIn > 0 ? `<div class="opp-alert">Incoming sends: ${sendIn}</div>` : "",
     ]
@@ -1061,11 +1195,26 @@ export class Game {
   private showMpEndOverlay(): void {
     if (!this.mpMatch) return;
     const win = this.mpMatch.winnerTeam === this.mpMatch.myTeam;
+    const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
+    let crestLine = "";
+    if (this.mpMatch.soloOffline) {
+      const payout = applyRunPayout({
+        won: win,
+        wave: myLane.wave,
+        sends: myLane.sendsThisRun,
+        ascension: myLane.ascension,
+        deaths: myLane.deathCount,
+        unlimited: myLane.wavesToWin <= 0,
+      });
+      crestLine = ` +${payout.crests} War Crests (${payout.store.crests} total)${
+        payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""
+      }`;
+    }
     this.overlay.classList.remove("hidden");
     this.overlayTitle.textContent = win ? "Victory" : "Defeat";
     this.overlayBody.textContent = win
-      ? "Your side broke the enemy base / outlasted them."
-      : "Your base fell — or the enemy cleared the win wave first.";
+      ? `Your side broke the enemy base / outlasted them.${crestLine}`
+      : `Your base fell — or the enemy cleared the win wave first.${crestLine}`;
     this.overlayActions.innerHTML = `<button type="button" class="menu-btn primary" id="mp-done">Back to Menu</button>`;
     document.querySelector("#mp-done")!.addEventListener("click", () => {
       this.endMultiplayer();
@@ -1125,7 +1274,17 @@ export class Game {
     } else if (s.paused) {
       this.waveNumberEl.textContent = "Paused";
     } else if (!s.spawning && s.enemies.length === 0) {
-      this.waveNumberEl.textContent = `Wave ${s.wave} · next ${Math.max(0, s.waveTimer).toFixed(1)}s`;
+      const waitingOpp =
+        this.mpMatch &&
+        s.wavesToWin <= 0 &&
+        s.waveTimer <= 0 &&
+        (() => {
+          const other = this.mpMatch!.lanes[(1 - this.mpMatch!.viewTeam) as 0 | 1];
+          return other.spawning || other.enemies.length > 0 || other.pausedForDraft;
+        })();
+      this.waveNumberEl.textContent = waitingOpp
+        ? `Wave ${s.wave} · waiting on enemy lane…`
+        : `Wave ${s.wave} · next ${Math.max(0, s.waveTimer).toFixed(1)}s`;
     } else {
       this.waveNumberEl.textContent = `Wave ${s.wave}`;
     }
@@ -1140,9 +1299,19 @@ export class Game {
       this.waveTierEl.classList.add("hidden");
     }
 
+    // Dual-lane enemy counts (classic uses abstract opponent; MP overwrites in syncHudMp)
+    if (!this.mpMatch) {
+      const myLeft = laneEnemiesRemaining(s);
+      const theirLeft = opponentEnemiesRemaining(s.opponent);
+      this.laneEnemyCountsEl.innerHTML =
+        `<span class="yours">Your lane ${myLeft}</span>` +
+        `<span class="sep">·</span>` +
+        `<span class="theirs">Enemy lane ${theirLeft}</span>`;
+    }
+
     // Simplified top-left panel (no map / wave / base·hero HP labels)
     this.statsEl.innerHTML = [
-      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}</div>`,
+      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}</div>`,
       `<div class="hud-line">Base Lv ${s.baseLevel}${incoming ? ` · Sent ${incoming}` : ""}${aiSend ? ` · Incoming ${aiSend}` : ""}</div>`,
     ].join("");
 
@@ -1166,9 +1335,10 @@ export class Game {
       `<div>HP ${Math.ceil(opp.heroHp)}/${Math.ceil(opp.heroMaxHp)} · Lv ${opp.level}</div>`,
       `<div>Base ${Math.ceil(opp.baseHp)}/${opp.baseMaxHp} · BLv ${opp.baseLevel}</div>`,
       `<div>+${opp.incomePerSec.toFixed(1)}/s · ${Math.floor(opp.gold)}g</div>`,
+      `<div>Enemies left: ${opponentEnemiesRemaining(opp)}</div>`,
       `<div class="opp-status status-${opp.fightStatus}">${opponentStatusLabel(opp.fightStatus)}</div>`,
       sendLine,
-      incoming > 0 ? `<div class="opp-muted">Your sends inbound: ${incoming}</div>` : "",
+      incoming > 0 ? `<div class="opp-alert">Your sends inbound: ${incoming}</div>` : "",
     ].join("");
 
     this.laneFlipBtn.textContent = s.viewOpponentLane ? "Your lane" : "View lane";

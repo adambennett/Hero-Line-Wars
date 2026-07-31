@@ -32,6 +32,7 @@ import {
   bounceProjectile,
   damageEnemy,
   inHighGround,
+  resolveHostileProjectile,
   tryBasicAttack,
 } from "../systems/combat";
 import { createEnemy, updateEnemies } from "../systems/enemies";
@@ -42,6 +43,7 @@ import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { chooseLevelPassive, openLevelDraft } from "../systems/xp";
 import { updateTurrets } from "../systems/turrets";
 import { playSfx } from "../systems/audio";
+import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
 
 export type Unit = {
   id: number;
@@ -76,7 +78,17 @@ export type EnemyUnit = Unit & {
   slowTimer?: number;
   slowMul?: number;
   stuckTimer?: number;
+  /** Cumulative time spent stuck this life (despawn watchdog). */
+  stuckTotal?: number;
+  /** Consecutive failed local unstuck nudges. */
+  stuckCount?: number;
   preferAngle?: number;
+  /** Sticky flank when routing around cover: -1 = above, +1 = below. */
+  pathSide?: -1 | 1;
+  /** Time spent holding a ranged shot without advancing. */
+  campTimer?: number;
+  dashTimer?: number;
+  dashCd?: number;
 };
 
 export type TurretUnit = {
@@ -110,6 +122,11 @@ export type Projectile = {
   hostile?: boolean;
   fromBasic?: boolean;
   appliesSlow?: boolean;
+  /** Hostile AoE blast radius on hit / expire / wall. */
+  aoeRadius?: number;
+  /** Slow applied to hero when this hostile projectile connects. */
+  heroSlowMul?: number;
+  heroSlowDuration?: number;
 };
 
 export type FxRing = {
@@ -154,6 +171,9 @@ export type HeroRuntime = Unit & {
   overchargeTimer?: number;
   zipSpeedTimer?: number;
   stormCageTimer?: number;
+  /** Temporary movement slow from hexer bolts etc. */
+  slowMul?: number;
+  slowTimer?: number;
   /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
   controllerSlot?: number | null;
 };
@@ -167,6 +187,10 @@ export type RunOptions = {
   wavesToWin: number;
   /** Team modes: player projectiles can hurt allies. */
   friendlyFire: boolean;
+  /** Ascension difficulty 0..12. */
+  ascension: number;
+  /** Precomposed modifiers; if omitted, defaults (no meta) are used. */
+  modifiers?: RunModifiers;
 };
 
 export type GameState = {
@@ -178,6 +202,8 @@ export type GameState = {
   /** 0 = unlimited. */
   wavesToWin: number;
   friendlyFire: boolean;
+  ascension: number;
+  modifiers: RunModifiers;
   hero: HeroRuntime;
   enemies: EnemyUnit[];
   turrets: TurretUnit[];
@@ -251,17 +277,27 @@ export function createState(
   const map = structuredClone(getMap(mapId));
   if (map.shiftingObstacles) reshuffleObstacles(map);
   const def = HEROES[heroId];
-  const startingGold = opts?.startingGold ?? STARTING_GOLD;
+  const mods = opts?.modifiers ?? defaultModifiers();
+  const startingGold = Math.max(
+    0,
+    (opts?.startingGold ?? STARTING_GOLD) + mods.startingGoldDelta,
+  );
   const wavesToWin = opts?.wavesToWin ?? WIN_WAVES;
   const friendlyFire = opts?.friendlyFire ?? false;
+  const baseMax = Math.round(map.base.maxHp * mods.baseHpMul);
+  map.base.maxHp = baseMax;
+  const maxTurrets =
+    (opts?.maxTurrets ?? DEFAULT_MAX_TURRETS) + (mods.applyPlayerMeta ? mods.maxTurretsBonus : 0);
   return {
     status: "playing",
     map,
     mapId,
-    maxTurrets: opts?.maxTurrets ?? DEFAULT_MAX_TURRETS,
+    maxTurrets,
     startingGold,
     wavesToWin,
     friendlyFire,
+    ascension: mods.ascension,
+    modifiers: mods,
     hero: {
       id: 0,
       heroId,
@@ -288,13 +324,13 @@ export function createState(
     projectiles: [],
     fx: [],
     beam: null,
-    baseHp: map.base.maxHp,
+    baseHp: baseMax,
     baseLevel: 0,
     gold: startingGold,
-    incomePerSec: BASE_INCOME_GOLD_PER_SEC,
+    incomePerSec: (BASE_INCOME_GOLD_PER_SEC + mods.incomeFlat) * mods.incomeMul,
     wave: 0,
     waveTier: "normal",
-    waveTimer: 2,
+    waveTimer: 2 * mods.waveBreakMul,
     spawning: false,
     toSpawn: 0,
     sentQueue: [],
@@ -310,7 +346,7 @@ export function createState(
     shopFrozen: false,
     pendingSends: [],
     sendsThisRun: 0,
-    toast: `${map.name}`,
+    toast: mods.ascension > 0 ? `${map.name} · A${mods.ascension}` : `${map.name}`,
     toastTimer: 2.4,
     enemyGoldReward: 5,
     relics: [],
@@ -332,7 +368,7 @@ export function createState(
     pendingRelicDraft: false,
     aimWorldX: map.base.x + 200,
     aimWorldY: map.base.y,
-    opponent: createOpponent(heroId, map.base.maxHp, map.base.y),
+    opponent: createOpponent(heroId, baseMax, map.base.y),
     viewOpponentLane: false,
     allies: [],
   };
@@ -371,7 +407,8 @@ function startWave(state: GameState): void {
   state.waveTier = waveTier(state.wave);
   state.spawning = true;
   const count = Math.round(
-    ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave,
+    (ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave) *
+      state.modifiers.enemyCountMul,
   );
   state.toSpawn = count;
   if (state.waveTier === "elite") state.toSpawn = Math.max(3, Math.floor(state.toSpawn * 0.75));
@@ -421,6 +458,12 @@ function remainingSpawns(state: GameState): number {
   return state.toSpawn + sentLeft;
 }
 
+/** Alive on the lane + still waiting to spawn this wave (incl. received sends). */
+export function laneEnemiesRemaining(state: GameState): number {
+  const alive = state.enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
+  return alive + remainingSpawns(state);
+}
+
 export function waveVictoryReached(state: GameState): boolean {
   if (state.wavesToWin <= 0) return false;
   return state.wave >= state.wavesToWin;
@@ -429,13 +472,14 @@ export function waveVictoryReached(state: GameState): boolean {
 export function heroMoveSpeed(state: GameState): number {
   let spd = HEROES[state.hero.heroId].speed + state.hero.speedBonus;
   if ((state.hero.zipSpeedTimer ?? 0) > 0) spd += 40;
+  if ((state.hero.slowTimer ?? 0) > 0) spd *= state.hero.slowMul ?? 1;
   return spd;
 }
 
 function respawnDelay(state: GameState): number {
   const t =
     RESPAWN.baseSec + state.wave * RESPAWN.waveFactor + state.deathCount * RESPAWN.deathFactor;
-  return Math.min(RESPAWN.maxSec, t);
+  return Math.min(RESPAWN.maxSec, t) * state.modifiers.respawnMul;
 }
 
 function killHero(state: GameState): void {
@@ -493,7 +537,13 @@ function updateProjectiles(state: GameState, dt: number): void {
     if (p.life !== undefined) {
       p.life -= dt;
       if (p.life <= 0) {
-        p.alive = false;
+        if (p.hostile && (p.aoeRadius ?? 0) > 0) {
+          resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
+            if (h === state.hero) applyPlayerDamage(state, dmg);
+          });
+        } else {
+          p.alive = false;
+        }
         continue;
       }
     }
@@ -504,14 +554,21 @@ function updateProjectiles(state: GameState, dt: number): void {
 
     // Walls block all shots (player and enemy).
     if (blockedByObstacle(state.map, p.x, p.y, p.radius)) {
-      p.alive = false;
+      if (p.hostile && (p.aoeRadius ?? 0) > 0) {
+        resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
+          if (h === state.hero) applyPlayerDamage(state, dmg);
+        });
+      } else {
+        p.alive = false;
+      }
       continue;
     }
 
     if (p.hostile) {
       if (state.hero.alive && dist(p, state.hero) <= state.hero.radius + p.radius) {
-        applyPlayerDamage(state, p.damage);
-        p.alive = false;
+        resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
+          if (h === state.hero) applyPlayerDamage(state, dmg);
+        });
       }
       continue;
     }
@@ -562,7 +619,7 @@ function afterWaveClear(state: GameState, input: Input): boolean {
       state.pausedForDraft = true;
       state.pendingRelicDraft = true;
       state.draftKind = "relic";
-      state.waveTimer = WAVE_BREAK_SEC;
+      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
       if (state.pendingLevelUps > 0) {
         openLevelDraft(state);
       }
@@ -572,12 +629,12 @@ function afterWaveClear(state: GameState, input: Input): boolean {
   }
   if (state.pendingLevelUps > 0) {
     openLevelDraft(state);
-    state.waveTimer = WAVE_BREAK_SEC;
+    state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
     input.endFrame();
     return true;
   }
   applySecondWind(state);
-  state.waveTimer = WAVE_BREAK_SEC;
+  state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
     input.endFrame();
@@ -623,6 +680,12 @@ export function update(state: GameState, input: Input, dt: number): void {
   if (!state.hero.alive) {
     state.respawnTimer -= dt;
     if (state.respawnTimer <= 0) respawnHero(state);
+  } else if ((state.hero.slowTimer ?? 0) > 0) {
+    state.hero.slowTimer = (state.hero.slowTimer ?? 0) - dt;
+    if ((state.hero.slowTimer ?? 0) <= 0) {
+      state.hero.slowTimer = 0;
+      state.hero.slowMul = 1;
+    }
   }
 
   const shop = state.map.shop;

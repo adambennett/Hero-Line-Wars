@@ -419,4 +419,40 @@ export function applyPlayerDamage(state: GameState, amount: number): void {
   }
 }
 
+export function applyHeroSlow(hero: { slowMul?: number; slowTimer?: number }, mul: number, duration: number): void {
+  hero.slowMul = Math.min(hero.slowMul ?? 1, mul);
+  hero.slowTimer = Math.max(hero.slowTimer ?? 0, duration);
+}
+
+/** Hostile projectile impact / fuse / wall — direct hit + optional AoE. */
+export function resolveHostileProjectile(
+  state: GameState,
+  p: Projectile,
+  heroes: { alive: boolean; x: number; y: number; radius: number; slowMul?: number; slowTimer?: number }[],
+  applyToHero: (hero: (typeof heroes)[number], damage: number) => void,
+): void {
+  const aoe = p.aoeRadius ?? 0;
+  if (aoe > 0) {
+    addFx(state, p.x, p.y, aoe, p.color ? `${p.color}88` : "#ff804088", 0.35);
+    state.shake = Math.max(state.shake, 0.18);
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (dist(p, h) <= aoe + h.radius) {
+        applyToHero(h, p.damage);
+        if (p.heroSlowMul != null) applyHeroSlow(h, p.heroSlowMul, p.heroSlowDuration ?? 1.5);
+      }
+    }
+  } else {
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (dist(p, h) <= h.radius + p.radius) {
+        applyToHero(h, p.damage);
+        if (p.heroSlowMul != null) applyHeroSlow(h, p.heroSlowMul, p.heroSlowDuration ?? 1.5);
+        break;
+      }
+    }
+  }
+  p.alive = false;
+}
+
 export type RelicCheck = RelicId;

@@ -46,13 +46,18 @@ export function toggleShopFreeze(state: GameState): void {
   playSfx("ui");
 }
 
+export function shopItemCost(state: GameState, baseCost: number): number {
+  return Math.max(1, Math.round(baseCost * state.modifiers.shopPriceMul));
+}
+
 export function buyShopItem(state: GameState, itemId: ShopItemId): string | null {
   if (!state.shopOffer.includes(itemId)) return "Not in current stock";
   const def = getShopItem(itemId) ?? SHOP_ITEMS.find((i) => i.id === itemId);
   if (!def) return "Unknown item";
   const owned = state.shopOwned[itemId] ?? 0;
   if (owned >= def.maxStacks) return "Max stacks owned";
-  if (state.gold < def.cost) return "Not enough gold";
+  const cost = shopItemCost(state, def.cost);
+  if (state.gold < cost) return "Not enough gold";
 
   if (isTurretArtifact(itemId)) {
     const err = placeTurret(state, itemId);
@@ -63,7 +68,7 @@ export function buyShopItem(state: GameState, itemId: ShopItemId): string | null
     }
   }
 
-  state.gold -= def.cost;
+  state.gold -= cost;
   state.shopOwned[itemId] = owned + 1;
 
   switch (itemId) {

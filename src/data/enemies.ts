@@ -7,6 +7,11 @@ export type EnemyKind =
   | "archer"
   | "brute"
   | "sapper"
+  | "sniper"
+  | "mortar"
+  | "sharder"
+  | "hexer"
+  | "charger"
   | "elite"
   | "boss";
 
@@ -40,6 +45,24 @@ export type EnemyDef = {
   attackCooldown?: number;
   attackDamage?: number;
   projectileSpeed?: number;
+  projectileRadius?: number;
+  projectileColor?: string;
+  /** Mortar / bomb shells explode for this AoE radius. */
+  projectileAoe?: number;
+  /** Fire a fan of N projectiles (sharder). */
+  projectileCount?: number;
+  /** Half-angle spread in radians for multi-shot. */
+  projectileSpread?: number;
+  /** Shell fuse time (mortar); explodes on timeout even if it misses. */
+  projectileLife?: number;
+  /** Hexer: apply this slow mul to the hero on hit. */
+  heroSlowMul?: number;
+  heroSlowDuration?: number;
+  /** Charger: burst speed when in range. */
+  dashSpeed?: number;
+  dashRange?: number;
+  dashDuration?: number;
+  dashCooldown?: number;
   /** Boss/elite telegraphed slam radius. */
   slamRadius?: number;
   slamDamage?: number;
@@ -59,7 +82,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 12,
     speed: 72,
     maxHp: 38,
-    contactDamage: 8,
+    contactDamage: 10,
     baseDamage: 10,
     goldReward: 5,
     turretDamage: 10,
@@ -74,7 +97,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 11,
     speed: 95,
     maxHp: 30,
-    contactDamage: 11,
+    contactDamage: 16,
     baseDamage: 6,
     goldReward: 6,
     turretDamage: 8,
@@ -87,9 +110,9 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     color: "#c43a6e",
     stroke: "#ff8ab8",
     radius: 13,
-    speed: 110,
+    speed: 115,
     maxHp: 34,
-    contactDamage: 14,
+    contactDamage: 22,
     baseDamage: 8,
     goldReward: 7,
     turretDamage: 16,
@@ -103,15 +126,16 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     stroke: "#a8c8ff",
     radius: 10,
     speed: 58,
-    maxHp: 24,
-    contactDamage: 3,
+    maxHp: 26,
+    contactDamage: 4,
     baseDamage: 5,
     goldReward: 6,
     ranged: true,
-    attackRange: 150,
-    attackCooldown: 1.35,
-    attackDamage: 9,
-    projectileSpeed: 280,
+    attackRange: 160,
+    attackCooldown: 1.05,
+    attackDamage: 18,
+    projectileSpeed: 320,
+    projectileRadius: 4,
     turretDamage: 6,
   },
   brute: {
@@ -124,7 +148,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 16,
     speed: 48,
     maxHp: 75,
-    contactDamage: 12,
+    contactDamage: 16,
     baseDamage: 16,
     goldReward: 9,
     turretDamage: 18,
@@ -139,10 +163,123 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 11,
     speed: 88,
     maxHp: 32,
-    contactDamage: 7,
+    contactDamage: 9,
     baseDamage: 8,
     goldReward: 8,
     turretDamage: 28,
+  },
+  sniper: {
+    kind: "sniper",
+    name: "Sniper",
+    intent: "hero",
+    shape: "triangle",
+    color: "#2a6a8a",
+    stroke: "#7ec8ff",
+    radius: 9,
+    speed: 42,
+    maxHp: 28,
+    contactDamage: 3,
+    baseDamage: 5,
+    goldReward: 10,
+    ranged: true,
+    attackRange: 300,
+    attackCooldown: 2.0,
+    attackDamage: 42,
+    projectileSpeed: 580,
+    projectileRadius: 3.5,
+    projectileColor: "#9ae0ff",
+    turretDamage: 5,
+  },
+  mortar: {
+    kind: "mortar",
+    name: "Mortar",
+    intent: "hero",
+    shape: "square",
+    color: "#8a5030",
+    stroke: "#ffb070",
+    radius: 14,
+    speed: 36,
+    maxHp: 58,
+    contactDamage: 6,
+    baseDamage: 12,
+    goldReward: 11,
+    ranged: true,
+    attackRange: 250,
+    attackCooldown: 2.5,
+    attackDamage: 30,
+    projectileSpeed: 150,
+    projectileRadius: 8,
+    projectileColor: "#ff9060",
+    projectileAoe: 88,
+    projectileLife: 1.6,
+    turretDamage: 10,
+  },
+  sharder: {
+    kind: "sharder",
+    name: "Sharder",
+    intent: "hero",
+    shape: "star",
+    color: "#7a3ab0",
+    stroke: "#d8a0ff",
+    radius: 11,
+    speed: 62,
+    maxHp: 36,
+    contactDamage: 5,
+    baseDamage: 7,
+    goldReward: 9,
+    ranged: true,
+    attackRange: 155,
+    attackCooldown: 1.55,
+    attackDamage: 12,
+    projectileSpeed: 280,
+    projectileRadius: 3.5,
+    projectileColor: "#e0b0ff",
+    projectileCount: 5,
+    projectileSpread: 0.58,
+    turretDamage: 7,
+  },
+  hexer: {
+    kind: "hexer",
+    name: "Hexer",
+    intent: "hero",
+    shape: "hex",
+    color: "#3a8a5a",
+    stroke: "#80ffb0",
+    radius: 12,
+    speed: 50,
+    maxHp: 40,
+    contactDamage: 4,
+    baseDamage: 6,
+    goldReward: 10,
+    ranged: true,
+    attackRange: 175,
+    attackCooldown: 1.75,
+    attackDamage: 16,
+    projectileSpeed: 210,
+    projectileRadius: 6.5,
+    projectileColor: "#60e090",
+    heroSlowMul: 0.38,
+    heroSlowDuration: 2.4,
+    turretDamage: 6,
+  },
+  charger: {
+    kind: "charger",
+    name: "Charger",
+    intent: "hero",
+    shape: "diamond",
+    color: "#c03030",
+    stroke: "#ff8080",
+    radius: 13,
+    speed: 72,
+    maxHp: 44,
+    contactDamage: 30,
+    baseDamage: 10,
+    goldReward: 9,
+    dashSpeed: 290,
+    dashRange: 160,
+    dashDuration: 0.38,
+    dashCooldown: 2.5,
+    turretDamage: 14,
   },
   elite: {
     kind: "elite",
@@ -154,11 +291,11 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 18,
     speed: 78,
     maxHp: 185,
-    contactDamage: 16,
+    contactDamage: 20,
     baseDamage: 22,
     goldReward: 22,
     slamRadius: 70,
-    slamDamage: 28,
+    slamDamage: 32,
     slamCooldown: 3.2,
     turretDamage: 22,
   },
@@ -172,11 +309,11 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     radius: 26,
     speed: 55,
     maxHp: 480,
-    contactDamage: 22,
+    contactDamage: 28,
     baseDamage: 40,
     goldReward: 60,
     slamRadius: 95,
-    slamDamage: 45,
+    slamDamage: 50,
     slamCooldown: 2.6,
     turretDamage: 30,
   },
@@ -202,19 +339,29 @@ export function waveTierLabel(tier: WaveTier): string {
 export function pickEnemyKind(wave: number, sent: boolean): EnemyKind {
   if (sent) {
     const roll = Math.random();
-    if (roll < 0.28) return "hunter";
-    if (roll < 0.45) return "berserker";
-    if (roll < 0.58) return "archer";
-    if (roll < 0.7) return "sapper";
-    if (roll < 0.82) return "brute";
+    if (wave >= 4 && roll < 0.1) return "sniper";
+    if (wave >= 3 && roll < 0.2) return "mortar";
+    if (wave >= 2 && roll < 0.3) return "sharder";
+    if (wave >= 2 && roll < 0.4) return "hexer";
+    if (wave >= 2 && roll < 0.52) return "charger";
+    if (roll < 0.62) return "hunter";
+    if (roll < 0.72) return "berserker";
+    if (roll < 0.82) return "archer";
+    if (roll < 0.9) return "sapper";
+    if (roll < 0.95) return "brute";
     return "grunt";
   }
 
   const roll = Math.random();
-  if (wave >= 3 && roll < 0.1) return "sapper";
-  if (wave >= 4 && roll < 0.22) return "brute";
-  if (wave >= 2 && roll < 0.36) return "hunter";
-  if (wave >= 2 && roll < 0.48) return "berserker";
-  if (wave >= 3 && roll < 0.6) return "archer";
+  if (wave >= 5 && roll < 0.09) return "sniper";
+  if (wave >= 4 && roll < 0.18) return "mortar";
+  if (wave >= 3 && roll < 0.28) return "sharder";
+  if (wave >= 3 && roll < 0.38) return "hexer";
+  if (wave >= 2 && roll < 0.5) return "charger";
+  if (wave >= 3 && roll < 0.58) return "sapper";
+  if (wave >= 4 && roll < 0.66) return "brute";
+  if (wave >= 2 && roll < 0.76) return "hunter";
+  if (wave >= 2 && roll < 0.86) return "berserker";
+  if (wave >= 2 && roll < 0.94) return "archer";
   return "grunt";
 }

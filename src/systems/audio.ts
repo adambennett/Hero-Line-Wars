@@ -13,6 +13,13 @@ type SfxKind =
   | "ui";
 
 let ctx: AudioContext | null = null;
+/** When false, combat/lane SFX are suppressed (off-screen lane sim). UI always plays. */
+let laneSfxEnabled = true;
+
+/** Gate lane combat audio — call around dual-lane simulation. */
+export function setLaneSfxEnabled(on: boolean): void {
+  laneSfxEnabled = on;
+}
 
 function audio(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -76,6 +83,8 @@ function noiseBurst(ac: AudioContext, dur: number, gain: number, lowpass = 1200)
 }
 
 export function playSfx(kind: SfxKind): void {
+  // Menu / chrome clicks always audible; lane combat respects the view gate
+  if (kind !== "ui" && !laneSfxEnabled) return;
   const ac = audio();
   if (!ac) return;
   const m = masterGain();

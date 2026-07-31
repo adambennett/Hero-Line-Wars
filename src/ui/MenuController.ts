@@ -24,6 +24,28 @@ import {
   type CombatAction,
   type DamageScreenFx,
 } from "./settings";
+import { RECIPES, type RecipeId } from "../ai/brain";
+import {
+  deleteSchool,
+  loadAiStore,
+  saveTrainingResult,
+  setSelectedOpponent,
+  type AiSelection,
+  type AiStore,
+} from "../ai/store";
+import { isTraining, runTraining, stopTraining, type TrainProgress } from "../ai/train";
+import {
+  ASCENSIONS,
+  ascensionLabel,
+} from "../meta/ascension";
+import {
+  getRank,
+  isHeroUnlocked,
+  loadMetaStore,
+  purchaseUpgrade,
+} from "../meta/store";
+import { META_UPGRADES, nextCost } from "../meta/upgrades";
+import { unlockAudio } from "../systems/audio";
 
 export type { MatchMode, MatchPrivacy } from "../net/types";
 
@@ -35,7 +57,9 @@ export type MenuScreen =
   | "compendium"
   | "game-info"
   | "settings"
-  | "controls";
+  | "controls"
+  | "ai-lab"
+  | "barracks";
 
 export type MatchRole = "host" | "join";
 
@@ -102,6 +126,7 @@ export class MenuController {
   private spStartingGold = STARTING_GOLD;
   private spWavesToWin = WIN_WAVES;
   private spFriendlyFire = false;
+  private spAscension = 0;
   private settings: ClientSettings = loadSettings();
   private compendiumTab: CompTab = "heroes";
   private compSearch = "";
@@ -110,6 +135,7 @@ export class MenuController {
   private toast = "";
   private rebinding: CombatAction | null = null;
   private unbindListen: (() => void) | null = null;
+  private trainProgress: TrainProgress | null = null;
 
   constructor(root: HTMLElement, callbacks: MenuCallbacks) {
     this.root = root;
@@ -161,6 +187,10 @@ export class MenuController {
 
     switch (action) {
       case "goto":
+        if (t.dataset.screen === "multiplayer") {
+          this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
+          break;
+        }
         this.go(t.dataset.screen as MenuScreen);
         break;
       case "quit":
@@ -168,15 +198,21 @@ export class MenuController {
         break;
       case "pick-hero":
         this.selectedHero = t.dataset.heroId as HeroId;
-        this.render();
+        if (this.screen === "singleplayer") this.paintSpHeroSelection();
+        else this.render();
         break;
       case "play-sp":
+        if (!isHeroUnlocked(this.selectedHero)) {
+          this.setToast("Commission that hero in the Barracks first.");
+          break;
+        }
         this.callbacks.onStartSingleplayer(this.selectedHero, {
           mapId: this.spMapChoice,
           maxTurrets: this.spMaxTurrets,
           startingGold: this.spStartingGold,
           wavesToWin: this.spWavesToWin,
           friendlyFire: this.spFriendlyFire,
+          ascension: this.spAscension,
         });
         break;
       case "set-sp-map":
@@ -218,8 +254,6 @@ export class MenuController {
         );
         break;
       case "mp-continue":
-        this.go("mp-options");
-        break;
       case "mp-stub":
       case "mp-connect":
         this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
@@ -251,6 +285,26 @@ export class MenuController {
       case "cancel-rebind":
         this.stopRebindListen();
         this.render();
+        break;
+      case "ai-start":
+        void this.startAiTraining();
+        break;
+      case "ai-stop":
+        stopTraining();
+        {
+          const st = this.root.querySelector("#ai-status");
+          if (st) st.textContent = "Stopping…";
+        }
+        break;
+      case "ai-del-school":
+        deleteSchool(t.dataset.school!);
+        this.render();
+        break;
+      case "buy-meta":
+        {
+          const res = purchaseUpgrade(t.dataset.upgradeId as import("../meta/upgrades").MetaUpgradeId);
+          this.setToast(res.message);
+        }
         break;
       default:
         break;
@@ -380,7 +434,44 @@ export class MenuController {
       this.spWavesToWin = Number(el.value);
     } else if (el.dataset.field === "sp-friendly-fire") {
       this.spFriendlyFire = el.value === "1";
+    } else if (el.dataset.field === "sp-turrets") {
+      this.spMaxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
+    } else if (el.dataset.field === "sp-ascension") {
+      this.spAscension = Number(el.value) || 0;
+      this.paintSpRunMeta();
+    } else if (el.dataset.field === "sp-map") {
+      this.spMapChoice = el.value as MapId | "random";
+    } else if (el.dataset.field === "sp-opponent-ai") {
+      setSelectedOpponent(parseAiSelectValue(el.value));
+    } else if (el.dataset.field === "ai-opponent") {
+      setSelectedOpponent(parseAiSelectValue(el.value));
     }
+  }
+
+  private async startAiTraining(): Promise<void> {
+    if (isTraining()) return;
+    unlockAudio();
+    const recipe = (this.root.querySelector("#ai-recipe") as HTMLSelectElement)?.value as RecipeId;
+    const gens = Number((this.root.querySelector("#ai-gens") as HTMLInputElement)?.value);
+    const pop = Number((this.root.querySelector("#ai-pop") as HTMLInputElement)?.value);
+    const trials = Number((this.root.querySelector("#ai-trials") as HTMLInputElement)?.value);
+    const maxSeconds = Number((this.root.querySelector("#ai-seconds") as HTMLInputElement)?.value) || 180;
+    const name =
+      ((this.root.querySelector("#ai-name") as HTMLInputElement)?.value || recipe).trim() || recipe;
+    const startBtn = this.root.querySelector("#ai-start") as HTMLButtonElement | null;
+    const stopBtn = this.root.querySelector("#ai-stop") as HTMLButtonElement | null;
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+
+    const result = await runTraining({ recipe, gens, pop, trials, maxSeconds }, (p) => {
+      this.trainProgress = p;
+      const st = this.root.querySelector("#ai-status");
+      if (st) st.textContent = p.message;
+    });
+
+    if (result) saveTrainingResult(name, recipe, result);
+    this.trainProgress = null;
+    if (this.screen === "ai-lab") this.render();
   }
 
   private quit(): void {
@@ -396,6 +487,8 @@ export class MenuController {
   }
 
   private render(): void {
+    const prevShell = this.root.querySelector(".menu-shell");
+    const scroll = prevShell?.scrollTop ?? 0;
     const toastHtml = this.toast ? `<p class="menu-toast">${escapeHtml(this.toast)}</p>` : "";
     this.toast = "";
 
@@ -425,15 +518,24 @@ export class MenuController {
       case "controls":
         body = this.renderControls();
         break;
+      case "ai-lab":
+        body = this.renderAiLab();
+        break;
+      case "barracks":
+        body = this.renderBarracks();
+        break;
     }
 
     this.root.innerHTML = `
       <div class="menu-backdrop"></div>
-      <div class="menu-shell">
+      <div class="menu-shell${this.screen === "singleplayer" ? " tight" : ""}">
         ${body}
         ${toastHtml}
       </div>
     `;
+
+    const shell = this.root.querySelector(".menu-shell");
+    if (shell) shell.scrollTop = scroll;
 
     if (this.screen === "compendium" && this.compendiumTab === "maps") {
       this.paintMapThumbs();
@@ -497,6 +599,8 @@ export class MenuController {
       <nav class="menu-nav">
         <button type="button" class="menu-btn primary" data-action="goto" data-screen="singleplayer">Singleplayer</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="multiplayer">Multiplayer</button>
+        <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Barracks</button>
+        <button type="button" class="menu-btn" data-action="goto" data-screen="ai-lab">AI Lab</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="compendium">Compendium</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="game-info">Game Info</button>
         <button type="button" class="menu-btn" data-action="goto" data-screen="settings">Settings</button>
@@ -523,6 +627,37 @@ export class MenuController {
         return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
+    const turretOpts = [1, 2, 3, 4, 5, 6]
+      .map(
+        (n) =>
+          `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
+      )
+      .join("");
+    if (scope === "sp") {
+      return `
+        <div class="run-grid cols-4">
+          <label class="run-field">
+            <span>Turrets</span>
+            <select data-field="sp-turrets">${turretOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Starting gold</span>
+            <select data-field="sp-starting-gold">${goldOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Waves to win</span>
+            <select data-field="sp-waves-to-win">${waveOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Friendly fire</span>
+            <select data-field="sp-friendly-fire">
+              <option value="0" ${!ff ? "selected" : ""}>Off</option>
+              <option value="1" ${ff ? "selected" : ""}>On</option>
+            </select>
+          </label>
+        </div>
+      `;
+    }
     return `
       <label class="setting-row">
         <span>Max turrets <em id="${scope}-turret-label">${turrets}</em></span>
@@ -546,51 +681,138 @@ export class MenuController {
     `;
   }
 
-  private renderSingleplayer(): string {
+  private spHeroDetailHtml(): string {
     const kb = this.settings.keybinds;
+    const meta = loadMetaStore();
+    const h = HERO_LIST.find((x) => x.id === this.selectedHero) ?? HERO_LIST[0]!;
+    const unlocked = isHeroUnlocked(h.id, meta);
+    if (!unlocked) {
+      return `
+        <div class="sp-hero-detail-inner locked">
+          <span class="hero-swatch" style="--hero:${h.color}"></span>
+          <strong>${escapeHtml(h.name)} · Locked</strong>
+          <p class="sp-hero-locked">Commission this hero in the Barracks to unlock.</p>
+        </div>
+      `;
+    }
+    const [mobility, ultimate] = h.abilities;
+    return `
+      <div class="sp-hero-detail-inner">
+        <span class="hero-swatch" style="--hero:${h.color}"></span>
+        <strong style="color:${h.color}">${escapeHtml(h.name)}</strong>
+        <p class="sp-hero-blurb">${escapeHtml(h.blurb)}</p>
+        <ul class="hero-abilities">
+          <li><em>Passive</em> ${escapeHtml(h.passive.name)} — ${escapeHtml(h.passive.blurb)}</li>
+          <li><kbd>${formatBinding(kb.attack)}</kbd> ${escapeHtml(h.attackHint)}</li>
+          <li><kbd>${formatBinding(kb.mobility)}</kbd> ${escapeHtml(mobility.name)} — ${escapeHtml(mobility.hint)}</li>
+          <li><kbd>${formatBinding(kb.ultimate)}</kbd> ${escapeHtml(ultimate.name)} — ${escapeHtml(ultimate.hint)}</li>
+        </ul>
+      </div>
+    `;
+  }
+
+  private paintSpHeroSelection(): void {
+    this.root.querySelectorAll<HTMLElement>(".hero-card[data-hero-id]").forEach((card) => {
+      card.classList.toggle("selected", card.dataset.heroId === this.selectedHero);
+    });
+    const detail = this.root.querySelector("#sp-hero-detail");
+    if (detail) detail.innerHTML = this.spHeroDetailHtml();
+  }
+
+  private paintSpRunMeta(): void {
+    const play = this.root.querySelector<HTMLElement>("[data-action='play-sp']");
+    if (play) play.textContent = `Play · ${ascensionLabel(this.spAscension)}`;
+  }
+
+  private renderSingleplayer(): string {
+    const meta = loadMetaStore();
+    this.spAscension = Math.min(this.spAscension, meta.ascensionUnlocked);
     const cards = HERO_LIST.map((h) => {
       const selected = h.id === this.selectedHero;
-      const [mobility, ultimate] = h.abilities;
+      const unlocked = isHeroUnlocked(h.id, meta);
       return `
-        <button type="button" class="hero-card ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
+        <button type="button" class="hero-card compact ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong>${escapeHtml(h.name)}</strong>
-          <span>${escapeHtml(h.blurb)}</span>
-          <ul class="hero-abilities">
-            <li><em>Passive</em> ${escapeHtml(h.passive.name)} — ${escapeHtml(h.passive.blurb)}</li>
-            <li><kbd>${formatBinding(kb.attack)}</kbd> ${escapeHtml(h.attackHint)}</li>
-            <li><kbd>${formatBinding(kb.mobility)}</kbd> ${escapeHtml(mobility.name)}</li>
-            <li><kbd>${formatBinding(kb.ultimate)}</kbd> ${escapeHtml(ultimate.name)}</li>
-          </ul>
+          <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
         </button>
       `;
     }).join("");
 
-    const mapChips = [
-      `<button type="button" class="chip ${this.spMapChoice === "random" ? "selected" : ""}" data-action="set-sp-map" data-map-id="random">Random</button>`,
+    const mapOpts = [
+      `<option value="random" ${this.spMapChoice === "random" ? "selected" : ""}>Random</option>`,
       ...MAP_LIST.map(
         (m) =>
-          `<button type="button" class="chip ${this.spMapChoice === m.id ? "selected" : ""}" data-action="set-sp-map" data-map-id="${m.id}">${escapeHtml(m.name)}</button>`,
+          `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`,
       ),
     ].join("");
 
+    const store = loadAiStore();
+    const aiOpts = aiSelectOptions(store, store.selected);
+    const ascOpts = Array.from({ length: meta.ascensionUnlocked + 1 }, (_, i) => {
+      const def = ASCENSIONS[i]!;
+      return `<option value="${i}" ${this.spAscension === i ? "selected" : ""}>A${i} · ${escapeHtml(def.name)}</option>`;
+    }).join("");
+
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Singleplayer</h1>
-        <p class="menu-sub">Choose a hero and tune the run.</p>
+      <header class="menu-header compact sp-header">
+        <div class="sp-header-row">
+          <div class="sp-header-titles">
+            <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+            <h1 class="menu-title">Singleplayer</h1>
+          </div>
+          <div class="sp-header-links">
+            <button type="button" class="menu-btn small ghost" data-action="goto" data-screen="barracks">Barracks</button>
+            <button type="button" class="menu-btn small ghost" data-action="goto" data-screen="ai-lab">AI Lab</button>
+          </div>
+        </div>
+        <div class="sp-stat-strip" aria-label="Progress">
+          <div class="sp-stat crest">
+            <span class="sp-stat-label">Crests</span>
+            <strong>${meta.crests}</strong>
+          </div>
+          <div class="sp-stat">
+            <span class="sp-stat-label">Wins</span>
+            <strong>${meta.totalWins}</strong>
+          </div>
+          <div class="sp-stat">
+            <span class="sp-stat-label">Best wave</span>
+            <strong>${meta.bestWave}</strong>
+          </div>
+          <div class="sp-stat">
+            <span class="sp-stat-label">Max Asc</span>
+            <strong>A${meta.ascensionUnlocked}</strong>
+          </div>
+        </div>
       </header>
-      <section class="menu-section">
-        <h2>Map</h2>
-        <div class="choice-row wrap">${mapChips}</div>
-      </section>
-      <section class="menu-section muted-box">
-        <h2>Run Options</h2>
+
+      <section class="sp-setup">
+        <h2 class="sp-setup-title">Run setup</h2>
+        <div class="run-grid cols-3">
+          <label class="run-field">
+            <span>Map</span>
+            <select data-field="sp-map">${mapOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Ascension</span>
+            <select data-field="sp-ascension">${ascOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Opponent AI</span>
+            <select data-field="sp-opponent-ai">${aiOpts}</select>
+          </label>
+        </div>
         ${this.runOptionsFields("sp")}
       </section>
-      <div class="hero-grid">${cards}</div>
-      <div class="menu-footer">
-        <button type="button" class="menu-btn primary wide" data-action="play-sp">Play</button>
+
+      <section class="sp-heroes">
+        <h2 class="sp-heroes-title">Hero</h2>
+        <div class="hero-grid compact">${cards}</div>
+        <div id="sp-hero-detail" class="sp-hero-detail">${this.spHeroDetailHtml()}</div>
+      </section>
+
+      <div class="menu-footer sp-footer">
+        <button type="button" class="menu-btn primary wide" data-action="play-sp">Play · ${escapeHtml(ascensionLabel(this.spAscension))}</button>
       </div>
     `;
   }
@@ -610,7 +832,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Multiplayer</h1>
-        <p class="menu-sub">PeerJS online lobbies — private codes or public find-match.</p>
+        <p class="menu-lead">PeerJS lobbies — private codes or public find-match.</p>
       </header>
       <section class="menu-section">
         <h2>Mode</h2>
@@ -629,7 +851,7 @@ export class MenuController {
       </section>
       ${this.renderLobbyDetails()}
       <div class="menu-footer">
-        <button type="button" class="menu-btn primary wide" data-action="mp-continue">Continue</button>
+        <button type="button" class="menu-btn primary wide" data-action="mp-continue">Go online</button>
       </div>
     `;
   }
@@ -664,7 +886,6 @@ export class MenuController {
   }
 
   private renderMpOptions(): string {
-    const summary = `${labelForMode(this.lobby.mode)} · ${capitalize(this.lobby.privacy)} · ${capitalize(this.lobby.role)}`;
     const mapChips = [
       `<button type="button" class="chip ${this.lobby.mapChoice === "random" ? "selected" : ""}" data-action="set-mp-map" data-map-id="random">Random</button>`,
       ...MAP_LIST.map(
@@ -678,7 +899,7 @@ export class MenuController {
         ? `
           <section class="menu-section muted-box">
             <h2>Game Options</h2>
-            <p class="menu-sub">Host-only run settings applied when the match starts.</p>
+            <p class="menu-note">Host-only — applied when the match starts.</p>
             <h3 class="comp-subhead">Map</h3>
             <div class="choice-row wrap">${mapChips}</div>
             ${this.runOptionsFields("mp")}
@@ -694,14 +915,19 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="multiplayer">← Back</button>
         <h1 class="menu-title">Lobby</h1>
-        <p class="menu-sub">${escapeHtml(summary)}</p>
+        <p class="menu-lead">Confirm mode and run options, then go online.</p>
       </header>
+      <div class="choice-row wrap" style="margin-bottom:1rem">
+        <span class="chip selected">${escapeHtml(labelForMode(this.lobby.mode))}</span>
+        <span class="chip">${escapeHtml(capitalize(this.lobby.privacy))}</span>
+        <span class="chip">${escapeHtml(capitalize(this.lobby.role))}</span>
+      </div>
       ${hostBits}
       <div class="menu-footer stack">
         <button type="button" class="menu-btn primary wide" data-action="mp-connect">
           ${this.lobby.role === "host" ? "Open online lobby" : "Join online lobby"}
         </button>
-        <p class="menu-footnote">Uses PeerJS relay · host simulates both lanes.</p>
+        <p class="menu-note">PeerJS relay · host simulates both lanes.</p>
       </div>
     `;
   }
@@ -807,8 +1033,8 @@ export class MenuController {
               return `
             <article class="comp-card compact">
               <h3>${escapeHtml(d.name)}</h3>
-              <p>Intent: <strong>${escapeHtml(d.intent)}</strong></p>
-              <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s · Gold ${d.goldReward}</p>
+              <p>Intent: <strong>${escapeHtml(d.intent)}</strong>${d.ranged ? " · ranged" : ""}${d.dashSpeed ? " · dash" : ""}${d.projectileAoe ? " · AoE shell" : ""}</p>
+              <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s${d.attackDamage ? ` · Shot ${d.attackDamage}` : ""} · Gold ${d.goldReward}</p>
             </article>`;
             })
             .join("");
@@ -867,7 +1093,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Compendium</h1>
-        <p class="menu-sub">Browse by category — cards, sections, and quick filters.</p>
+        <p class="menu-lead">Browse heroes, items, relics, enemies, and maps.</p>
       </header>
       <div class="choice-row">${tabs}</div>
       <div class="comp-toolbar">
@@ -891,7 +1117,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Game Info</h1>
-        <p class="menu-sub">How Hero Line Wars works — especially sending.</p>
+        <p class="menu-lead">How the lane, sends, and combat loop work.</p>
       </header>
       <div class="info-stack">
         <section class="info-block">
@@ -935,10 +1161,10 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Settings</h1>
-        <p class="menu-sub">Client preferences (saved locally). Master volume also scales SFX.</p>
+        <p class="menu-lead">Client preferences — saved in this browser.</p>
       </header>
       <section class="menu-section settings-list">
-        <button type="button" class="setting-row linkish" data-action="goto" data-screen="controls">
+        <button type="button" class="setting-row setting-nav" data-action="goto" data-screen="controls">
           <span>Controls<em>Remap mouse / keys</em></span>
           <span class="chevron">›</span>
         </button>
@@ -990,7 +1216,7 @@ export class MenuController {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="settings">← Back</button>
         <h1 class="menu-title">Controls</h1>
-        <p class="menu-sub">Defaults: LMB attack · RMB mobility · MMB ultimate. Click a binding to remap.</p>
+        <p class="menu-lead">Defaults: LMB attack, RMB mobility, MMB ultimate.</p>
       </header>
       <section class="menu-section settings-list">
         ${rows}
@@ -1002,6 +1228,185 @@ export class MenuController {
       }
     `;
   }
+
+  private renderAiLab(): string {
+    const store = loadAiStore();
+    const prog = this.trainProgress;
+    const recipeOpts = Object.values(RECIPES)
+      .map((r) => `<option value="${r.id}">${escapeHtml(r.name)} — ${escapeHtml(r.desc)}</option>`)
+      .join("");
+    const oppOpts = aiSelectOptions(store, store.selected);
+    const schools =
+      store.schools.length === 0
+        ? `<p class="menu-note">No trained schools yet — Classic AI will be used.</p>`
+        : store.schools
+            .map((s) => {
+              let gen = "?";
+              try {
+                gen = String((JSON.parse(s.champion) as { gen?: number }).gen ?? "?");
+              } catch {
+                /* ignore */
+              }
+              return `
+            <div class="history-row">
+              <strong>${escapeHtml(s.name)}</strong>
+              <span>${escapeHtml(s.recipe)} · gen ${escapeHtml(gen)} · ${escapeHtml(new Date(s.trainedAt).toLocaleDateString())}
+                <button type="button" class="menu-btn ghost" data-action="ai-del-school" data-school="${escapeHtml(s.name)}" style="padding:0.2rem 0.5rem;margin-left:0.5rem">Delete</button>
+              </span>
+            </div>`;
+            })
+            .join("");
+
+    return `
+      <header class="menu-header compact">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <h1 class="menu-title">AI Lab</h1>
+        <p class="menu-lead">Train brains on unlimited-wave duels. Checkpoints become difficulty tiers.</p>
+      </header>
+
+      <section class="menu-section muted-box">
+        <h2>Opponent for matches</h2>
+        <label class="setting-row">
+          <span>Selected AI</span>
+          <select data-field="ai-opponent">${oppOpts}</select>
+        </label>
+      </section>
+
+      <section class="menu-section muted-box">
+        <h2>Train</h2>
+        <label class="setting-row">
+          <span>Recipe</span>
+          <select id="ai-recipe">${recipeOpts}</select>
+        </label>
+        <div class="choice-row wrap" style="gap:0.75rem">
+          <label class="setting-row" style="flex:1;min-width:5rem">
+            <span>Gens</span>
+            <input type="number" id="ai-gens" min="3" max="40" value="10" />
+          </label>
+          <label class="setting-row" style="flex:1;min-width:5rem">
+            <span>Pop</span>
+            <input type="number" id="ai-pop" min="4" max="24" value="8" />
+          </label>
+          <label class="setting-row" style="flex:1;min-width:5rem">
+            <span>Trials</span>
+            <input type="number" id="ai-trials" min="1" max="6" value="2" />
+          </label>
+          <label class="setting-row" style="flex:1;min-width:5rem">
+            <span>Duel cap (s)</span>
+            <input type="number" id="ai-seconds" min="60" max="400" value="180" />
+          </label>
+        </div>
+        <label class="setting-row">
+          <span>School name</span>
+          <input id="ai-name" maxlength="24" value="balanced" />
+        </label>
+        <p class="menu-note" id="ai-status">${escapeHtml(
+          prog
+            ? prog.message
+            : store.schools.length
+              ? `${store.schools.length} school(s) saved.`
+              : "No trained schools yet — Classic AI will be used.",
+        )}</p>
+        <div class="choice-row">
+          <button type="button" class="menu-btn primary" id="ai-start" data-action="ai-start" ${isTraining() ? "disabled" : ""}>Start training</button>
+          <button type="button" class="menu-btn" id="ai-stop" data-action="ai-stop" ${isTraining() ? "" : "disabled"}>Stop</button>
+        </div>
+      </section>
+
+      <section class="menu-section">
+        <h2>Schools</h2>
+        <div class="history-list">${schools}</div>
+      </section>
+    `;
+  }
+
+  private renderBarracks(): string {
+    const store = loadMetaStore();
+    const rows = META_UPGRADES.map((u) => {
+      const rank = getRank(store, u.id);
+      const cost = nextCost(u.id, rank);
+      const maxed = cost == null;
+      const canBuy = !maxed && store.crests >= cost!;
+      const rankLabel = u.kind === "unlock" ? (rank >= 1 ? "Owned" : "Locked") : `Rank ${rank}/${u.maxRank}`;
+      return `
+        <div class="meta-row">
+          <div>
+            <strong>${escapeHtml(u.name)}</strong>
+            <span class="stat-hint">${escapeHtml(u.blurb)}</span>
+            <em>${escapeHtml(rankLabel)}</em>
+          </div>
+          <button type="button" class="menu-btn ${canBuy ? "primary" : ""}" data-action="buy-meta" data-upgrade-id="${u.id}" ${maxed || !canBuy ? "disabled" : ""}>
+            ${maxed ? "Max" : `${cost} crests`}
+          </button>
+        </div>`;
+    }).join("");
+
+    const ascName = ASCENSIONS.find((a) => a.level === store.ascensionUnlocked)?.name ?? "Standard";
+
+    return `
+      <header class="menu-header compact">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <h1 class="menu-title">Barracks</h1>
+        <p class="menu-lead">Permanent upgrades bought with War Crests.</p>
+      </header>
+      <div class="menu-hero-stats" aria-label="Progression summary">
+        <div class="stat-tile stat-crest">
+          <p class="stat-label">War Crests</p>
+          <p class="stat-value">${store.crests}</p>
+          <p class="stat-hint">Spend below · earn on run end</p>
+        </div>
+        <div class="stat-tile">
+          <p class="stat-label">Wins</p>
+          <p class="stat-value">${store.totalWins}</p>
+          <p class="stat-hint">${store.totalRuns} runs total</p>
+        </div>
+        <div class="stat-tile">
+          <p class="stat-label">Best wave</p>
+          <p class="stat-value">${store.bestWave}</p>
+          <p class="stat-hint">Highest reached</p>
+        </div>
+        <div class="stat-tile">
+          <p class="stat-label">Ascension</p>
+          <p class="stat-value">A${store.ascensionUnlocked}</p>
+          <p class="stat-hint">${escapeHtml(ascName)} unlocked</p>
+        </div>
+      </div>
+      <section class="menu-section muted-box meta-list">
+        <h2>Upgrades</h2>
+        ${rows}
+      </section>
+      <p class="menu-note">Win at your highest Ascension to unlock the next. Crest payouts scale with waves, sends, and Ascension.</p>
+    `;
+  }
+}
+
+function aiSelectOptions(store: AiStore, selected: AiSelection): string {
+  const classic = `<option value="classic" ${selected.kind === "classic" ? "selected" : ""}>Classic (abstract)</option>`;
+  const schools = store.schools
+    .map((s) => {
+      const tiers = ["rookie", "steady", "sharp", "brutal"] as const;
+      return tiers
+        .map((tier) => {
+          const val = `${s.name}::${tier}`;
+          const sel =
+            selected.kind === "neural" && selected.school === s.name && selected.tier === tier
+              ? "selected"
+              : "";
+          return `<option value="${escapeHtml(val)}" ${sel}>${escapeHtml(s.name)} · ${tier}</option>`;
+        })
+        .join("");
+    })
+    .join("");
+  return classic + schools;
+}
+
+function parseAiSelectValue(v: string): AiSelection {
+  if (v === "classic") return { kind: "classic" };
+  const [school, tier] = v.split("::");
+  if (school && (tier === "rookie" || tier === "steady" || tier === "sharp" || tier === "brutal")) {
+    return { kind: "neural", school, tier };
+  }
+  return { kind: "classic" };
 }
 
 function sortByRarityOrName<T>(

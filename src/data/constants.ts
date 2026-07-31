@@ -73,8 +73,14 @@ export const DAMAGE_FEEDBACK = {
   shakeAmp: 7,
 };
 
-/** Seconds of near-zero movement before unstuck kicks in. */
-export const ENEMY_STUCK_SEC = 1.35;
+/** Seconds of near-zero / blocked movement before a bypass hop. */
+export const ENEMY_STUCK_SEC = 1.15;
+/** After this many failed nudges, allow a slightly larger hop (still local). */
+export const ENEMY_STUCK_ESCALATE = 3;
+/** Cumulative blocked time before despawn (soft-lock breaker). */
+export const ENEMY_STUCK_DESPAWN_SEC = 16;
+/** Ranged units stop camping and push after this many seconds of hold-fire. */
+export const ENEMY_CAMP_BREAK_SEC = 2.4;
 
 /** Wave HP / count scaling knobs. */
 export const WAVE_SCALE = {

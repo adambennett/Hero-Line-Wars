@@ -97,7 +97,7 @@ export const SEND_PACKS: SendPackDef[] = [
     incomeBonus: 3,
     hpScale: 1.9,
     blurb: "+8 elite pressure · +3/s",
-    detail: "Max pack at Base Lv 4. Huge income and elite-weight sends.",
+    detail: "Unlocks at Base Lv 4. Keeps scaling with further base upgrades — no max level.",
   },
 ];
 
@@ -114,6 +114,7 @@ export function baseLevelSendHpBonus(baseLevel: number): number {
 /**
  * Upgrading the base strengthens already-unlocked packs:
  * +12% cost, +8% income, +6% HP per base level above the pack's unlock.
+ * Past Base Lv 4 the final packs keep scaling (slightly faster).
  */
 export function baseUpgradePackMul(baseLevel: number, pack: SendPackDef): {
   costMul: number;
@@ -121,9 +122,10 @@ export function baseUpgradePackMul(baseLevel: number, pack: SendPackDef): {
   hpMul: number;
 } {
   const steps = Math.max(0, baseLevel - pack.minBaseLevel);
+  const late = Math.max(0, baseLevel - 4);
   return {
-    costMul: 1 + steps * 0.12,
-    incomeMul: 1 + steps * 0.08,
-    hpMul: 1 + steps * 0.06,
+    costMul: 1 + steps * 0.12 + late * 0.04,
+    incomeMul: 1 + steps * 0.08 + late * 0.05,
+    hpMul: 1 + steps * 0.06 + late * 0.04,
   };
 }

@@ -1,3 +1,4 @@
+import type { NeuralLaneAi } from "../ai/runtime";
 import { HEROES, HERO_LIST, type HeroId } from "../data/heroes";
 import { resolveMapChoice, type MapId } from "../data/maps";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
@@ -15,6 +16,12 @@ export type MpMatch = {
   viewTeam: MpTeam;
   ended: boolean;
   winnerTeam: MpTeam | null;
+  /** Optional neural controllers per lane (null = scripted if aiControlled). */
+  laneAi: [NeuralLaneAi | null, NeuralLaneAi | null];
+  /** Offline solo vs real AI lane (no PeerJS). */
+  soloOffline?: boolean;
+  /** Display name for opponent panel. */
+  opponentLabel?: string;
 };
 
 function makeHeroRuntime(
@@ -138,6 +145,75 @@ export function buildMpMatch(
     viewTeam: myTeam,
     ended: false,
     winnerTeam: null,
+    laneAi: [null, null],
+  };
+}
+
+/** Offline dual-lane: human on team 0, AI on team 1 (classic scripted or neural). */
+export function buildSoloVsAiMatch(opts: {
+  playerHeroId: HeroId;
+  aiHeroId?: HeroId;
+  mapId: MapId | "random";
+  maxTurrets: number;
+  seed: number;
+  startingGold: number;
+  wavesToWin: number;
+  friendlyFire: boolean;
+  neural?: NeuralLaneAi | null;
+  opponentLabel?: string;
+  playerModifiers?: import("../meta/modifiers").RunModifiers;
+  enemyModifiers?: import("../meta/modifiers").RunModifiers;
+}): MpMatch {
+  const resolved = resolveMapChoice(opts.mapId);
+  const aiHero =
+    opts.aiHeroId ??
+    (() => {
+      const pool = HERO_LIST.filter((h) => h.id !== opts.playerHeroId);
+      return (pool.length ? pool : HERO_LIST)[opts.seed % (pool.length || HERO_LIST.length)]!.id;
+    })();
+
+  const sharedBase = {
+    mapId: resolved,
+    maxTurrets: opts.maxTurrets,
+    startingGold: opts.startingGold,
+    wavesToWin: opts.wavesToWin,
+    friendlyFire: opts.friendlyFire,
+  };
+
+  const lane0 = createState(opts.playerHeroId, {
+    ...sharedBase,
+    modifiers: opts.playerModifiers,
+    ascension: opts.playerModifiers?.ascension ?? 0,
+  });
+  lane0.mpLane = true;
+  populateLane(lane0, [{ slot: 0, heroId: opts.playerHeroId }], 10);
+
+  const lane1 = createState(aiHero, {
+    ...sharedBase,
+    modifiers: opts.enemyModifiers,
+    ascension: opts.enemyModifiers?.ascension ?? opts.playerModifiers?.ascension ?? 0,
+  });
+  lane1.mpLane = true;
+  lane1.aiControlled = true;
+  populateLane(lane1, [{ slot: -1, heroId: aiHero }], 20);
+
+  lane0.viewOpponentLane = false;
+  lane1.viewOpponentLane = false;
+
+  return {
+    mode: "1v1",
+    mapId: resolved,
+    maxTurrets: opts.maxTurrets,
+    seed: opts.seed,
+    lanes: [lane0, lane1],
+    mySlot: 0,
+    myTeam: 0,
+    viewTeam: 0,
+    ended: false,
+    winnerTeam: null,
+    laneAi: [null, opts.neural ?? null],
+    soloOffline: true,
+    opponentLabel: opts.opponentLabel,
   };
 }
 
