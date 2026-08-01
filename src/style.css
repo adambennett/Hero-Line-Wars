@@ -808,30 +808,6 @@ select.menu-input option {
   margin: 0.2rem 0 0;
 }
 
-.hero-card-art {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  object-fit: cover;
-  border: 1px solid #2c3d5c;
-  background: #0a101c;
-  pointer-events: none;
-}
-
-.comp-hero-art {
-  margin-left: auto;
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  object-fit: cover;
-  border: 1px solid #2c3d5c;
-  background: #0a101c;
-  flex-shrink: 0;
-}
-
 .relic-comp-top h3 {
   margin: 0.2rem 0 0;
 }
@@ -1479,6 +1455,21 @@ select.menu-input option {
   font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
 }
 
+.menu-version {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: 2;
+  margin: 0;
+  pointer-events: none;
+  font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: rgba(130, 148, 176, 0.5);
+  user-select: none;
+}
+
 .menu-header.main-hero {
   margin-bottom: 1.6rem;
   max-width: min(720px, 100%);
@@ -1861,7 +1852,7 @@ select.menu-input option {
 .hero-grid.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  width: min(920px, 100%);
+  width: 100%;
 }
 
 @media (max-width: 720px) {
@@ -1883,6 +1874,39 @@ select.menu-input option {
   font: inherit;
   cursor: pointer;
   position: relative;
+  overflow: hidden;
+}
+
+.hero-card.shine-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 28%,
+    rgba(255, 255, 255, 0.18) 48%,
+    transparent 68%
+  );
+  transform: translateX(-120%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-card.shine-btn:hover::before {
+  animation: btn-shine 1.35s ease-out;
+}
+
+.hero-card.shine-btn:hover .btn-label,
+.hero-card.shine-btn:hover > strong {
+  animation: label-nudge 1.35s ease-out;
+}
+
+.hero-card .btn-label,
+.hero-card > strong,
+.hero-card > span,
+.hero-card .hero-swatch {
+  position: relative;
+  z-index: 1;
 }
 
 .hero-card.compact {
@@ -1913,7 +1937,7 @@ select.menu-input option {
 
 .sp-header {
   margin-bottom: 10px;
-  width: min(920px, 100%);
+  width: min(1180px, 100%);
   text-align: left;
 }
 
@@ -1997,15 +2021,36 @@ select.menu-input option {
 }
 
 .sp-setup {
-  width: min(920px, 100%);
+  width: 100%;
   padding: 12px 14px 14px;
   border-radius: 12px;
   border: 1px solid #2c3d5c;
   background: linear-gradient(165deg, #152036 0%, #0f1728 100%);
-  margin-bottom: 12px;
+  margin-bottom: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+  max-height: min(68vh, 820px);
+  overflow: auto;
+}
+
+.sp-run-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1.05fr);
+  gap: 0.85rem 1rem;
+  align-items: start;
+  width: min(1180px, 100%);
+}
+
+@media (max-width: 960px) {
+  .sp-run-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sp-setup {
+    max-height: none;
+  }
 }
 
 .sp-setup-title {
@@ -2240,10 +2285,19 @@ select.menu-input option {
 }
 
 .sp-heroes {
-  width: min(920px, 100%);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  max-height: min(68vh, 820px);
+  overflow: auto;
+}
+
+@media (max-width: 960px) {
+  .sp-heroes {
+    max-height: none;
+  }
 }
 
 .sp-heroes-title {
@@ -2304,7 +2358,7 @@ select.menu-input option {
 }
 
 .sp-footer {
-  width: min(920px, 100%);
+  width: min(1180px, 100%);
   margin-top: 10px;
 }
 
@@ -2447,6 +2501,10 @@ select.menu-input option {
 
 .mp-shell {
   width: 100%;
+  max-width: min(1180px, 100%);
+  align-items: stretch;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .mp-shell .menu-lead {
@@ -2454,12 +2512,20 @@ select.menu-input option {
 }
 
 .mp-shell .sp-header,
-.mp-shell .sp-setup,
-.mp-shell .sp-heroes,
+.mp-shell .sp-run-layout,
+.mp-shell .mp-connection,
+.mp-shell .mp-players,
 .mp-shell .menu-section,
 .mp-shell .sp-footer,
 .mp-shell .menu-footer {
-  width: min(920px, 100%);
+  width: 100%;
+  max-width: none;
+}
+
+.mp-shell .mp-connection {
+  margin-bottom: 0.85rem;
+  max-height: none;
+  overflow: visible;
 }
 
 .compact-chips {
@@ -2690,15 +2756,25 @@ select.menu-input option {
 .info-header {
   width: 100%;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem 1.25rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   max-width: none;
+  text-align: left;
+}
+
+.info-header .menu-back {
+  margin-bottom: 0.15rem;
 }
 
 .info-header .menu-title {
   font-family: "Orbitron", "Rajdhani", sans-serif;
   letter-spacing: 0.06em;
+  margin-top: 0.2rem;
+}
+
+.info-header .menu-lead {
+  margin: 0.25rem 0 0;
 }
 
 .info-kicker {
@@ -3221,11 +3297,20 @@ button.setting-row.setting-nav span:first-child {
   max-width: min(1480px, 98vw);
   align-items: stretch;
   margin: 0 auto;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 12px;
+  box-sizing: border-box;
 }
 
 .menu-shell.workshop-shell > .menu-header.compact {
   width: 100%;
   max-width: none;
+  flex-shrink: 0;
+  margin-bottom: 10px;
 }
 
 .workshop-layout {
@@ -3234,12 +3319,14 @@ button.setting-row.setting-nav span:first-child {
   gap: 1rem 1.15rem;
   align-items: stretch;
   width: 100%;
-  min-height: min(78vh, 900px);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
 }
 
 .workshop-layout.hero-editor {
   grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
-  grid-template-rows: auto auto;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .workshop-form-cols {
@@ -3247,6 +3334,8 @@ button.setting-row.setting-nav span:first-child {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem 1rem;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .workshop-form-col {
@@ -3257,8 +3346,9 @@ button.setting-row.setting-nav span:first-child {
   border-radius: 12px;
   border: 1px solid rgba(90, 120, 170, 0.28);
   background: linear-gradient(165deg, rgba(18, 28, 44, 0.92), rgba(10, 16, 26, 0.88));
-  max-height: min(72vh, 860px);
+  max-height: 100%;
   overflow: auto;
+  min-height: 0;
 }
 
 .workshop-form-col h3 {
@@ -3273,13 +3363,15 @@ button.setting-row.setting-nav span:first-child {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  max-height: min(78vh, 900px);
+  height: 100%;
+  max-height: none;
   overflow: auto;
   padding: 0.75rem 0.85rem 1rem;
   border-radius: 12px;
   border: 1px solid rgba(90, 120, 170, 0.28);
   background: linear-gradient(165deg, rgba(18, 28, 44, 0.92), rgba(10, 16, 26, 0.88));
   min-width: 0;
+  min-height: 0;
 }
 
 .workshop-side .me-reset-lane {
@@ -3379,15 +3471,16 @@ button.setting-row.setting-nav span:first-child {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: min(70vh, 820px);
-  max-height: min(82vh, 960px);
+  min-height: 0;
+  height: 100%;
+  max-height: none;
 }
 
 #map-editor-canvas {
   display: block;
   width: 100%;
   height: auto;
-  max-height: min(82vh, 960px);
+  max-height: 100%;
   object-fit: contain;
   cursor: crosshair;
   image-rendering: auto;
@@ -3445,9 +3538,10 @@ button.setting-row.setting-nav span:first-child {
   border-radius: 12px;
   border: 1px solid rgba(90, 120, 170, 0.3);
   background: linear-gradient(165deg, rgba(16, 26, 40, 0.95), rgba(10, 16, 26, 0.9));
-  max-height: min(72vh, 860px);
+  max-height: 100%;
   overflow: auto;
   min-width: 0;
+  min-height: 0;
 }
 
 .workshop-kit-preview h2 {
@@ -3493,13 +3587,24 @@ button.setting-row.setting-nav span:first-child {
 }
 
 @media (max-width: 900px) {
+  .menu-shell.workshop-shell {
+    overflow: auto;
+  }
+
   .workshop-layout,
   .workshop-layout.hero-editor {
     grid-template-columns: 1fr;
+    flex: none;
+  }
+
+  .workshop-side {
+    max-height: none;
+    height: auto;
   }
 
   .workshop-canvas-wrap {
     min-height: 50vh;
+    height: auto;
   }
 }
 
@@ -3612,27 +3717,28 @@ button.setting-row.setting-nav span:first-child {
 
 .stats-header {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem 1.25rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   margin-bottom: 0.35rem;
   width: 100%;
   max-width: none;
+  text-align: left;
+}
+
+.stats-header .menu-back {
+  margin-bottom: 0.15rem;
 }
 
 .stats-header .menu-title {
   font-family: "Orbitron", "Rajdhani", sans-serif;
   font-size: clamp(1.6rem, 3vw, 2.1rem);
   letter-spacing: 0.06em;
+  margin-top: 0.2rem;
 }
 
-.stats-header-text {
-  flex: 1;
-  min-width: 12rem;
-}
-
-.stats-header-text .menu-title {
-  margin-bottom: 0.15rem;
+.stats-header .menu-lead {
+  margin: 0.25rem 0 0;
 }
 
 .stats-hero-strip {

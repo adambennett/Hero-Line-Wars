@@ -22,8 +22,8 @@ import {
   type GameState,
   type RunOptions,
 } from "./state";
-import { dist } from "./math";
 import { UTILITIES } from "../data/utilities";
+import { nearAnyShop } from "../data/maps";
 import { CURSES } from "../data/curses";
 import { buyShopItem, toggleShopFreeze, shopItemCost } from "../systems/shop";
 import { chooseChestReward } from "../systems/chests";
@@ -1424,9 +1424,7 @@ export class Game {
     // Auto-open shop once on pad enter (client setting; edge-triggered).
     const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
     if (controlled && loadSettings().autoOpenShop && !myLane.disableShop && myLane.curseShopBlock <= 0) {
-      const shop = myLane.map.shop;
-      const near =
-        controlled.alive && dist(controlled, shop) <= shop.interactRange;
+      const near = nearAnyShop(myLane.map, controlled, controlled.alive);
       if (near && !this.wasNearShopAuto && !myLane.shopOpen) {
         local.toggleShop = true;
       }

@@ -36,7 +36,7 @@ import {
   WAVE_BREAK_SEC,
   WAVE_SCALE,
 } from "../data/constants";
-import { circleHitsObstacle, findClearSpot, reshuffleObstacles, blockedByObstacle } from "../data/maps";
+import { circleHitsObstacle, findClearSpot, reshuffleObstacles, blockedByObstacle, mapRespawn, nearAnyShop } from "../data/maps";
 import { clamp, dist } from "../game/math";
 import { heroUsesGyroKit, heroUsesWarpKit, resolveHero } from "../custom/registry";
 
@@ -284,10 +284,11 @@ function killHeroObj(state: GameState, hero: HeroRuntime): void {
 
 function respawnHeroObj(state: GameState, hero: HeroRuntime): void {
   const def = resolveHero(hero.heroId);
+  const pad = mapRespawn(state.map);
   hero.alive = true;
   hero.hp = hero.maxHp;
-  hero.x = state.map.base.x + 120;
-  hero.y = state.map.base.y;
+  hero.x = pad.x;
+  hero.y = pad.y;
   hero.attackCd = 0.4;
   hero.barrierTimer = 0;
   hero.whirlwindTimer = 0;
@@ -476,8 +477,7 @@ function updateLaneMp(
     }
   }
 
-  const shop = state.map.shop;
-  const nearNow = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
+  const nearNow = nearAnyShop(state.map, state.hero, state.hero.alive);
   // Auto-close when leaving interact range (also covers death via nearShop=false).
   if (state.shopOpen && !nearNow) {
     state.shopOpen = false;

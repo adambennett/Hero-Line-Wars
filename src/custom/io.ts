@@ -55,6 +55,28 @@ export function parseCustomMapBundle(raw: unknown): CustomMapDef | string {
     ...(mapObj as unknown as CustomMapDef),
     id,
     specials: (mapObj.specials as CustomMapDef["specials"]) ?? {},
+    shops: normalizeShops(mapObj),
+    respawn: normalizeRespawn(mapObj),
+  };
+}
+
+function normalizeShops(mapObj: Record<string, unknown>): CustomMapDef["shops"] {
+  if (Array.isArray(mapObj.shops)) return mapObj.shops as CustomMapDef["shops"];
+  if (mapObj.shop && typeof mapObj.shop === "object") {
+    return [mapObj.shop as CustomMapDef["shops"][number]];
+  }
+  return [];
+}
+
+function normalizeRespawn(mapObj: Record<string, unknown>): CustomMapDef["respawn"] {
+  if (mapObj.respawn && typeof mapObj.respawn === "object") {
+    return mapObj.respawn as CustomMapDef["respawn"];
+  }
+  const base = mapObj.base as { x?: number; y?: number } | undefined;
+  return {
+    x: (base?.x ?? 52) + 120,
+    y: base?.y ?? 280,
+    radius: 28,
   };
 }
 

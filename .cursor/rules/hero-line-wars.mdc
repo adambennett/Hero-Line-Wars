@@ -11,7 +11,9 @@ WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends,
 
 - **Vite + TypeScript**, Canvas 2D world, light DOM for menus/HUD. No React.
 - Targets: `build:pages` → `dist/`; `build:release` → single-file HTML; `desktop:dist` → Electron (`DESKTOP.md`). Thin Electron shell over the same Vite build.
-- Art generators: `tools/generate-*-art.mjs` → `public/art/{relics,items,heroes}/`.
+- Pages: `.github/workflows/deploy-pages.yml` builds + deploys `dist/` on `master` (repo Settings → Pages → Source: GitHub Actions).
+- Art generators: `tools/generate-*-art.mjs` → `public/art/{relics,items}/`.
+- **Version:** main menu shows `package.json` `version` (Vite `define` → `__APP_VERSION__`). When shipping a build or a meaningful change set, **bump `package.json` version** if it hasn’t been since the last commit.
 
 ## Where to change what
 
@@ -39,7 +41,7 @@ Match existing patterns; don't invent parallel systems or one-off globals.
 - Unlocks: challenges → barracks / War Crests via `meta/contentLocks.ts` + `challenges.ts` — don't hard-gate only in UI.
 - New maps: fill `MapDef` geometry **and** any specials (`shiftingObstacles`, `shrinkingLane`, `healSprings`, `windCurrents`, …). Wire flags must already be handled in game/render or extend those call sites — data alone is not enough.
 - Player-facing name **Artifact**; internal code may still say turret.
-- After new relics/items/heroes, regenerate SVG art scripts when icons are expected.
+- After new relics/items, regenerate SVG art scripts when icons are expected. Hero portraits are not used currently.
 
 ## SP / MP run-option parity
 

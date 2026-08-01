@@ -24,6 +24,7 @@ import type { AbilityKind, AimMode, AttackStyle } from "../data/heroes";
 export class HeroEditorPanel {
   draft: CustomHeroDef = defaultCustomHero({ id: newCustomHeroId() });
   status = "";
+  private bindRoot: HTMLElement | null = null;
 
   load(id: string | null): void {
     if (!id) {
@@ -76,9 +77,9 @@ export class HeroEditorPanel {
         <div class="workshop-form-cols">
           <section class="workshop-form-col">
             <h3>Identity &amp; stats</h3>
-            <div class="hero-preview-swatch" style="--c:${d.color};--g:${d.glowColor}">
-              <strong>${escape(d.name)}</strong>
-              <span>${escape(d.blurb)}</span>
+            <div class="hero-preview-swatch" id="he-preview-swatch" style="--c:${d.color};--g:${d.glowColor}">
+              <strong id="he-preview-name">${escape(d.name)}</strong>
+              <span id="he-preview-blurb">${escape(d.blurb)}</span>
             </div>
             <label class="run-field"><span>Name</span><input data-he="name" value="${escape(d.name)}" /></label>
             <label class="run-field"><span>Blurb</span><input data-he="blurb" value="${escape(d.blurb)}" /></label>
@@ -118,13 +119,9 @@ export class HeroEditorPanel {
             <p class="panel-note">${escape(this.status)}</p>
           </section>
         </div>
-        <section class="workshop-kit-preview">
+        <section class="workshop-kit-preview" id="he-kit-summary">
           <h2>Kit summary</h2>
-          <article class="inv-row"><strong style="color:${d.color}">${escape(d.name)}</strong><span>${escape(d.blurb)}</span></article>
-          <article class="inv-row"><strong>Passive — ${escape(d.passive.name)}</strong><span>${escape(d.passive.blurb)}</span></article>
-          <article class="inv-row"><strong>${escape(d.abilities[0].name)}</strong><span>${escape(d.abilities[0].hint)} · ${d.abilities[0].cooldown}s</span><em>Mobility</em></article>
-          <article class="inv-row"><strong>${escape(d.abilities[1].name)}</strong><span>${escape(d.abilities[1].hint)} · ${d.abilities[1].cooldown}s</span><em>Ultimate</em></article>
-          <article class="inv-row"><strong>Attack</strong><span>${d.attackStyle} · ${d.aimMode} · ${escape(d.attackHint)}</span></article>
+          ${this.kitSummaryInnerHtml()}
         </section>
         <div class="workshop-footer-bar">
           <h3>Library</h3>
@@ -135,11 +132,52 @@ export class HeroEditorPanel {
   }
 
   bind(root: HTMLElement): void {
+    this.bindRoot = root;
     root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-he]").forEach((el) => {
-      const apply = () => this.applyField(el.dataset.he!, el.value);
+      const apply = () => {
+        this.applyField(el.dataset.he!, el.value);
+        this.paintLive();
+      };
       el.addEventListener("change", apply);
       el.addEventListener("input", apply);
     });
+  }
+
+  private kitSummaryInnerHtml(): string {
+    const d = this.draft;
+    return `
+      <article class="inv-row"><strong style="color:${d.color}">${escape(d.name)}</strong><span>${escape(d.blurb)}</span></article>
+      <article class="inv-row"><strong>Passive — ${escape(d.passive.name)}</strong><span>${escape(d.passive.blurb)}</span></article>
+      <article class="inv-row"><strong>${escape(d.abilities[0].name)}</strong><span>${escape(d.abilities[0].hint)} · ${d.abilities[0].cooldown}s</span><em>Mobility</em></article>
+      <article class="inv-row"><strong>${escape(d.abilities[1].name)}</strong><span>${escape(d.abilities[1].hint)} · ${d.abilities[1].cooldown}s</span><em>Ultimate</em></article>
+      <article class="inv-row"><strong>Attack</strong><span>${d.attackStyle} · ${d.aimMode} · ${escape(d.attackHint)}</span></article>
+    `;
+  }
+
+  /** Partial DOM refresh for identity preview + kit summary while editing. */
+  private paintLive(): void {
+    const root = this.bindRoot;
+    if (!root) return;
+    const d = this.draft;
+    const swatch = root.querySelector<HTMLElement>("#he-preview-swatch");
+    if (swatch) {
+      swatch.style.setProperty("--c", d.color);
+      swatch.style.setProperty("--g", d.glowColor);
+    }
+    const name = root.querySelector("#he-preview-name");
+    if (name) name.textContent = d.name;
+    const blurb = root.querySelector("#he-preview-blurb");
+    if (blurb) blurb.textContent = d.blurb;
+    const kit = root.querySelector("#he-kit-summary");
+    if (kit) {
+      const h2 = kit.querySelector("h2");
+      kit.innerHTML = `<h2>${h2?.textContent ?? "Kit summary"}</h2>${this.kitSummaryInnerHtml()}`;
+    }
+    const passPicker = root.querySelector<HTMLSelectElement>('select[data-he="passive"]');
+    if (passPicker) {
+      const note = passPicker.parentElement?.nextElementSibling;
+      if (note?.classList.contains("panel-note")) note.textContent = d.passive.blurb;
+    }
   }
 
   handleAction(action: string, el: HTMLElement): boolean {

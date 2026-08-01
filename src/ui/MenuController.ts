@@ -1,5 +1,5 @@
 ﻿import { HERO_LIST, type HeroId } from "../data/heroes";
-import { MAP_LIST, type MapId } from "../data/maps";
+import { MAP_LIST, mapRespawn, mapShops, type MapId } from "../data/maps";
 import { MAP_H, MAP_W } from "../data/constants";
 import { RELIC_LIST } from "../data/relics";
 import { SHOP_ITEMS } from "../data/shop";
@@ -84,7 +84,6 @@ import { MainMenuFx } from "./mainMenuFx";
 import { paintEnemyThumbs } from "./enemyThumbs";
 import { relicArtImg } from "../data/relicArt";
 import { itemArtImg } from "../data/itemArt";
-import { heroArtImg } from "../data/heroArt";
 
 export type { MatchMode, MatchPrivacy } from "../net/types";
 
@@ -1005,6 +1004,9 @@ export class MenuController {
     const isMain = this.screen === "main";
     const fxVar = isMain ? "main" : "sub";
     const reduceMotion = !!this.settings.reduceMotion;
+    const versionHtml = isMain
+      ? `<p class="menu-version" aria-hidden="true">v${escapeHtml(__APP_VERSION__)}</p>`
+      : "";
     this.root.innerHTML = `
       <div class="menu-backdrop menu-fx fx-${fxVar}${reduceMotion ? " reduce-motion" : ""}">
         <div class="menu-aurora" aria-hidden="true"></div>
@@ -1015,6 +1017,7 @@ export class MenuController {
         ${body}
         ${toastHtml}
       </div>
+      ${versionHtml}
     `;
 
     const shell = this.root.querySelector(".menu-shell");
@@ -1100,8 +1103,15 @@ export class MenuController {
       ctx.arc(m.spawner.x * sx, m.spawner.y * sy, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#2a4a38";
+      for (const shop of mapShops(m)) {
+        ctx.beginPath();
+        ctx.arc(shop.x * sx, shop.y * sy, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const rp = mapRespawn(m);
+      ctx.fillStyle = "#5ef0c8";
       ctx.beginPath();
-      ctx.arc(m.shop.x * sx, m.shop.y * sy, 4, 0, Math.PI * 2);
+      ctx.arc(rp.x * sx, rp.y * sy, 3, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1127,10 +1137,8 @@ export class MenuController {
       <div class="stats-layout">
         <header class="menu-header compact stats-header">
           <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-          <div class="stats-header-text">
-            <h1 class="menu-title">Career Stats</h1>
-            <p class="menu-lead">Lifetime record across every finished run.</p>
-          </div>
+          <h1 class="menu-title">Career Stats</h1>
+          <p class="menu-lead">Lifetime record across every finished run.</p>
         </header>
         <div class="stats-hero-strip">
           <article class="stats-hero-card tone-win">
@@ -1403,14 +1411,14 @@ export class MenuController {
         return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesWaveOpts = [0, 1, 2, 3, 5, 10]
+    const livesWaveOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
         const def = n === 0 ? " (default)" : "";
         return `<option value="${n}" ${livesWave === n ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesRunOpts = [0, 1, 2, 3, 5]
+    const livesRunOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100]
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
         const def = n === 0 ? " (default)" : "";
@@ -1517,9 +1525,9 @@ export class MenuController {
             <select data-field="sp-chest-chance">${chanceOpts}</select>
           </label>
         </div>
-        <details class="muted-box" style="margin-top:10px">
-          <summary>Creative options</summary>
-          <div class="run-grid cols-4" style="margin-top:8px">
+        <div class="muted-box" style="margin-top:10px">
+          <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
+          <div class="run-grid cols-4">
             <label class="run-field"><span>Enemy density</span>
               <select data-field="sp-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spEnemyDensity === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
@@ -1572,7 +1580,7 @@ export class MenuController {
               )
               .join("")}
           </div>
-        </details>
+        </div>
       `;
     }
     return `
@@ -1606,9 +1614,9 @@ export class MenuController {
           <select data-field="${scope}-chest-chance">${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.lobby.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
         </label>
       </div>
-      <details class="muted-box" style="margin-top:10px">
-        <summary>Creative options</summary>
-        <div class="run-grid cols-4" style="margin-top:8px">
+      <div class="muted-box" style="margin-top:10px">
+        <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
+        <div class="run-grid cols-4">
           <label class="run-field"><span>Enemy density</span>
             <select data-field="${scope}-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
@@ -1664,7 +1672,7 @@ export class MenuController {
             )
             .join("")}
         </div>
-      </details>
+      </div>
     `;
   }
 
@@ -1709,7 +1717,11 @@ export class MenuController {
 
   private paintSpRunMeta(): void {
     const play = this.root.querySelector<HTMLElement>("[data-action='play-sp']");
-    if (play) play.textContent = `Play · ${ascensionLabel(this.spAscension)}`;
+    if (!play) return;
+    const label = `Play · ${ascensionLabel(this.spAscension)}`;
+    const span = play.querySelector(".btn-label");
+    if (span) span.textContent = label;
+    else play.textContent = label;
   }
 
   private renderSingleplayer(): string {
@@ -1718,10 +1730,9 @@ export class MenuController {
     const customHeroCards = listCustomHeroes().map((h) => {
       const selected = h.id === this.selectedHero;
       return `
-        <button type="button" class="hero-card compact ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
-          ${heroArtImg(h.id, "hero-art hero-card-art")}
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
           <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong>${escapeHtml(h.name)}</strong>
+          <strong class="btn-label">${escapeHtml(h.name)}</strong>
           <span>Custom · ${escapeHtml(h.blurb)}</span>
         </button>
       `;
@@ -1732,10 +1743,9 @@ export class MenuController {
         const selected = h.id === this.selectedHero;
         const unlocked = isHeroUnlocked(h.id, meta);
         return `
-        <button type="button" class="hero-card compact ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
-          ${heroArtImg(h.id, "hero-art hero-card-art")}
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong>${escapeHtml(h.name)}</strong>
+          <strong class="btn-label">${escapeHtml(h.name)}</strong>
           <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
         </button>
       `;
@@ -1794,42 +1804,44 @@ export class MenuController {
         </div>
       </header>
 
-      <section class="sp-setup">
-        <h2 class="sp-setup-title">Run setup</h2>
-        <div class="run-grid cols-3">
-          <label class="run-field">
-            <span>Map</span>
-            <select data-field="sp-map">${mapOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Ascension</span>
-            <select data-field="sp-ascension">${ascOpts}</select>
-          </label>
-          ${
-            this.spEndless
-              ? `<label class="run-field">
-            <span>Opponent AI</span>
-            <select disabled title="Endless has no rival lane">
-              <option selected>None (Endless)</option>
-            </select>
-          </label>`
-              : `<label class="run-field">
-            <span>Opponent AI</span>
-            <select data-field="sp-opponent-ai">${aiOpts}</select>
-          </label>`
-          }
-        </div>
-        ${this.runOptionsFields("sp")}
-      </section>
+      <div class="sp-run-layout">
+        <section class="sp-setup">
+          <h2 class="sp-setup-title">Run setup</h2>
+          <div class="run-grid cols-3">
+            <label class="run-field">
+              <span>Map</span>
+              <select data-field="sp-map">${mapOpts}</select>
+            </label>
+            <label class="run-field">
+              <span>Ascension</span>
+              <select data-field="sp-ascension">${ascOpts}</select>
+            </label>
+            ${
+              this.spEndless
+                ? `<label class="run-field">
+              <span>Opponent AI</span>
+              <select disabled title="Endless has no rival lane">
+                <option selected>None (Endless)</option>
+              </select>
+            </label>`
+                : `<label class="run-field">
+              <span>Opponent AI</span>
+              <select data-field="sp-opponent-ai">${aiOpts}</select>
+            </label>`
+            }
+          </div>
+          ${this.runOptionsFields("sp")}
+        </section>
 
-      <section class="sp-heroes">
-        <h2 class="sp-heroes-title">Hero</h2>
-        <div class="hero-grid compact">${cards}</div>
-        <div id="sp-hero-detail" class="sp-hero-detail">${this.spHeroDetailHtml()}</div>
-      </section>
+        <section class="sp-heroes">
+          <h2 class="sp-heroes-title">Hero</h2>
+          <div class="hero-grid compact">${cards}</div>
+          <div id="sp-hero-detail" class="sp-hero-detail">${this.spHeroDetailHtml()}</div>
+        </section>
+      </div>
 
       <div class="menu-footer sp-footer">
-        <button type="button" class="menu-btn primary wide" data-action="play-sp">Play · ${escapeHtml(ascensionLabel(this.spAscension))}</button>
+        <button type="button" class="menu-btn primary wide shine-btn" data-action="play-sp"><span class="btn-label">Play · ${escapeHtml(ascensionLabel(this.spAscension))}</span></button>
       </div>
     `;
   }
@@ -1977,7 +1989,6 @@ export class MenuController {
               <h3>${escapeHtml(h.name)}</h3>
               <p class="comp-meta">HP ${h.maxHp} · Spd ${h.speed} · Atk ${h.attackDamage}</p>
             </div>
-            ${heroArtImg(h.id, "hero-art comp-hero-art")}
           </div>
           <p>${escapeHtml(h.blurb)}</p>
           <ul class="comp-ability-list">
@@ -2197,10 +2208,8 @@ export class MenuController {
       <div class="info-layout">
         <header class="menu-header compact info-header">
           <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-          <div>
-            <h1 class="menu-title">Game Info</h1>
-            <p class="menu-lead">How the lane, sends, and progression loop work.</p>
-          </div>
+          <h1 class="menu-title">Game Info</h1>
+          <p class="menu-lead">How the lane, sends, and progression loop work.</p>
         </header>
 
         <section class="info-hero">
@@ -2237,7 +2246,7 @@ export class MenuController {
           </section>
           <section class="info-block">
             <h2>Maps &amp; Ascension</h2>
-            <p>Built-in layouts include cover, high ground, dual spawners, shifting obstacles, shrinking lanes, fog, hazards, rift surges, volatile orbs, and more. Some unlock via Barracks / challenges. Ascension stacks through <strong>A15</strong>. The Workshop <strong>Map Editor</strong> builds custom maps (specials + tooltips, load template, export JSON).</p>
+            <p>Built-in layouts include cover, high ground, dual spawners, shifting obstacles, shrinking lanes, fog, hazards, rift surges, volatile orbs, and more. Some unlock via Barracks / challenges. Ascension stacks through <strong>A15</strong>. The Workshop <strong>Map Editor</strong> builds custom maps (base, respawn, optional shops, spawners, specials + tooltips, load template, export JSON).</p>
           </section>
         </div>
 

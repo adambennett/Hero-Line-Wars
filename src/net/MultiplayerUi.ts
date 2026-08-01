@@ -7,6 +7,8 @@ import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import { utilityDraftLevelOptionsHtml } from "../data/utilities";
 import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
+import { MainMenuFx } from "../ui/mainMenuFx";
+import { loadSettings } from "../ui/settings";
 import {
   bindHooks,
   canStartMatch,
@@ -83,6 +85,7 @@ export class MultiplayerUi {
   private suddenDeathBaseHp = 0;
   private preferredCode = randomMpCode();
   private busy = false;
+  private readonly menuFx = new MainMenuFx();
 
   constructor(root: HTMLElement, cbs: MpUiCallbacks) {
     this.root = root;
@@ -182,14 +185,30 @@ export class MultiplayerUi {
   }
 
   destroy(): void {
+    this.menuFx.stop();
     disconnectNet();
     this.root.innerHTML = "";
+  }
+
+  private mountFxShell(body: string): void {
+    const reduceMotion = !!loadSettings().reduceMotion;
+    this.menuFx.stop();
+    this.root.innerHTML = `
+      <div class="menu-backdrop menu-fx fx-sub${reduceMotion ? " reduce-motion" : ""}">
+        <div class="menu-aurora" aria-hidden="true"></div>
+        <div class="menu-waves" aria-hidden="true"></div>
+        <canvas id="menu-fx-canvas" aria-hidden="true"></canvas>
+      </div>
+      ${body}
+    `;
+    const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
+    if (fxCanvas) this.menuFx.start(fxCanvas, { variation: "sub", reduceMotion });
   }
 
   private refreshStatusOnly(): void {
     const el = this.root.querySelector("#mp-status");
     if (el) {
-      el.innerHTML = this.statusHtml || "Ready when you are.";
+      el.innerHTML = this.statusHtml || "";
       return;
     }
     this.refresh();
@@ -278,14 +297,14 @@ export class MultiplayerUi {
         return `<option value="${w}" ${this.wavesToWin === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesWaveOpts = [0, 1, 2, 3, 5, 10]
+    const livesWaveOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
         const def = n === 0 ? " (default)" : "";
         return `<option value="${n}" ${this.livesPerWave === n ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesRunOpts = [0, 1, 2, 3, 5]
+    const livesRunOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100]
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
         const def = n === 0 ? " (default)" : "";
@@ -364,9 +383,9 @@ export class MultiplayerUi {
             <select id="${prefix}-chest-chance" ${dis}>${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
           </label>
         </div>
-        <details class="muted-box" style="margin-top:4px">
-          <summary>Creative options</summary>
-          <div class="run-grid cols-4" style="margin-top:8px">
+        <div class="muted-box" style="margin-top:4px">
+          <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
+          <div class="run-grid cols-4">
             <label class="run-field"><span>Enemy density</span>
               <select id="${prefix}-enemy-density" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
@@ -416,7 +435,7 @@ export class MultiplayerUi {
               )
               .join("")}
           </div>
-        </details>
+        </div>
       </section>
     `;
   }
@@ -542,9 +561,9 @@ export class MultiplayerUi {
     const custom = listCustomHeroes().map((h) => {
       const selected = h.id === this.heroId;
       return `
-        <button type="button" class="hero-card compact ${selected ? "selected" : ""}" data-hero="${h.id}">
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""}" data-hero="${h.id}">
           <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong>${escapeAttr(h.name)}</strong>
+          <strong class="btn-label">${escapeAttr(h.name)}</strong>
           <span>Custom · ${escapeAttr(h.blurb)}</span>
         </button>
       `;
@@ -553,9 +572,9 @@ export class MultiplayerUi {
       const selected = h.id === this.heroId;
       const unlocked = isHeroUnlocked(h.id);
       return `
-        <button type="button" class="hero-card compact ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-hero="${h.id}" ${unlocked ? "" : "disabled title=\"Unlock in Barracks\""}>
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-hero="${h.id}" ${unlocked ? "" : "disabled title=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong>${escapeAttr(h.name)}</strong>
+          <strong class="btn-label">${escapeAttr(h.name)}</strong>
           <span>${unlocked ? escapeAttr(h.blurb) : "Locked"}</span>
         </button>
       `;
@@ -650,8 +669,7 @@ export class MultiplayerUi {
           ? "Find match"
           : "Join lobby";
 
-    this.root.innerHTML = `
-      <div class="menu-backdrop"></div>
+    this.mountFxShell(`
       <div class="menu-shell tight mp-shell">
         <header class="menu-header compact sp-header">
           <div class="sp-header-row">
@@ -663,7 +681,7 @@ export class MultiplayerUi {
           <p class="menu-lead">PeerJS P2P · host-authoritative</p>
         </header>
 
-        <section class="sp-setup">
+        <section class="sp-setup mp-connection">
           <h2 class="sp-setup-title">Connection</h2>
           <div class="run-grid cols-3">
             <label class="run-field">
@@ -687,20 +705,22 @@ export class MultiplayerUi {
           ${this.connectionCodeHtml()}
         </section>
 
-        ${this.role === "host" ? this.runSetupHtml("hub", true) : ""}
+        <div class="sp-run-layout">
+          ${this.role === "host" ? this.runSetupHtml("hub", true) : `<section class="sp-setup"><h2 class="sp-setup-title">Run setup</h2><p class="menu-note">Host sets map and run options after the lobby opens.</p></section>`}
 
-        <section class="sp-heroes">
-          <h2 class="sp-heroes-title">Your hero</h2>
-          <div class="hero-grid compact">${this.heroGridHtml()}</div>
-          <div id="mp-hero-detail" class="sp-hero-detail">${this.heroDetailHtml()}</div>
-        </section>
+          <section class="sp-heroes">
+            <h2 class="sp-heroes-title">Your hero</h2>
+            <div class="hero-grid compact">${this.heroGridHtml()}</div>
+            <div id="mp-hero-detail" class="sp-hero-detail">${this.heroDetailHtml()}</div>
+          </section>
+        </div>
 
         <div class="menu-footer sp-footer">
-          <button type="button" class="menu-btn primary wide" id="mp-go" ${this.busy ? "disabled" : ""}>${actionLabel}</button>
-          <p class="menu-footnote" id="mp-status">${this.statusHtml || "Pick a hero, then host or join."}</p>
+          <button type="button" class="menu-btn primary wide shine-btn" id="mp-go" ${this.busy ? "disabled" : ""}><span class="btn-label">${actionLabel}</span></button>
+          <p class="menu-footnote" id="mp-status">${this.statusHtml || ""}</p>
         </div>
       </div>
-    `;
+    `);
 
     this.root.querySelector("#mp-back")!.addEventListener("click", () => {
       disconnectNet();
@@ -846,8 +866,7 @@ export class MultiplayerUi {
     const amReady = mySeat?.ready ?? false;
     const isHost = mode === "host";
 
-    this.root.innerHTML = `
-      <div class="menu-backdrop"></div>
+    this.mountFxShell(`
       <div class="menu-shell tight mp-shell">
         <header class="menu-header compact sp-header">
           <div class="sp-header-row">
@@ -859,18 +878,20 @@ export class MultiplayerUi {
           <p class="menu-lead">Code <code class="lobby-code">${escapeAttr(lobby.code ?? "—")}</code> · ${bal}</p>
         </header>
 
-        <section class="menu-section">
+        <section class="menu-section mp-players">
           <h2 class="sp-heroes-title">Players</h2>
           <ul class="mp-seat-list">${seats}</ul>
         </section>
 
-        ${this.runSetupHtml("live", isHost)}
+        <div class="sp-run-layout">
+          ${this.runSetupHtml("live", isHost)}
 
-        <section class="sp-heroes">
-          <h2 class="sp-heroes-title">Your hero</h2>
-          <div class="hero-grid compact">${this.heroGridHtml()}</div>
-          <div id="mp-hero-detail" class="sp-hero-detail">${this.heroDetailHtml()}</div>
-        </section>
+          <section class="sp-heroes">
+            <h2 class="sp-heroes-title">Your hero</h2>
+            <div class="hero-grid compact">${this.heroGridHtml()}</div>
+            <div id="mp-hero-detail" class="sp-hero-detail">${this.heroDetailHtml()}</div>
+          </section>
+        </div>
 
         ${
           !isPveMode(lobby.mode)
@@ -881,18 +902,18 @@ export class MultiplayerUi {
         <div class="menu-footer sp-footer stack">
           ${
             isHost
-              ? `<button type="button" class="menu-btn primary wide" id="mp-start" ${canStart ? "" : "disabled"}>
-                  ${canStart ? "Start match" : `Waiting (${lobbyReadyCount(lobby)}/${cap} ready, full & balanced)`}
+              ? `<button type="button" class="menu-btn primary wide shine-btn" id="mp-start" ${canStart ? "" : "disabled"}>
+                  <span class="btn-label">${canStart ? "Start match" : `Waiting (${lobbyReadyCount(lobby)}/${cap} ready, full & balanced)`}</span>
                 </button>`
               : `<p class="menu-note">Waiting for host to start…</p>`
           }
-          <button type="button" class="menu-btn ${amReady ? "ghost" : "primary"} wide" id="mp-ready">
-            ${amReady ? "Unready" : "Ready"}
+          <button type="button" class="menu-btn ${amReady ? "ghost" : "primary"} wide shine-btn" id="mp-ready">
+            <span class="btn-label">${amReady ? "Unready" : "Ready"}</span>
           </button>
           <p class="menu-footnote" id="mp-status">${this.statusHtml || "Lobby open — share the code with friends."}</p>
         </div>
       </div>
-    `;
+    `);
 
     this.root.querySelector("#mp-leave")!.addEventListener("click", () => {
       disconnectNet();

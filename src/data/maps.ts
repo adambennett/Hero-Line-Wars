@@ -64,7 +64,10 @@ export type MapDef = {
   baseLaneTop?: number;
   baseLaneBottom?: number;
   base: PointPad & { maxHp: number };
-  shop: ShopPad;
+  /** Shop pads (0 or more). Standing on any opens the shop. */
+  shops: ShopPad[];
+  /** Hero respawn pad — exactly one; all lane heroes respawn here. */
+  respawn: PointPad;
   spawner: PointPad;
   /** Optional second spawner for dual-spawn maps. */
   spawnerAlt?: PointPad;
@@ -118,8 +121,50 @@ const HG = (x: number, y: number, w: number, h: number): HighGroundZone => ({
 
 const MID_Y = MAP_H / 2;
 
+/** Authoring shape — `shop` is migrated to `shops`; `respawn` defaults near base. */
+type MapAuthoring = Omit<MapDef, "shops" | "respawn"> & {
+  shop?: ShopPad;
+  shops?: ShopPad[];
+  respawn?: PointPad;
+};
+
+function finalizeMap(m: MapAuthoring): MapDef {
+  const shops = m.shops ?? (m.shop ? [m.shop] : []);
+  const { shop: _legacyShop, ...rest } = m;
+  return {
+    ...rest,
+    shops,
+    respawn: m.respawn ?? { x: m.base.x + 120, y: m.base.y, radius: 28 },
+  };
+}
+
+/** Runtime shop pads (empty when map has none). */
+export function mapShops(map: MapDef): ShopPad[] {
+  return map.shops ?? [];
+}
+
+/** Runtime respawn point (falls back near base if somehow missing). */
+export function mapRespawn(map: MapDef): PointPad {
+  return map.respawn ?? { x: map.base.x + 120, y: map.base.y, radius: 28 };
+}
+
+/** True when a unit is within interact range of any shop pad. */
+export function nearAnyShop(
+  map: MapDef,
+  unit: { x: number; y: number },
+  alive = true,
+): boolean {
+  if (!alive) return false;
+  for (const shop of mapShops(map)) {
+    const dx = unit.x - shop.x;
+    const dy = unit.y - shop.y;
+    if (dx * dx + dy * dy <= shop.interactRange * shop.interactRange) return true;
+  }
+  return false;
+}
+
 export const MAPS: Record<MapId, MapDef> = {
-  classic: {
+  classic: finalizeMap({
     id: "classic",
     name: "Classic Lane",
     blurb: "Wide mid-lane with a central high-ground shelf and flanking rocks.",
@@ -141,8 +186,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
       { x: 90, y: MID_Y },
     ],
-  },
-  split_ridge: {
+  }),
+  split_ridge: finalizeMap({
     id: "split_ridge",
     name: "Split Ridge",
     blurb: "Twin high grounds and a mid rock wall — fight for both shelves.",
@@ -164,8 +209,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 210, y: MID_Y },
       { x: 90, y: MID_Y },
     ],
-  },
-  narrow_pass: {
+  }),
+  narrow_pass: finalizeMap({
     id: "narrow_pass",
     name: "Narrow Pass",
     blurb: "Tight corridor with cover pillars — less room to kite, more choke fights.",
@@ -188,8 +233,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 115, y: sy(340) },
       { x: 190, y: MID_Y },
     ],
-  },
-  open_flank: {
+  }),
+  open_flank: finalizeMap({
     id: "open_flank",
     name: "Open Flank",
     blurb: "Extra-wide lane with side alcoves — more space, more angles.",
@@ -212,8 +257,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 95, y: MID_Y },
       { x: 200, y: sy(160) },
     ],
-  },
-  twin_gates: {
+  }),
+  twin_gates: finalizeMap({
     id: "twin_gates",
     name: "Twin Gates",
     blurb: "Paired gatehouses split the lane into upper and lower approaches.",
@@ -237,8 +282,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 205, y: MID_Y },
       { x: 95, y: MID_Y },
     ],
-  },
-  serpentine: {
+  }),
+  serpentine: finalizeMap({
     id: "serpentine",
     name: "Serpentine",
     blurb: "Staggered cover forces a zigzag path down the line.",
@@ -262,8 +307,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 118, y: sy(360) },
       { x: 200, y: MID_Y },
     ],
-  },
-  fortress: {
+  }),
+  fortress: finalizeMap({
     id: "fortress",
     name: "Fortress Approach",
     blurb: "Heavy cover near base — hold the walls, then push into open ground.",
@@ -288,8 +333,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 100, y: MID_Y },
       { x: 185, y: sy(220) },
     ],
-  },
-  crossfire: {
+  }),
+  crossfire: finalizeMap({
     id: "crossfire",
     name: "Crossfire",
     blurb: "Side high grounds overlook a cluttered mid — angles everywhere.",
@@ -313,8 +358,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
       { x: 95, y: MID_Y },
     ],
-  },
-  island_hop: {
+  }),
+  island_hop: finalizeMap({
     id: "island_hop",
     name: "Island Hop",
     blurb: "Scattered cover islands — lots of open ground between safe pockets.",
@@ -338,8 +383,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 125, y: sy(365) },
       { x: 205, y: MID_Y },
     ],
-  },
-  shifting_grounds: {
+  }),
+  shifting_grounds: finalizeMap({
     id: "shifting_grounds",
     name: "Shifting Grounds",
     blurb: "Special — cover and rubble reposition randomly between every wave.",
@@ -364,8 +409,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 95, y: MID_Y },
     ],
     shiftingObstacles: true,
-  },
-  broken_causeway: {
+  }),
+  broken_causeway: finalizeMap({
     id: "broken_causeway",
     name: "Broken Causeway",
     blurb: "Collapsed bridge spans — fight across staggered gaps of cover.",
@@ -391,8 +436,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
       { x: 95, y: MID_Y },
     ],
-  },
-  mirror_trench: {
+  }),
+  mirror_trench: finalizeMap({
     id: "mirror_trench",
     name: "Mirror Trench",
     blurb: "Symmetric trenches — twin high grounds and a razor mid channel.",
@@ -415,8 +460,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 125, y: sy(380) },
       { x: 205, y: MID_Y },
     ],
-  },
-  bastion_run: {
+  }),
+  bastion_run: finalizeMap({
     id: "bastion_run",
     name: "Bastion Run",
     blurb: "Stacked fortifications near base, then a long open push.",
@@ -443,8 +488,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 100, y: MID_Y },
       { x: 185, y: sy(230) },
     ],
-  },
-  crushing_corridor: {
+  }),
+  crushing_corridor: finalizeMap({
     id: "crushing_corridor",
     name: "Crushing Corridor",
     blurb: "Special — the lane slowly squeezes shut during each wave.",
@@ -469,8 +514,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
     ],
     shrinkingLane: true,
-  },
-  eclipse_gauntlet: {
+  }),
+  eclipse_gauntlet: finalizeMap({
     id: "eclipse_gauntlet",
     name: "Eclipse Gauntlet",
     blurb: "Special — drifting hazards and timed darkness choke the mid.",
@@ -498,8 +543,8 @@ export const MAPS: Record<MapId, MapDef> = {
     movingHazards: true,
     eclipseFog: true,
     dualSpawners: true,
-  },
-  hex_warrens: {
+  }),
+  hex_warrens: finalizeMap({
     id: "hex_warrens",
     name: "Hex Warrens",
     blurb: "Challenge map — twisted cover and a tight killbox mid.",
@@ -522,8 +567,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 110, y: sy(360) },
       { x: 190, y: MID_Y },
     ],
-  },
-  ascendant_spine: {
+  }),
+  ascendant_spine: finalizeMap({
     id: "ascendant_spine",
     name: "Ascendant Spine",
     blurb: "Challenge map — long spine high-grounds and sparse cover.",
@@ -546,8 +591,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
       { x: 95, y: MID_Y },
     ],
-  },
-  treasure_vein: {
+  }),
+  treasure_vein: finalizeMap({
     id: "treasure_vein",
     name: "Treasure Vein",
     blurb: "Challenge map — open flanks favor chest hunting and skirmishes.",
@@ -568,8 +613,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 120, y: sy(375) },
       { x: 205, y: MID_Y },
     ],
-  },
-  tourist_loop: {
+  }),
+  tourist_loop: finalizeMap({
     id: "tourist_loop",
     name: "Tourist Loop",
     blurb: "Challenge map — shifting rocks and dual spawners for veterans.",
@@ -594,8 +639,8 @@ export const MAPS: Record<MapId, MapDef> = {
     ],
     shiftingObstacles: true,
     dualSpawners: true,
-  },
-  rift_cataract: {
+  }),
+  rift_cataract: finalizeMap({
     id: "rift_cataract",
     name: "Rift Cataract",
     blurb: "Special — horizontal rifts yank everything toward mid-lane midpoints.",
@@ -618,8 +663,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 200, y: MID_Y },
     ],
     riftSurges: true,
-  },
-  orb_foundry: {
+  }),
+  orb_foundry: finalizeMap({
     id: "orb_foundry",
     name: "Orb Foundry",
     blurb: "Special — volatile orbs cook mid-lane and detonate after a delay.",
@@ -643,7 +688,7 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 95, y: MID_Y },
     ],
     volatileOrbs: true,
-  },
+  }),
 };
 
 export const MAP_LIST: MapDef[] = Object.values(MAPS);
@@ -775,8 +820,8 @@ export function reshuffleObstacles(
     for (let attempt = 0; attempt < 24; attempt++) {
       o.x = minX + Math.random() * spanX;
       o.y = minY + Math.random() * spanY;
-      // Keep clear of shop pad
-      if (circleHitsObstacle(map.shop.x, map.shop.y, map.shop.radius + 10, o)) continue;
+      // Keep clear of shop pads
+      if (mapShops(map).some((shop) => circleHitsObstacle(shop.x, shop.y, shop.radius + 10, o))) continue;
       if (hitsReserved(o)) continue;
       placed = true;
       break;

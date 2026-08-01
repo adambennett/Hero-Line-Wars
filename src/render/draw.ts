@@ -5,6 +5,7 @@ import { TURRET_DEFS } from "../data/turrets";
 import { type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
 import { inHighGround } from "../systems/combat";
 import { loadSettings } from "../ui/settings";
+import { mapRespawn, mapShops } from "../data/maps";
 
 export type View = {
   scale: number;
@@ -349,24 +350,45 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.stroke();
   }
 
-  // Shop pad
-  const shop = map.shop;
-  ctx.beginPath();
-  ctx.arc(shop.x, shop.y, shop.radius, 0, Math.PI * 2);
-  ctx.fillStyle = state.nearShop ? "#3a6b4a" : "#2a4a38";
-  ctx.fill();
-  ctx.strokeStyle = state.nearShop ? "#8dffb0" : "#6aaf7a";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.fillStyle = "#c8f5d4";
-  ctx.font = "bold 11px Segoe UI, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("SHOP", shop.x, shop.y + 4);
-  if (state.nearShop && !state.shopOpen) {
-    ctx.fillStyle = "#e8ffe8";
-    ctx.font = "10px Segoe UI, sans-serif";
-    ctx.fillText("[F]", shop.x, shop.y + shop.radius + 14);
+  // Shop pads
+  for (const shop of mapShops(map)) {
+    const nearThis =
+      state.nearShop &&
+      (state.hero.x - shop.x) ** 2 + (state.hero.y - shop.y) ** 2 <=
+        shop.interactRange * shop.interactRange;
+    ctx.beginPath();
+    ctx.arc(shop.x, shop.y, shop.radius, 0, Math.PI * 2);
+    ctx.fillStyle = nearThis ? "#3a6b4a" : "#2a4a38";
+    ctx.fill();
+    ctx.strokeStyle = nearThis ? "#8dffb0" : "#6aaf7a";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#c8f5d4";
+    ctx.font = "bold 11px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("SHOP", shop.x, shop.y + 4);
+    if (nearThis && !state.shopOpen) {
+      ctx.fillStyle = "#e8ffe8";
+      ctx.font = "10px Segoe UI, sans-serif";
+      ctx.fillText("[F]", shop.x, shop.y + shop.radius + 14);
+    }
   }
+
+  // Respawn pad
+  const respawn = mapRespawn(map);
+  ctx.beginPath();
+  ctx.arc(respawn.x, respawn.y, respawn.radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#1a3a4488";
+  ctx.fill();
+  ctx.strokeStyle = "#5ef0c866";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#8fd4c8aa";
+  ctx.font = "bold 9px Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("RESPAWN", respawn.x, respawn.y + 3);
 
   // Base
   const base = map.base;

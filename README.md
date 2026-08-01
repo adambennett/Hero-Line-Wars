@@ -59,6 +59,8 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 | `npm run desktop:dist:win` | `dist-desktop/` | Windows-only desktop package |
 | `npm run preview` | — | Preview the Pages build |
 
+**GitHub Pages:** pushes to `master` run [`.github/workflows/deploy-pages.yml`](./.github/workflows/deploy-pages.yml), which builds `dist/` and deploys it. One-time: **Settings → Pages → Source: GitHub Actions**. URL is `https://<owner>.github.io/<repo>/`.
+
 Desktop (itch upload + Steam roadmap): **[`DESKTOP.md`](./DESKTOP.md)**.
 
 ## Later

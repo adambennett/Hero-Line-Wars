@@ -50,7 +50,10 @@ export type CustomMapDef = {
   laneTop: number;
   laneBottom: number;
   base: PointPad & { maxHp: number };
-  shop: ShopPad;
+  /** Shop pads — 0 or more allowed. */
+  shops: ShopPad[];
+  /** Exactly one respawn pad for lane heroes. */
+  respawn: PointPad;
   spawner: PointPad;
   spawnerAlt?: PointPad;
   highGrounds: HighGroundZone[];

@@ -1,9 +1,9 @@
 /**
- * Workshop map editor — canvas place/drag tools + library I/O.
+ * Workshop map editor — canvas place/drag/resize tools + library I/O.
  */
 
 import { MAP_H, MAP_W } from "../data/constants";
-import { MAP_LIST, type MapDef } from "../data/maps";
+import { MAP_LIST, mapRespawn, mapShops, type MapDef, type ShopPad } from "../data/maps";
 import {
   defaultCustomMap,
   deleteCustomMap,
@@ -15,8 +15,10 @@ import { newCustomMapId, type CustomMapDef, type RectZone } from "../custom/type
 
 export type MapEditorTool =
   | "select"
+  | "erase"
   | "base"
   | "shop"
+  | "respawn"
   | "spawner"
   | "spawnerAlt"
   | "obstacle"
@@ -31,7 +33,8 @@ export type MapEditorTool =
 
 type SelKind =
   | { k: "base" }
-  | { k: "shop" }
+  | { k: "shop"; i: number }
+  | { k: "respawn" }
   | { k: "spawner" }
   | { k: "spawnerAlt" }
   | { k: "obstacle"; i: number }
@@ -42,9 +45,18 @@ type SelKind =
   | { k: "haste"; i: number }
   | { k: "gold"; i: number }
   | { k: "wind"; i: number }
-  | { k: "spike"; i: number };
+  | { k: "spike"; i: number }
+  | { k: "laneTop" }
+  | { k: "laneBottom" };
 
 type PendingConfirm = "reset" | "reset-lane" | "load-template";
+
+type DragMode =
+  | { kind: "move"; ox: number; oy: number }
+  | { kind: "resize"; handle: ResizeHandle; ox: number; oy: number; start: RectZone | { radius: number } }
+  | { kind: "lane"; which: "top" | "bottom"; oy: number };
+
+type ResizeHandle = "nw" | "ne" | "sw" | "se" | "radius";
 
 const SPECIAL_TOOLTIPS: Record<string, string> = {
   shiftingObstacles: "Between waves, obstacles reshuffle within the lane.",
@@ -57,15 +69,41 @@ const SPECIAL_TOOLTIPS: Record<string, string> = {
   volatileOrbs: "Spawns delayed explosive orbs in the lane during waves.",
 };
 
+const TOOL_TOOLTIPS: Record<MapEditorTool, string> = {
+  select: "Select and drag objects. Drag corners to resize zones. Drag lane edges to adjust bounds.",
+  erase: "Click to delete placeable objects. Base, primary spawner, and respawn cannot be removed.",
+  base: "Move the player base pad (required).",
+  shop: "Place a shop pad (optional — 0 or many). Click existing shops with Delete to remove.",
+  respawn: "Move the hero respawn pad (required — exactly one). All lane heroes respawn here.",
+  spawner: "Move the primary wave spawner (required).",
+  spawnerAlt: "Place or move the alternate spawner (enables Dual spawners).",
+  obstacle: "Place a blocking obstacle rectangle.",
+  highGround: "Place a high-ground damage zone. Resize with corner handles when selected.",
+  turret: "Place an artifact turret slot marker.",
+  heal: "Place a heal spring zone. Resize with corner handles when selected.",
+  mire: "Place a slow mire zone. Resize with corner handles when selected.",
+  haste: "Place a haste pad zone. Resize with corner handles when selected.",
+  gold: "Place a gold vent zone. Resize with corner handles when selected.",
+  wind: "Place a wind current zone. Resize with corner handles when selected.",
+  spike: "Place a spike pulse (circular). Drag the edge handle to resize radius.",
+};
+
+const HANDLE = 10;
+const LANE_HIT = 10;
+const MIN_RECT = 24;
+const MIN_SPIKE_R = 12;
+const MAX_SPIKE_R = 120;
+
 export class MapEditorPanel {
   draft: CustomMapDef = defaultCustomMap({ id: newCustomMapId() });
   tool: MapEditorTool = "select";
   selected: SelKind | null = null;
-  private drag: { ox: number; oy: number; sx: number; sy: number } | null = null;
+  private drag: DragMode | null = null;
   private pendingConfirm: PendingConfirm | null = null;
   /** `builtin:<id>` or `custom:<id>` awaiting confirm. */
   private pendingTemplateKey: string | null = null;
   status = "";
+  private bindRoot: HTMLElement | null = null;
 
   load(id: string | null): void {
     this.pendingConfirm = null;
@@ -128,7 +166,9 @@ export class MapEditorPanel {
     const s = this.draft.specials;
     const tools: { id: MapEditorTool; label: string }[] = [
       { id: "select", label: "Select" },
+      { id: "erase", label: "Delete" },
       { id: "base", label: "Base" },
+      { id: "respawn", label: "Respawn" },
       { id: "shop", label: "Shop" },
       { id: "spawner", label: "Spawner" },
       { id: "spawnerAlt", label: "Alt spawn" },
@@ -168,7 +208,7 @@ export class MapEditorPanel {
             ${tools
               .map(
                 (t) =>
-                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}">${t.label}</button>`,
+                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}" title="${escapeAttr(TOOL_TOOLTIPS[t.id])}">${t.label}</button>`,
               )
               .join("")}
           </div>
@@ -246,12 +286,14 @@ export class MapEditorPanel {
   }
 
   bind(root: HTMLElement): void {
+    this.bindRoot = root;
     root.querySelectorAll<HTMLInputElement>("[data-me]").forEach((el) => {
       el.addEventListener("change", () => {
         const key = el.dataset.me!;
         if (key === "name" || key === "blurb") (this.draft as Record<string, unknown>)[key] = el.value;
         else if (key === "laneTop" || key === "laneBottom") {
           (this.draft as Record<string, unknown>)[key] = Number(el.value) || 0;
+          clampAllObjectsInLane(this.draft);
         }
         this.paintCanvas();
       });
@@ -272,6 +314,7 @@ export class MapEditorPanel {
   handleAction(action: string, el: HTMLElement): boolean {
     if (action === "me-tool") {
       this.tool = (el.dataset.tool as MapEditorTool) || "select";
+      this.drag = null;
       return true;
     }
     if (action === "me-load") {
@@ -323,6 +366,8 @@ export class MapEditorPanel {
         const defaults = defaultCustomMap();
         this.draft.laneTop = defaults.laneTop;
         this.draft.laneBottom = defaults.laneBottom;
+        clampAllObjectsInLane(this.draft);
+        this.syncLaneInputs();
         this.status = "Lane bounds reset.";
       } else if (kind === "load-template") {
         this.applyTemplate(templateKey);
@@ -352,8 +397,13 @@ export class MapEditorPanel {
       return true;
     }
     if (action === "me-del-sel") {
-      this.deleteSelected();
-      this.status = "Removed selection.";
+      if (!this.deleteSelection(this.selected)) {
+        this.status = this.selected
+          ? "Cannot delete required objects (base / primary spawner / respawn)."
+          : "Nothing selected.";
+      } else {
+        this.status = "Removed selection.";
+      }
       return true;
     }
     return false;
@@ -369,10 +419,20 @@ export class MapEditorPanel {
     return "";
   }
 
-  private deleteSelected(): void {
-    const s = this.selected;
-    if (!s) return;
-    if (s.k === "obstacle") this.draft.obstacles.splice(s.i, 1);
+  /** Returns false when selection is missing or protected. */
+  private deleteSelection(s: SelKind | null): boolean {
+    if (!s) return false;
+    if (
+      s.k === "base" ||
+      s.k === "spawner" ||
+      s.k === "respawn" ||
+      s.k === "laneTop" ||
+      s.k === "laneBottom"
+    ) {
+      return false;
+    }
+    if (s.k === "shop") this.draft.shops.splice(s.i, 1);
+    else if (s.k === "obstacle") this.draft.obstacles.splice(s.i, 1);
     else if (s.k === "highGround") this.draft.highGrounds.splice(s.i, 1);
     else if (s.k === "turret") this.draft.turretSlots.splice(s.i, 1);
     else if (s.k === "heal") this.draft.healSprings!.splice(s.i, 1);
@@ -384,9 +444,12 @@ export class MapEditorPanel {
     else if (s.k === "spawnerAlt") {
       this.draft.spawnerAlt = undefined;
       this.draft.specials.dualSpawners = false;
+    } else {
+      return false;
     }
     this.selected = null;
     this.paintCanvas();
+    return true;
   }
 
   /** Keep `spawnerAlt` marker in sync with the Dual spawners special. */
@@ -403,6 +466,14 @@ export class MapEditorPanel {
 
   /** Repair drafts that have the flag but no alt pad (e.g. older saves). */
   private ensureDualSpawnerMarker(): void {
+    if (!this.draft.shops) this.draft.shops = [];
+    if (!this.draft.respawn) {
+      this.draft.respawn = {
+        x: this.draft.base.x + 120,
+        y: this.draft.base.y,
+        radius: 28,
+      };
+    }
     if (this.draft.specials.dualSpawners && !this.draft.spawnerAlt) {
       this.draft.spawnerAlt = defaultSpawnerAlt(this.draft);
     }
@@ -440,6 +511,15 @@ export class MapEditorPanel {
     this.status = `Loaded “${draft.name}” as a new draft.`;
   }
 
+  private syncLaneInputs(): void {
+    const root = this.bindRoot;
+    if (!root) return;
+    const top = root.querySelector<HTMLInputElement>('[data-me="laneTop"]');
+    const bot = root.querySelector<HTMLInputElement>('[data-me="laneBottom"]');
+    if (top) top.value = String(Math.round(this.draft.laneTop));
+    if (bot) bot.value = String(Math.round(this.draft.laneBottom));
+  }
+
   private wireCanvas(canvas: HTMLCanvasElement): void {
     const toWorld = (ev: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -448,11 +528,66 @@ export class MapEditorPanel {
       return { x, y };
     };
 
+    const setCursor = (ev: MouseEvent) => {
+      if (this.tool === "erase") {
+        canvas.style.cursor = "pointer";
+        return;
+      }
+      if (this.tool !== "select") {
+        canvas.style.cursor = "crosshair";
+        return;
+      }
+      const p = toWorld(ev);
+      const handle = this.selected ? hitResizeHandle(this.draft, this.selected, p.x, p.y) : null;
+      if (handle) {
+        canvas.style.cursor = handle === "radius" ? "nwse-resize" : `${handle}-resize`;
+        return;
+      }
+      const lane = hitLaneEdge(this.draft, p.y);
+      if (lane) {
+        canvas.style.cursor = "ns-resize";
+        return;
+      }
+      canvas.style.cursor = hitTest(this.draft, p.x, p.y) ? "move" : "default";
+    };
+
     canvas.addEventListener("mousedown", (ev) => {
       const p = toWorld(ev);
+      if (this.tool === "erase") {
+        const hit = hitTest(this.draft, p.x, p.y);
+        if (!hit) {
+          this.status = "Nothing under cursor.";
+          this.paintCanvas();
+          return;
+        }
+        this.selected = hit;
+        if (!this.deleteSelection(hit)) {
+          this.status = "Cannot delete required objects (base / primary spawner / respawn).";
+          this.paintCanvas();
+        } else {
+          this.status = "Deleted.";
+        }
+        return;
+      }
       if (this.tool === "select") {
+        const handle = this.selected ? hitResizeHandle(this.draft, this.selected, p.x, p.y) : null;
+        if (handle && this.selected) {
+          const start = snapshotResize(this.draft, this.selected);
+          if (start) {
+            this.drag = { kind: "resize", handle, ox: p.x, oy: p.y, start };
+            this.paintCanvas();
+            return;
+          }
+        }
+        const lane = hitLaneEdge(this.draft, p.y);
+        if (lane) {
+          this.selected = lane === "top" ? { k: "laneTop" } : { k: "laneBottom" };
+          this.drag = { kind: "lane", which: lane, oy: p.y };
+          this.paintCanvas();
+          return;
+        }
         this.selected = hitTest(this.draft, p.x, p.y);
-        if (this.selected) this.drag = { ox: p.x, oy: p.y, sx: p.x, sy: p.y };
+        if (this.selected) this.drag = { kind: "move", ox: p.x, oy: p.y };
         this.paintCanvas();
         return;
       }
@@ -460,55 +595,111 @@ export class MapEditorPanel {
       this.paintCanvas();
     });
     canvas.addEventListener("mousemove", (ev) => {
-      if (!this.drag || !this.selected) return;
+      setCursor(ev);
+      if (!this.drag) return;
       const p = toWorld(ev);
-      const dx = p.x - this.drag.ox;
-      const dy = p.y - this.drag.oy;
-      this.drag.ox = p.x;
-      this.drag.oy = p.y;
-      moveSelection(this.draft, this.selected, dx, dy);
-      this.paintCanvas();
+      if (this.drag.kind === "move" && this.selected) {
+        const dx = p.x - this.drag.ox;
+        const dy = p.y - this.drag.oy;
+        this.drag.ox = p.x;
+        this.drag.oy = p.y;
+        moveSelection(this.draft, this.selected, dx, dy);
+        this.paintCanvas();
+        return;
+      }
+      if (this.drag.kind === "resize" && this.selected) {
+        applyResize(this.draft, this.selected, this.drag.handle, this.drag.start, p.x, p.y);
+        this.paintCanvas();
+        return;
+      }
+      if (this.drag.kind === "lane") {
+        const minGap = 60;
+        if (this.drag.which === "top") {
+          this.draft.laneTop = Math.max(0, Math.min(p.y, this.draft.laneBottom - minGap));
+        } else {
+          this.draft.laneBottom = Math.min(MAP_H, Math.max(p.y, this.draft.laneTop + minGap));
+        }
+        clampAllObjectsInLane(this.draft);
+        this.syncLaneInputs();
+        this.paintCanvas();
+      }
     });
     canvas.addEventListener("mouseup", () => {
       this.drag = null;
     });
+    canvas.addEventListener("mouseleave", () => {
+      this.drag = null;
+      canvas.style.cursor = "default";
+    });
   }
 
   private placeAt(x: number, y: number): void {
-    const rect = (): RectZone => ({ x: x - 40, y: y - 30, w: 80, h: 60 });
+    const c = clampPointInLane(this.draft, x, y, 0);
+    x = c.x;
+    y = c.y;
+    const rect = (): RectZone => {
+      const r: RectZone = { x: x - 40, y: y - 30, w: 80, h: 60 };
+      clampRectInLane(this.draft, r);
+      return r;
+    };
     switch (this.tool) {
-      case "base":
-        this.draft.base.x = x;
-        this.draft.base.y = y;
+      case "base": {
+        const p = clampPointInLane(this.draft, x, y, this.draft.base.radius || 40);
+        this.draft.base.x = p.x;
+        this.draft.base.y = p.y;
         break;
-      case "shop":
-        this.draft.shop.x = x;
-        this.draft.shop.y = y;
+      }
+      case "respawn": {
+        const p = clampPointInLane(this.draft, x, y, this.draft.respawn.radius || 28);
+        this.draft.respawn.x = p.x;
+        this.draft.respawn.y = p.y;
+        this.status = "Respawn pad moved.";
         break;
-      case "spawner":
-        this.draft.spawner.x = x;
-        this.draft.spawner.y = y;
+      }
+      case "shop": {
+        const p = clampPointInLane(this.draft, x, y, 36);
+        const pad: ShopPad = { x: p.x, y: p.y, radius: 36, interactRange: 56 };
+        this.draft.shops.push(pad);
+        this.selected = { k: "shop", i: this.draft.shops.length - 1 };
+        this.status = `Shop placed (${this.draft.shops.length}).`;
         break;
-      case "spawnerAlt":
-        this.draft.spawnerAlt = { x, y, radius: this.draft.spawner.radius || 28 };
+      }
+      case "spawner": {
+        const p = clampPointInLane(this.draft, x, y, this.draft.spawner.radius || 28);
+        this.draft.spawner.x = p.x;
+        this.draft.spawner.y = p.y;
+        break;
+      }
+      case "spawnerAlt": {
+        const p = clampPointInLane(this.draft, x, y, this.draft.spawner.radius || 28);
+        this.draft.spawnerAlt = { x: p.x, y: p.y, radius: this.draft.spawner.radius || 28 };
         this.draft.specials.dualSpawners = true;
         break;
-      case "obstacle":
-        this.draft.obstacles.push({ x: x - 24, y: y - 30, w: 48, h: 60 });
+      }
+      case "obstacle": {
+        const r: RectZone = { x: x - 24, y: y - 30, w: 48, h: 60 };
+        clampRectInLane(this.draft, r);
+        this.draft.obstacles.push(r);
         break;
-      case "highGround":
-        this.draft.highGrounds.push({
+      }
+      case "highGround": {
+        const r: RectZone & { damageBonus: number; oathDamageBonus: number } = {
           x: x - 80,
           y: y - 50,
           w: 160,
           h: 100,
           damageBonus: 0.35,
           oathDamageBonus: 0.65,
-        });
+        };
+        clampRectInLane(this.draft, r);
+        this.draft.highGrounds.push(r);
         break;
-      case "turret":
-        this.draft.turretSlots.push({ x, y });
+      }
+      case "turret": {
+        const p = clampPointInLane(this.draft, x, y, 12);
+        this.draft.turretSlots.push({ x: p.x, y: p.y });
         break;
+      }
       case "heal":
         (this.draft.healSprings ??= []).push(rect());
         break;
@@ -524,9 +715,12 @@ export class MapEditorPanel {
       case "wind":
         (this.draft.windCurrents ??= []).push({ ...rect(), vx: 40, vy: 0 });
         break;
-      case "spike":
-        (this.draft.spikePulses ??= []).push({ x, y, radius: 36, damage: 22 });
+      case "spike": {
+        const p = clampPointInLane(this.draft, x, y, 36);
+        (this.draft.spikePulses ??= []).push({ x: p.x, y: p.y, radius: 36, damage: 22 });
+        clampSpikeInLane(this.draft, this.draft.spikePulses[this.draft.spikePulses.length - 1]!);
         break;
+      }
       default:
         break;
     }
@@ -544,12 +738,28 @@ export class MapEditorPanel {
     ctx.fillStyle = "#152033";
     ctx.fillRect(0, m.laneTop, MAP_W, m.laneBottom - m.laneTop);
     ctx.strokeStyle = "#2a3d60";
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, m.laneTop);
     ctx.lineTo(MAP_W, m.laneTop);
     ctx.moveTo(0, m.laneBottom);
     ctx.lineTo(MAP_W, m.laneBottom);
     ctx.stroke();
+    // Lane edge affordance when selected / select tool
+    if (this.selected?.k === "laneTop" || this.selected?.k === "laneBottom" || this.tool === "select") {
+      ctx.strokeStyle = this.selected?.k === "laneTop" ? "#5ef0c8" : "#3a5a80";
+      ctx.lineWidth = this.selected?.k === "laneTop" ? 3 : 1;
+      ctx.beginPath();
+      ctx.moveTo(0, m.laneTop);
+      ctx.lineTo(MAP_W, m.laneTop);
+      ctx.stroke();
+      ctx.strokeStyle = this.selected?.k === "laneBottom" ? "#5ef0c8" : "#3a5a80";
+      ctx.lineWidth = this.selected?.k === "laneBottom" ? 3 : 1;
+      ctx.beginPath();
+      ctx.moveTo(0, m.laneBottom);
+      ctx.lineTo(MAP_W, m.laneBottom);
+      ctx.stroke();
+    }
 
     const fillR = (list: RectZone[] | undefined, fill: string, label: string) => {
       for (const z of list ?? []) {
@@ -557,6 +767,7 @@ export class MapEditorPanel {
         ctx.fillRect(z.x, z.y, z.w, z.h);
         ctx.fillStyle = "#fff8";
         ctx.font = "11px Segoe UI";
+        ctx.textAlign = "left";
         ctx.fillText(label, z.x + 4, z.y + 14);
       }
     };
@@ -568,12 +779,14 @@ export class MapEditorPanel {
     for (const hg of m.highGrounds) {
       ctx.fillStyle = "#3d5a8844";
       ctx.strokeStyle = "#7eb0ff";
+      ctx.lineWidth = 1;
       ctx.fillRect(hg.x, hg.y, hg.w, hg.h);
       ctx.strokeRect(hg.x, hg.y, hg.w, hg.h);
     }
     for (const o of m.obstacles) {
       ctx.fillStyle = "#1c2838";
       ctx.strokeStyle = "#4a6078";
+      ctx.lineWidth = 1;
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     }
@@ -600,16 +813,20 @@ export class MapEditorPanel {
       ctx.fillText(label, p.x, p.y + 4);
     };
     pad(m.base, "#3a8f5a88", "BASE");
-    pad(m.shop, "#5a6a9a88", "SHOP");
+    pad(m.respawn, "#5ef0c888", "RESPAWN");
+    for (const shop of m.shops ?? []) pad(shop, "#5a6a9a88", "SHOP");
     pad(m.spawner, "#9a4a4a88", "SPAWN");
     if (m.spawnerAlt) pad(m.spawnerAlt, "#9a6a4a88", "ALT");
+
+    drawSelectionOverlay(ctx, m, this.selected);
   }
 }
 
 function validateMap(m: CustomMapDef): string | null {
   if (!m.name.trim()) return "Name required";
   if (m.laneTop >= m.laneBottom - 40) return "Lane bounds invalid";
-  if (!m.base || !m.shop || !m.spawner) return "Base, shop, and spawner required";
+  if (!m.base || !m.spawner) return "Base and primary spawner required";
+  if (!m.respawn) return "Respawn point required";
   if (m.specials.dualSpawners && !m.spawnerAlt) return "Dual spawners needs an alt spawner";
   return null;
 }
@@ -623,7 +840,8 @@ function mapDefToCustomDraft(m: MapDef): CustomMapDef {
     laneTop: m.laneTop,
     laneBottom: m.laneBottom,
     base: structuredClone(m.base),
-    shop: structuredClone(m.shop),
+    shops: structuredClone(mapShops(m)),
+    respawn: structuredClone(mapRespawn(m)),
     spawner: structuredClone(m.spawner),
     spawnerAlt: m.spawnerAlt ? structuredClone(m.spawnerAlt) : undefined,
     highGrounds: structuredClone(m.highGrounds ?? []),
@@ -648,6 +866,87 @@ function mapDefToCustomDraft(m: MapDef): CustomMapDef {
   };
 }
 
+/** Keep placeables inset a few pixels inside the lane so nothing sits OOB. */
+const LANE_INSET = 8;
+
+function laneInnerBounds(m: CustomMapDef): { minX: number; maxX: number; minY: number; maxY: number } {
+  return {
+    minX: LANE_INSET,
+    maxX: MAP_W - LANE_INSET,
+    minY: m.laneTop + LANE_INSET,
+    maxY: m.laneBottom - LANE_INSET,
+  };
+}
+
+function clampPointInLane(
+  m: CustomMapDef,
+  x: number,
+  y: number,
+  radius = 0,
+): { x: number; y: number } {
+  const b = laneInnerBounds(m);
+  const r = Math.max(0, radius);
+  const maxX = Math.max(b.minX + r, b.maxX - r);
+  const maxY = Math.max(b.minY + r, b.maxY - r);
+  return {
+    x: Math.max(b.minX + r, Math.min(maxX, x)),
+    y: Math.max(b.minY + r, Math.min(maxY, y)),
+  };
+}
+
+function clampRectInLane(m: CustomMapDef, r: RectZone): void {
+  const b = laneInnerBounds(m);
+  const maxW = Math.max(MIN_RECT, b.maxX - b.minX);
+  const maxH = Math.max(MIN_RECT, b.maxY - b.minY);
+  r.w = Math.min(Math.max(MIN_RECT, r.w), maxW);
+  r.h = Math.min(Math.max(MIN_RECT, r.h), maxH);
+  r.x = Math.max(b.minX, Math.min(b.maxX - r.w, r.x));
+  r.y = Math.max(b.minY, Math.min(b.maxY - r.h, r.y));
+}
+
+function clampSpikeInLane(m: CustomMapDef, s: { x: number; y: number; radius: number }): void {
+  const b = laneInnerBounds(m);
+  const maxR = Math.max(
+    MIN_SPIKE_R,
+    Math.min(s.x - b.minX, b.maxX - s.x, s.y - b.minY, b.maxY - s.y, MAX_SPIKE_R),
+  );
+  s.radius = Math.max(MIN_SPIKE_R, Math.min(s.radius, maxR));
+  const p = clampPointInLane(m, s.x, s.y, s.radius);
+  s.x = p.x;
+  s.y = p.y;
+  s.radius = Math.max(
+    MIN_SPIKE_R,
+    Math.min(s.radius, s.x - b.minX, b.maxX - s.x, s.y - b.minY, b.maxY - s.y, MAX_SPIKE_R),
+  );
+}
+
+function clampPadInLane(m: CustomMapDef, p: { x: number; y: number; radius?: number }, fallbackR: number): void {
+  const c = clampPointInLane(m, p.x, p.y, p.radius ?? fallbackR);
+  p.x = c.x;
+  p.y = c.y;
+}
+
+function clampAllObjectsInLane(m: CustomMapDef): void {
+  clampPadInLane(m, m.base, 40);
+  clampPadInLane(m, m.respawn, 28);
+  clampPadInLane(m, m.spawner, 28);
+  if (m.spawnerAlt) clampPadInLane(m, m.spawnerAlt, 28);
+  for (const s of m.shops ?? []) clampPadInLane(m, s, s.radius || 36);
+  for (const t of m.turretSlots) {
+    const c = clampPointInLane(m, t.x, t.y, 12);
+    t.x = c.x;
+    t.y = c.y;
+  }
+  for (const r of m.obstacles) clampRectInLane(m, r);
+  for (const r of m.highGrounds) clampRectInLane(m, r);
+  for (const r of m.healSprings ?? []) clampRectInLane(m, r);
+  for (const r of m.slowMires ?? []) clampRectInLane(m, r);
+  for (const r of m.hastePads ?? []) clampRectInLane(m, r);
+  for (const r of m.goldVents ?? []) clampRectInLane(m, r);
+  for (const r of m.windCurrents ?? []) clampRectInLane(m, r);
+  for (const s of m.spikePulses ?? []) clampSpikeInLane(m, s);
+}
+
 /** Second spawner default: same X as primary, offset below (or above if clamped). */
 function defaultSpawnerAlt(m: CustomMapDef): { x: number; y: number; radius: number } {
   const radius = m.spawner.radius || 28;
@@ -660,13 +959,162 @@ function defaultSpawnerAlt(m: CustomMapDef): { x: number; y: number; radius: num
   return { x: m.spawner.x, y, radius };
 }
 
+function hitLaneEdge(m: CustomMapDef, y: number): "top" | "bottom" | null {
+  if (Math.abs(y - m.laneTop) <= LANE_HIT) return "top";
+  if (Math.abs(y - m.laneBottom) <= LANE_HIT) return "bottom";
+  return null;
+}
+
+function getSelectedRect(m: CustomMapDef, sel: SelKind): RectZone | null {
+  switch (sel.k) {
+    case "obstacle":
+      return m.obstacles[sel.i] ?? null;
+    case "highGround":
+      return m.highGrounds[sel.i] ?? null;
+    case "heal":
+      return m.healSprings?.[sel.i] ?? null;
+    case "mire":
+      return m.slowMires?.[sel.i] ?? null;
+    case "haste":
+      return m.hastePads?.[sel.i] ?? null;
+    case "gold":
+      return m.goldVents?.[sel.i] ?? null;
+    case "wind":
+      return m.windCurrents?.[sel.i] ?? null;
+    default:
+      return null;
+  }
+}
+
+function getSelectedSpike(m: CustomMapDef, sel: SelKind): { x: number; y: number; radius: number } | null {
+  if (sel.k !== "spike") return null;
+  return m.spikePulses?.[sel.i] ?? null;
+}
+
+function hitResizeHandle(
+  m: CustomMapDef,
+  sel: SelKind,
+  x: number,
+  y: number,
+): ResizeHandle | null {
+  const spike = getSelectedSpike(m, sel);
+  if (spike) {
+    const dx = x - spike.x;
+    const dy = y - spike.y;
+    const dist = Math.hypot(dx, dy);
+    if (Math.abs(dist - spike.radius) <= HANDLE + 4) return "radius";
+    return null;
+  }
+  const r = getSelectedRect(m, sel);
+  if (!r) return null;
+  const corners: { h: ResizeHandle; cx: number; cy: number }[] = [
+    { h: "nw", cx: r.x, cy: r.y },
+    { h: "ne", cx: r.x + r.w, cy: r.y },
+    { h: "sw", cx: r.x, cy: r.y + r.h },
+    { h: "se", cx: r.x + r.w, cy: r.y + r.h },
+  ];
+  for (const c of corners) {
+    if (Math.abs(x - c.cx) <= HANDLE && Math.abs(y - c.cy) <= HANDLE) return c.h;
+  }
+  return null;
+}
+
+function snapshotResize(
+  m: CustomMapDef,
+  sel: SelKind,
+): RectZone | { radius: number } | null {
+  const spike = getSelectedSpike(m, sel);
+  if (spike) return { radius: spike.radius };
+  const r = getSelectedRect(m, sel);
+  if (!r) return null;
+  return { x: r.x, y: r.y, w: r.w, h: r.h };
+}
+
+function applyResize(
+  m: CustomMapDef,
+  sel: SelKind,
+  handle: ResizeHandle,
+  start: RectZone | { radius: number },
+  x: number,
+  y: number,
+): void {
+  if (handle === "radius") {
+    const spike = getSelectedSpike(m, sel);
+    if (!spike || !("radius" in start)) return;
+    spike.radius = Math.max(MIN_SPIKE_R, Math.min(MAX_SPIKE_R, Math.hypot(x - spike.x, y - spike.y)));
+    clampSpikeInLane(m, spike);
+    return;
+  }
+  const r = getSelectedRect(m, sel);
+  if (!r || !("w" in start)) return;
+  let left = start.x;
+  let top = start.y;
+  let right = start.x + start.w;
+  let bottom = start.y + start.h;
+  if (handle === "nw" || handle === "sw") left = x;
+  if (handle === "ne" || handle === "se") right = x;
+  if (handle === "nw" || handle === "ne") top = y;
+  if (handle === "sw" || handle === "se") bottom = y;
+  if (right - left < MIN_RECT) {
+    if (handle === "nw" || handle === "sw") left = right - MIN_RECT;
+    else right = left + MIN_RECT;
+  }
+  if (bottom - top < MIN_RECT) {
+    if (handle === "nw" || handle === "ne") top = bottom - MIN_RECT;
+    else bottom = top + MIN_RECT;
+  }
+  r.x = left;
+  r.y = top;
+  r.w = right - left;
+  r.h = bottom - top;
+  clampRectInLane(m, r);
+}
+
+function drawSelectionOverlay(
+  ctx: CanvasRenderingContext2D,
+  m: CustomMapDef,
+  sel: SelKind | null,
+): void {
+  if (!sel) return;
+  const drawHandle = (cx: number, cy: number) => {
+    ctx.fillStyle = "#5ef0c8";
+    ctx.strokeStyle = "#0a101a";
+    ctx.lineWidth = 1;
+    ctx.fillRect(cx - HANDLE / 2, cy - HANDLE / 2, HANDLE, HANDLE);
+    ctx.strokeRect(cx - HANDLE / 2, cy - HANDLE / 2, HANDLE, HANDLE);
+  };
+  const spike = getSelectedSpike(m, sel);
+  if (spike) {
+    ctx.strokeStyle = "#5ef0c8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(spike.x, spike.y, spike.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    drawHandle(spike.x + spike.radius, spike.y);
+    return;
+  }
+  const r = getSelectedRect(m, sel);
+  if (r) {
+    ctx.strokeStyle = "#5ef0c8";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    drawHandle(r.x, r.y);
+    drawHandle(r.x + r.w, r.y);
+    drawHandle(r.x, r.y + r.h);
+    drawHandle(r.x + r.w, r.y + r.h);
+  }
+}
+
 function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
   const inC = (p: { x: number; y: number; radius: number }) =>
     (x - p.x) ** 2 + (y - p.y) ** 2 <= p.radius ** 2;
   const inR = (r: RectZone, i: number, k: SelKind["k"]): SelKind | null =>
     x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h ? ({ k, i } as SelKind) : null;
   if (inC(m.base)) return { k: "base" };
-  if (inC(m.shop)) return { k: "shop" };
+  if (inC(m.respawn)) return { k: "respawn" };
+  for (let i = (m.shops ?? []).length - 1; i >= 0; i--) {
+    if (inC(m.shops[i]!)) return { k: "shop", i };
+  }
   if (inC(m.spawner)) return { k: "spawner" };
   if (m.spawnerAlt && inC(m.spawnerAlt)) return { k: "spawnerAlt" };
   for (let i = m.obstacles.length - 1; i >= 0; i--) {
@@ -702,26 +1150,34 @@ function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
 }
 
 function moveSelection(m: CustomMapDef, sel: SelKind, dx: number, dy: number): void {
-  const movePad = (p: { x: number; y: number }) => {
+  if (sel.k === "laneTop" || sel.k === "laneBottom") return;
+  const movePad = (p: { x: number; y: number }, radius: number) => {
     p.x += dx;
     p.y += dy;
+    const c = clampPointInLane(m, p.x, p.y, radius);
+    p.x = c.x;
+    p.y = c.y;
   };
   const moveR = (r: RectZone) => {
     r.x += dx;
     r.y += dy;
+    clampRectInLane(m, r);
   };
   switch (sel.k) {
     case "base":
-      movePad(m.base);
+      movePad(m.base, m.base.radius || 40);
+      break;
+    case "respawn":
+      movePad(m.respawn, m.respawn.radius || 28);
       break;
     case "shop":
-      movePad(m.shop);
+      movePad(m.shops[sel.i]!, m.shops[sel.i]!.radius || 36);
       break;
     case "spawner":
-      movePad(m.spawner);
+      movePad(m.spawner, m.spawner.radius || 28);
       break;
     case "spawnerAlt":
-      if (m.spawnerAlt) movePad(m.spawnerAlt);
+      if (m.spawnerAlt) movePad(m.spawnerAlt, m.spawnerAlt.radius || 28);
       break;
     case "obstacle":
       moveR(m.obstacles[sel.i]!);
@@ -730,7 +1186,7 @@ function moveSelection(m: CustomMapDef, sel: SelKind, dx: number, dy: number): v
       moveR(m.highGrounds[sel.i]!);
       break;
     case "turret":
-      movePad(m.turretSlots[sel.i]!);
+      movePad(m.turretSlots[sel.i]!, 12);
       break;
     case "heal":
       moveR(m.healSprings![sel.i]!);
@@ -751,6 +1207,7 @@ function moveSelection(m: CustomMapDef, sel: SelKind, dx: number, dy: number): v
       const s = m.spikePulses![sel.i]!;
       s.x += dx;
       s.y += dy;
+      clampSpikeInLane(m, s);
       break;
     }
   }

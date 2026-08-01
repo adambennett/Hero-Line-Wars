@@ -26,8 +26,26 @@ let loaded = false;
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  libraryMaps = readList<CustomMapDef>(MAP_STORE_KEY);
+  libraryMaps = readList<CustomMapDef>(MAP_STORE_KEY).map(migrateCustomMap);
   libraryHeroes = readList<CustomHeroDef>(HERO_STORE_KEY);
+}
+
+/** Upgrade older custom map saves (single `shop`, missing `respawn`). */
+function migrateCustomMap(raw: CustomMapDef): CustomMapDef {
+  const legacy = raw as CustomMapDef & { shop?: CustomMapDef["shops"][number] };
+  const shops =
+    Array.isArray(legacy.shops) && legacy.shops.length
+      ? legacy.shops
+      : legacy.shop
+        ? [legacy.shop]
+        : Array.isArray(legacy.shops)
+          ? legacy.shops
+          : [];
+  const respawn =
+    legacy.respawn ??
+    ({ x: legacy.base.x + 120, y: legacy.base.y, radius: 28 } as CustomMapDef["respawn"]);
+  const { shop: _drop, ...rest } = legacy;
+  return { ...rest, shops, respawn };
 }
 
 function readList<T>(key: string): T[] {
@@ -113,7 +131,7 @@ export function registerSessionCustoms(opts: {
   heroes?: CustomHeroDef[];
 }): void {
   for (const m of opts.maps ?? []) {
-    if (m?.id) sessionMaps.set(m.id, structuredClone(m));
+    if (m?.id) sessionMaps.set(m.id, migrateCustomMap(structuredClone(m)));
   }
   for (const h of opts.heroes ?? []) {
     if (h?.id) sessionHeroes.set(h.id, structuredClone(h));
@@ -137,7 +155,10 @@ export function customMapToMapDef(c: CustomMapDef): MapDef {
     baseLaneTop: c.laneTop,
     baseLaneBottom: c.laneBottom,
     base: structuredClone(c.base),
-    shop: structuredClone(c.shop),
+    shops: structuredClone(c.shops ?? []),
+    respawn: structuredClone(
+      c.respawn ?? { x: c.base.x + 120, y: c.base.y, radius: 28 },
+    ),
     spawner: structuredClone(c.spawner),
     spawnerAlt: c.spawnerAlt ? structuredClone(c.spawnerAlt) : undefined,
     highGrounds: structuredClone(c.highGrounds ?? []),
@@ -228,14 +249,16 @@ export function heroUsesWarpKit(heroId: string): boolean {
 
 export function defaultCustomMap(partial?: Partial<CustomMapDef>): CustomMapDef {
   const midY = MAP_H / 2;
+  const base = partial?.base ?? { x: 52, y: midY, radius: 46, maxHp: 120 };
   return {
     id: partial?.id ?? "",
     name: partial?.name ?? "My Custom Map",
     blurb: partial?.blurb ?? "A player-authored lane.",
     laneTop: partial?.laneTop ?? 100,
     laneBottom: partial?.laneBottom ?? MAP_H - 100,
-    base: partial?.base ?? { x: 52, y: midY, radius: 46, maxHp: 120 },
-    shop: partial?.shop ?? { x: 148, y: midY + 100, radius: 38, interactRange: 58 },
+    base,
+    shops: partial?.shops ?? [{ x: 148, y: midY + 100, radius: 38, interactRange: 58 }],
+    respawn: partial?.respawn ?? { x: base.x + 120, y: base.y, radius: 28 },
     spawner: partial?.spawner ?? { x: MAP_W - 52, y: midY, radius: 30 },
     spawnerAlt: partial?.spawnerAlt,
     highGrounds: partial?.highGrounds ?? [

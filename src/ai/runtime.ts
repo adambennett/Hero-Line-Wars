@@ -11,7 +11,7 @@ import {
 } from "./brain";
 import { MAP_W } from "../data/constants";
 import { resolveHero } from "../custom/registry";
-import { hasLineOfSight } from "../data/maps";
+import { hasLineOfSight, mapShops } from "../data/maps";
 import { dist, normalize } from "../game/math";
 import type { GameState } from "../game/state";
 import { nearestEnemy } from "../systems/combat";
@@ -279,7 +279,21 @@ export function thinkNeural(
       break;
     }
     case "SHOP": {
-      const shop = map.shop;
+      const shops = mapShops(map);
+      if (shops.length === 0) {
+        intent.moveX = 0;
+        intent.moveY = 0;
+        break;
+      }
+      let shop = shops[0]!;
+      let best = Infinity;
+      for (const s of shops) {
+        const d = dist(state.hero, s);
+        if (d < best) {
+          best = d;
+          shop = s;
+        }
+      }
       const n = normalize(shop.x - state.hero.x, shop.y - state.hero.y);
       intent.moveX = n.x;
       intent.moveY = n.y;

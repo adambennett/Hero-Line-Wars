@@ -1,6 +1,6 @@
 import type { NeuralLaneAi } from "../ai/runtime";
 import { HERO_LIST, type HeroId } from "../data/heroes";
-import { resolveMapChoice, type MapId } from "../data/maps";
+import { resolveMapChoice, type MapId, mapRespawn } from "../data/maps";
 import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
 import { composeRunModifiers } from "../meta/modifiers";
@@ -65,21 +65,14 @@ function populateLane(
 ): void {
   if (seats.length === 0) return;
   const primary = seats[0]!;
-  state.hero = makeHeroRuntime(
-    primary.heroId,
-    state.map.base.x + 120,
-    state.map.base.y,
-    0,
-    primary.slot,
-  );
+  const pad = mapRespawn(state.map);
+  state.hero = makeHeroRuntime(primary.heroId, pad.x, pad.y, 0, primary.slot);
   state.allies = [];
   let nid = nextIdStart;
   for (let i = 1; i < seats.length; i++) {
     const s = seats[i]!;
     const offset = (i - (seats.length - 1) / 2) * 36;
-    state.allies.push(
-      makeHeroRuntime(s.heroId, state.map.base.x + 120, state.map.base.y + offset, nid++, s.slot),
-    );
+    state.allies.push(makeHeroRuntime(s.heroId, pad.x, pad.y + offset, nid++, s.slot));
   }
   state.nextId = Math.max(state.nextId, nid);
 }

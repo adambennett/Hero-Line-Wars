@@ -22,6 +22,8 @@ import {
   findClearSpot,
   blockedByObstacle,
   resolveMapChoice,
+  mapRespawn,
+  nearAnyShop,
   type MapDef,
   type MapId,
 } from "../data/maps";
@@ -625,8 +627,8 @@ export function createState(
     hero: {
       id: 0,
       heroId,
-      x: map.base.x + 120,
-      y: map.base.y,
+      x: mapRespawn(map).x,
+      y: mapRespawn(map).y,
       hp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
       maxHp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
       radius: def.radius,
@@ -1021,10 +1023,11 @@ export function laneOutOfRunLives(state: GameState): boolean {
 
 function respawnHero(state: GameState): void {
   const def = resolveHero(state.hero.heroId);
+  const pad = mapRespawn(state.map);
   state.hero.alive = true;
   state.hero.hp = state.hero.maxHp;
-  state.hero.x = state.map.base.x + 120;
-  state.hero.y = state.map.base.y;
+  state.hero.x = pad.x;
+  state.hero.y = pad.y;
   state.hero.attackCd = 0.4;
   state.hero.barrierTimer = 0;
   state.hero.whirlwindTimer = 0;
@@ -1275,8 +1278,7 @@ export function update(state: GameState, input: Input, dt: number): void {
     }
   }
 
-  const shop = state.map.shop;
-  const nearNow = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
+  const nearNow = nearAnyShop(state.map, state.hero, state.hero.alive);
   // Auto-close when leaving interact range (also covers death via nearShop=false).
   if (state.shopOpen && !nearNow) {
     state.shopOpen = false;
