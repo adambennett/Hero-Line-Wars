@@ -6,10 +6,17 @@ import {
 } from "../data/xp";
 import { LEVEL_PASSIVES } from "../data/xp";
 import type { EnemyUnit, GameState } from "../game/state";
+import { isBossKind, isEliteKind } from "../data/enemies";
 
 export function grantKillXp(state: GameState, e: EnemyUnit): void {
   const kindWeight =
-    e.kind === "boss" ? 2.2 : e.kind === "elite" ? 1.6 : e.kind === "brute" ? 1.2 : 1;
+    e.kind === "boss" || isBossKind(e.kind)
+      ? 2.2
+      : e.kind === "elite" || isEliteKind(e.kind)
+        ? 1.6
+        : e.kind === "brute"
+          ? 1.2
+          : 1;
   let xp = killXpForEnemy(e.goldReward, kindWeight);
   // Luck passive: small XP bonus
   xp = Math.round(xp * (1 + state.hero.luck * 0.15));

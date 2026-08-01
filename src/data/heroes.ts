@@ -9,7 +9,13 @@ export type HeroId =
   | "frost"
   | "wizard"
   | "coil"
-  | "thorn";
+  | "thorn"
+  | "ember"
+  | "void"
+  | "titan"
+  | "mirage"
+  | "medic"
+  | "tempest";
 
 export type AbilityKind =
   | "dash"
@@ -29,7 +35,19 @@ export type AbilityKind =
   | "zip"
   | "stormcage"
   | "burrow"
-  | "bloom";
+  | "bloom"
+  | "flare"
+  | "inferno"
+  | "rift"
+  | "singularity"
+  | "charge"
+  | "quake"
+  | "swapblink"
+  | "mirrorshard"
+  | "fieldstep"
+  | "sanctuary"
+  | "gust"
+  | "cyclone";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -434,6 +452,234 @@ export const HEROES: Record<HeroId, HeroDef> = {
       },
     ],
   },
+  ember: {
+    id: "ember",
+    name: "Ember",
+    blurb: "Pyromancer — scorched bolts and a lane-wide inferno.",
+    color: "#ff6a3a",
+    glowColor: "#ffc090",
+    radius: 16,
+    speed: 215,
+    maxHp: 95,
+    attackRange: 155,
+    attackDamage: 15,
+    attackCooldown: 0.36,
+    projectileSpeed: 520,
+    attackStyle: "bolt",
+    aimMode: "free",
+    attackHint: "Free-aim firebolt",
+    passive: {
+      id: "scorch",
+      name: "Scorch",
+      blurb: "Basics splash 20% damage to nearby enemies.",
+    },
+    abilities: [
+      {
+        id: "flare",
+        slot: "mobility",
+        name: "Flare Dash",
+        cooldown: 5,
+        hint: "Dash (~120) and scorch nearby foes.",
+      },
+      {
+        id: "inferno",
+        slot: "ultimate",
+        name: "Inferno",
+        cooldown: 10,
+        hint: "Wide fire nova — heavy AoE burn.",
+      },
+    ],
+  },
+  void: {
+    id: "void",
+    name: "Void",
+    blurb: "Assassin of rifts — blink in, collapse space.",
+    color: "#7a5cff",
+    glowColor: "#c8b0ff",
+    radius: 15,
+    speed: 235,
+    maxHp: 85,
+    attackRange: 130,
+    attackDamage: 18,
+    attackCooldown: 0.34,
+    projectileSpeed: 600,
+    attackStyle: "bolt",
+    aimMode: "free",
+    attackHint: "Free-aim void needle",
+    passive: {
+      id: "riftmark",
+      name: "Riftmark",
+      blurb: "Kills refund 15% of mobility cooldown.",
+    },
+    abilities: [
+      {
+        id: "rift",
+        slot: "mobility",
+        name: "Rift Step",
+        cooldown: 4.5,
+        hint: "Long blink toward aim (~160).",
+      },
+      {
+        id: "singularity",
+        slot: "ultimate",
+        name: "Singularity",
+        cooldown: 11,
+        hint: "Pull and crush enemies in a void well.",
+      },
+    ],
+  },
+  titan: {
+    id: "titan",
+    name: "Titan",
+    blurb: "Living siege engine — charge and quake the line.",
+    color: "#c8a060",
+    glowColor: "#ffe0a8",
+    radius: 20,
+    speed: 185,
+    maxHp: 160,
+    attackRange: 70,
+    attackDamage: 30,
+    attackCooldown: 0.55,
+    projectileSpeed: 0,
+    attackStyle: "cleave",
+    aimMode: "engage",
+    attackHint: "Aimed seismic cleave — need a foe in range",
+    passive: {
+      id: "bedrock",
+      name: "Bedrock",
+      blurb: "Take 15% less damage while barrier is active.",
+    },
+    abilities: [
+      {
+        id: "charge",
+        slot: "mobility",
+        name: "Bull Charge",
+        cooldown: 6,
+        hint: "Long charge (~150) with brief barrier.",
+      },
+      {
+        id: "quake",
+        slot: "ultimate",
+        name: "Quake",
+        cooldown: 9,
+        hint: "Stomp AoE — damage and heavy slow.",
+      },
+    ],
+  },
+  mirage: {
+    id: "mirage",
+    name: "Mirage",
+    blurb: "Illusionist — swap places and shatter mirror shards.",
+    color: "#50d0d8",
+    glowColor: "#a8f0f8",
+    radius: 15,
+    speed: 228,
+    maxHp: 90,
+    attackRange: 145,
+    attackDamage: 14,
+    attackCooldown: 0.33,
+    projectileSpeed: 540,
+    attackStyle: "bolt",
+    aimMode: "free",
+    attackHint: "Free-aim prismatic bolt",
+    passive: {
+      id: "afterimage",
+      name: "Afterimage",
+      blurb: "After mobility, next basic deals +40% damage.",
+    },
+    abilities: [
+      {
+        id: "swapblink",
+        slot: "mobility",
+        name: "Swap Blink",
+        cooldown: 5,
+        hint: "Blink (~130). Marks next hit empowered.",
+      },
+      {
+        id: "mirrorshard",
+        slot: "ultimate",
+        name: "Mirror Shard",
+        cooldown: 9,
+        hint: "Fan of piercing shards toward aim.",
+      },
+    ],
+  },
+  medic: {
+    id: "medic",
+    name: "Medic",
+    blurb: "Field surgeon — heal yourself and harden the line.",
+    color: "#70e090",
+    glowColor: "#c0ffd0",
+    radius: 16,
+    speed: 218,
+    maxHp: 110,
+    attackRange: 140,
+    attackDamage: 12,
+    attackCooldown: 0.38,
+    projectileSpeed: 480,
+    attackStyle: "bolt",
+    aimMode: "free",
+    attackHint: "Free-aim syringe bolt",
+    passive: {
+      id: "triage",
+      name: "Triage",
+      blurb: "Between waves, heal 25% of missing HP.",
+    },
+    abilities: [
+      {
+        id: "fieldstep",
+        slot: "mobility",
+        name: "Field Step",
+        cooldown: 5,
+        hint: "Short reposition (~100) and heal 12 HP.",
+      },
+      {
+        id: "sanctuary",
+        slot: "ultimate",
+        name: "Sanctuary",
+        cooldown: 10,
+        hint: "AoE heal pulse + barrier for 2s.",
+      },
+    ],
+  },
+  tempest: {
+    id: "tempest",
+    name: "Tempest",
+    blurb: "Wind archer — gust reposition and cyclone pierce.",
+    color: "#90c8ff",
+    glowColor: "#d0e8ff",
+    radius: 16,
+    speed: 225,
+    maxHp: 98,
+    attackRange: 175,
+    attackDamage: 16,
+    attackCooldown: 0.34,
+    projectileSpeed: 580,
+    attackStyle: "bolt",
+    aimMode: "free",
+    attackHint: "Free-aim wind arrow",
+    passive: {
+      id: "gale",
+      name: "Gale",
+      blurb: "Basics briefly slow enemies by 20%.",
+    },
+    abilities: [
+      {
+        id: "gust",
+        slot: "mobility",
+        name: "Gust Step",
+        cooldown: 4.8,
+        hint: "Dash (~125) that knocks foes back slightly.",
+      },
+      {
+        id: "cyclone",
+        slot: "ultimate",
+        name: "Cyclone",
+        cooldown: 9,
+        hint: "Piercing wind spear through the lane.",
+      },
+    ],
+  },
 };
 
 export const HERO_LIST: HeroDef[] = [
@@ -446,6 +692,12 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.wizard,
   HEROES.coil,
   HEROES.thorn,
+  HEROES.ember,
+  HEROES.void,
+  HEROES.titan,
+  HEROES.mirage,
+  HEROES.medic,
+  HEROES.tempest,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

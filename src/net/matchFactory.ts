@@ -163,14 +163,17 @@ export function buildSoloVsAiMatch(opts: {
   opponentLabel?: string;
   playerModifiers?: import("../meta/modifiers").RunModifiers;
   enemyModifiers?: import("../meta/modifiers").RunModifiers;
+  teamSize?: 1 | 2 | 3;
+  chestOpenMul?: number;
+  chestDespawnSec?: number;
+  chestSpawnChance?: number;
 }): MpMatch {
   const resolved = resolveMapChoice(opts.mapId);
-  const aiHero =
-    opts.aiHeroId ??
-    (() => {
-      const pool = HERO_LIST.filter((h) => h.id !== opts.playerHeroId);
-      return (pool.length ? pool : HERO_LIST)[opts.seed % (pool.length || HERO_LIST.length)]!.id;
-    })();
+  const teamSize = opts.teamSize ?? 1;
+  const pool = HERO_LIST.filter((h) => h.id !== opts.playerHeroId);
+  const pickAi = (i: number) =>
+    (pool.length ? pool : HERO_LIST)[(opts.seed + i * 17) % (pool.length || HERO_LIST.length)]!.id;
+  const aiHero = opts.aiHeroId ?? pickAi(0);
 
   const sharedBase = {
     mapId: resolved,
@@ -178,6 +181,10 @@ export function buildSoloVsAiMatch(opts: {
     startingGold: opts.startingGold,
     wavesToWin: opts.wavesToWin,
     friendlyFire: opts.friendlyFire,
+    teamSize,
+    chestOpenMul: opts.chestOpenMul,
+    chestDespawnSec: opts.chestDespawnSec,
+    chestSpawnChance: opts.chestSpawnChance,
   };
 
   const lane0 = createState(opts.playerHeroId, {
@@ -186,7 +193,15 @@ export function buildSoloVsAiMatch(opts: {
     ascension: opts.playerModifiers?.ascension ?? 0,
   });
   lane0.mpLane = true;
-  populateLane(lane0, [{ slot: 0, heroId: opts.playerHeroId }], 10);
+  const playerSeats = [{ slot: 0, heroId: opts.playerHeroId }];
+  for (let i = 1; i < teamSize; i++) {
+    playerSeats.push({ slot: -10 - i, heroId: pickAi(i + 3) });
+  }
+  populateLane(lane0, playerSeats, 10);
+  // Mark ally seats as AI-driven (no controller)
+  for (const ally of lane0.allies) {
+    ally.controllerSlot = null;
+  }
 
   const lane1 = createState(aiHero, {
     ...sharedBase,
@@ -195,13 +210,17 @@ export function buildSoloVsAiMatch(opts: {
   });
   lane1.mpLane = true;
   lane1.aiControlled = true;
-  populateLane(lane1, [{ slot: -1, heroId: aiHero }], 20);
+  const enemySeats = [{ slot: -1, heroId: aiHero }];
+  for (let i = 1; i < teamSize; i++) {
+    enemySeats.push({ slot: -20 - i, heroId: pickAi(i + 7) });
+  }
+  populateLane(lane1, enemySeats, 20);
 
   lane0.viewOpponentLane = false;
   lane1.viewOpponentLane = false;
 
   return {
-    mode: "1v1",
+    mode: teamSize >= 3 ? "3v3" : teamSize === 2 ? "2v2" : "1v1",
     mapId: resolved,
     maxTurrets: opts.maxTurrets,
     seed: opts.seed,

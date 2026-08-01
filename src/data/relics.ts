@@ -23,7 +23,30 @@ export type RelicId =
   | "lucky_coin"
   | "tide_charm"
   | "mythic_engine"
-  | "legend_crown";
+  | "legend_crown"
+  | "spare_clip"
+  | "runners_band"
+  | "penny_whistle"
+  | "stone_skin"
+  | "keen_eye"
+  | "bounty_mark"
+  | "rally_banner"
+  | "echo_chamber"
+  | "vampiric_edge"
+  | "fortress_pact"
+  | "haste_sigil"
+  | "miser_purse"
+  | "shockwave_core"
+  | "last_stand"
+  | "wave_rider"
+  | "turret_overclock"
+  | "blood_tithe"
+  | "oracle_lens"
+  | "phoenix_down"
+  | "eternal_engine"
+  | "worldbreaker"
+  | "sovereign_seal"
+  | "line_tyrant";
 
 export type RelicDef = {
   id: RelicId;
@@ -179,6 +202,167 @@ export const RELICS: Record<RelicId, RelicDef> = {
     id: "legend_crown",
     name: "Crown of the Line",
     blurb: "+15% damage, +25 max HP, and +0.5 income.",
+    tag: "Power",
+    rarity: "legendary",
+  },
+  spare_clip: {
+    id: "spare_clip",
+    name: "Spare Clip",
+    blurb: "Attack 12% faster.",
+    tag: "Attack",
+    rarity: "common",
+  },
+  runners_band: {
+    id: "runners_band",
+    name: "Runner's Band",
+    blurb: "+35 move speed.",
+    tag: "Mobility",
+    rarity: "common",
+  },
+  penny_whistle: {
+    id: "penny_whistle",
+    name: "Penny Whistle",
+    blurb: "+0.5 gold/sec income.",
+    tag: "Economy",
+    rarity: "common",
+  },
+  stone_skin: {
+    id: "stone_skin",
+    name: "Stone Skin",
+    blurb: "+30 max HP (heals 15).",
+    tag: "Defense",
+    rarity: "common",
+  },
+  keen_eye: {
+    id: "keen_eye",
+    name: "Keen Eye",
+    blurb: "+8% crit chance.",
+    tag: "Luck",
+    rarity: "uncommon",
+  },
+  bounty_mark: {
+    id: "bounty_mark",
+    name: "Bounty Mark",
+    blurb: "+25% gold from kills.",
+    tag: "Economy",
+    rarity: "uncommon",
+  },
+  rally_banner: {
+    id: "rally_banner",
+    name: "Rally Banner",
+    blurb: "Between waves, gain a 1.5s damage barrier.",
+    tag: "Sustain",
+    rarity: "uncommon",
+  },
+  echo_chamber: {
+    id: "echo_chamber",
+    name: "Echo Chamber",
+    blurb: "Ultimate cooldown reduced by 20%.",
+    tag: "Power",
+    rarity: "uncommon",
+  },
+  vampiric_edge: {
+    id: "vampiric_edge",
+    name: "Vampiric Edge",
+    blurb: "Heal for 10% of all damage you deal.",
+    tag: "Sustain",
+    rarity: "rare",
+  },
+  fortress_pact: {
+    id: "fortress_pact",
+    name: "Fortress Pact",
+    blurb: "Base max HP +40 (repairs 40).",
+    tag: "Defense",
+    rarity: "rare",
+  },
+  haste_sigil: {
+    id: "haste_sigil",
+    name: "Haste Sigil",
+    blurb: "Attack 20% faster and +25 move speed.",
+    tag: "Attack",
+    rarity: "rare",
+  },
+  miser_purse: {
+    id: "miser_purse",
+    name: "Miser's Purse",
+    blurb: "Shop prices −12%.",
+    tag: "Economy",
+    rarity: "rare",
+  },
+  shockwave_core: {
+    id: "shockwave_core",
+    name: "Shockwave Core",
+    blurb: "Basic attacks splash 55% damage nearby.",
+    tag: "Attack",
+    rarity: "mythic",
+  },
+  last_stand: {
+    id: "last_stand",
+    name: "Last Stand",
+    blurb: "Below 35% HP, deal +40% damage.",
+    tag: "Risk",
+    rarity: "mythic",
+  },
+  wave_rider: {
+    id: "wave_rider",
+    name: "Wave Rider",
+    blurb: "At wave start, heal 20 HP and gain +12 gold.",
+    tag: "Sustain",
+    rarity: "uncommon",
+  },
+  turret_overclock: {
+    id: "turret_overclock",
+    name: "Turret Overclock",
+    blurb: "Turrets fire 30% faster. Max turret cap +1.",
+    tag: "Artifacts",
+    rarity: "mythic",
+  },
+  blood_tithe: {
+    id: "blood_tithe",
+    name: "Blood Tithe",
+    blurb: "+20% damage; kills heal 4 HP.",
+    tag: "Offense",
+    rarity: "rare",
+  },
+  oracle_lens: {
+    id: "oracle_lens",
+    name: "Oracle Lens",
+    blurb: "+15% crit and +6 damage.",
+    tag: "Luck",
+    rarity: "mythic",
+  },
+  phoenix_down: {
+    id: "phoenix_down",
+    name: "Phoenix Down",
+    blurb: "Once per run: on death, revive at 50% HP (consumes relic effect).",
+    tag: "Survival",
+    rarity: "legendary",
+  },
+  eternal_engine: {
+    id: "eternal_engine",
+    name: "Eternal Engine",
+    blurb: "+2.0 gold/sec and send packs cost 10% less.",
+    tag: "Economy",
+    rarity: "legendary",
+  },
+  worldbreaker: {
+    id: "worldbreaker",
+    name: "Worldbreaker",
+    blurb: "+25% damage, +40 max HP, attack 15% faster.",
+    tag: "Power",
+    rarity: "legendary",
+  },
+  sovereign_seal: {
+    id: "sovereign_seal",
+    name: "Sovereign Seal",
+    blurb: "Sent creeps +25% HP; income from sends +25%.",
+    tag: "Sends",
+    rarity: "legendary",
+  },
+  line_tyrant: {
+    id: "line_tyrant",
+    name: "Line Tyrant",
+    blurb: "+30% damage vs elites/bosses; base takes 15% less damage.",
     tag: "Power",
     rarity: "legendary",
   },

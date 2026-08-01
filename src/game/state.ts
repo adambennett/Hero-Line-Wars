@@ -19,7 +19,6 @@ import { HEROES, type HeroId } from "../data/heroes";
 import { getMap, resolveMapChoice, circleHitsObstacle, reshuffleObstacles, findClearSpot, blockedByObstacle, type MapDef, type MapId } from "../data/maps";
 import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
 import { draftRelicChoices, type RelicId } from "../data/relics";
-import { SEND_PACKS } from "../data/send";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
 import { DEFAULT_MAX_TURRETS, type TurretKind } from "../data/turrets";
 import type { LevelPassiveId } from "../data/xp";
@@ -36,13 +35,15 @@ import {
   tryBasicAttack,
 } from "../systems/combat";
 import { createEnemy, updateEnemies } from "../systems/enemies";
-import { applySecondWind, pickRelic } from "../systems/relics";
+import { applySecondWind, applyWaveRider, pickRelic, tryPhoenixRevive } from "../systems/relics";
 import { beginWaveShop, buyShopItem, tickShopRotation } from "../systems/shop";
-import { buySendPack, consumePendingSends } from "../systems/send";
+import { buySendPack, consumePendingSends, availableSendPacks } from "../systems/send";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { chooseLevelPassive, openLevelDraft } from "../systems/xp";
 import { updateTurrets } from "../systems/turrets";
+import { tickChests, tickMapSpecials } from "../systems/chests";
 import { playSfx } from "../systems/audio";
+import { pickEliteKind, pickBossKind } from "../data/enemies";
 import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
 
 export type Unit = {
@@ -54,6 +55,22 @@ export type Unit = {
   radius: number;
   alive: boolean;
   sent?: boolean;
+};
+
+export type ChestRarity = "common" | "uncommon" | "rare" | "mythic";
+
+export type ChestUnit = {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  rarity: ChestRarity;
+  /** Seconds standing required to open. */
+  openDuration: number;
+  /** Progress while player stands on it. */
+  openProgress: number;
+  /** Lifetime remaining before despawn. */
+  life: number;
 };
 
 export type EnemyUnit = Unit & {
@@ -171,6 +188,8 @@ export type HeroRuntime = Unit & {
   overchargeTimer?: number;
   zipSpeedTimer?: number;
   stormCageTimer?: number;
+  /** Mirage Afterimage: next basic empowered. */
+  mirageEmpowered?: boolean;
   /** Temporary movement slow from hexer bolts etc. */
   slowMul?: number;
   slowTimer?: number;
@@ -191,6 +210,14 @@ export type RunOptions = {
   ascension: number;
   /** Precomposed modifiers; if omitted, defaults (no meta) are used. */
   modifiers?: RunModifiers;
+  /** SP team size: 1 = classic abstract/opponent, 2/3 = dual-lane with AI allies. */
+  teamSize?: 1 | 2 | 3;
+  /** Chest stand-to-open duration multiplier (1 = default). */
+  chestOpenMul?: number;
+  /** Seconds before an unopened chest despawns. */
+  chestDespawnSec?: number;
+  /** Chance per spawn tick to roll a chest while enemies are present (0–1). */
+  chestSpawnChance?: number;
 };
 
 export type GameState = {
@@ -254,6 +281,16 @@ export type GameState = {
   hitFlash: number;
   shake: number;
   pendingRelicDraft: boolean;
+  /** Phoenix Down revive charges. */
+  phoenixCharges?: number;
+  /** Lane chests (stand-to-open). */
+  chests: ChestUnit[];
+  chestSpawnCd: number;
+  /** Special map runtime. */
+  mapSpecialTimer: number;
+  mapHazardX: number;
+  mapFogActive: boolean;
+  mapActiveSpawner: 0 | 1;
   /** Mouse aim in world space (updated each frame from Input). */
   aimWorldX: number;
   aimWorldY: number;
@@ -267,6 +304,10 @@ export type GameState = {
   mpLane?: boolean;
   /** PvE enemy lane driven by simple AI intents. */
   aiControlled?: boolean;
+  teamSize: 1 | 2 | 3;
+  chestOpenMul: number;
+  chestDespawnSec: number;
+  chestSpawnChance: number;
 };
 
 export function createState(
@@ -303,15 +344,15 @@ export function createState(
       heroId,
       x: map.base.x + 120,
       y: map.base.y,
-      hp: def.maxHp,
-      maxHp: def.maxHp,
+      hp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
+      maxHp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
       radius: def.radius,
       alive: true,
       attackCd: 0,
       abilityCds: def.abilities.map(() => 0),
       speedBonus: 0,
-      damageBonus: 0,
-      attackSpeedMul: 1,
+      damageBonus: mods.applyPlayerMeta ? mods.startingDamageFlat : 0,
+      attackSpeedMul: mods.applyPlayerMeta ? mods.attackSpeedMetaMul : 1,
       killGoldBonus: 0,
       barrierTimer: 0,
       whirlwindTimer: 0,
@@ -366,11 +407,22 @@ export function createState(
     hitFlash: 0,
     shake: 0,
     pendingRelicDraft: false,
+    phoenixCharges: 0,
+    chests: [],
+    chestSpawnCd: 8,
+    mapSpecialTimer: 0,
+    mapHazardX: MAP_W * 0.55,
+    mapFogActive: false,
+    mapActiveSpawner: 0,
     aimWorldX: map.base.x + 200,
     aimWorldY: map.base.y,
     opponent: createOpponent(heroId, baseMax, map.base.y),
     viewOpponentLane: false,
     allies: [],
+    teamSize: opts?.teamSize ?? 1,
+    chestOpenMul: opts?.chestOpenMul ?? 1,
+    chestDespawnSec: opts?.chestDespawnSec ?? 28,
+    chestSpawnChance: opts?.chestSpawnChance ?? 0.08,
   };
 }
 
@@ -380,6 +432,10 @@ function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean 
 }
 
 function startWave(state: GameState): void {
+  if (state.map.shrinkingLane && state.map.baseLaneTop != null && state.map.baseLaneBottom != null) {
+    state.map.laneTop = state.map.baseLaneTop;
+    state.map.laneBottom = state.map.baseLaneBottom;
+  }
   if (state.map.shiftingObstacles) {
     const reserved = [
       state.hero,
@@ -424,14 +480,15 @@ function startWave(state: GameState): void {
   }
 
   if (state.waveTier === "elite") {
-    state.enemies.push(createEnemy(state, "elite", { hpScale: 1 }));
+    state.enemies.push(createEnemy(state, pickEliteKind(), { hpScale: 1 }));
     state.toast = "ELITE WAVE";
     state.toastTimer = 2.2;
   } else if (state.waveTier === "boss") {
-    state.enemies.push(createEnemy(state, "boss", { hpScale: 1 }));
+    state.enemies.push(createEnemy(state, pickBossKind(), { hpScale: 1 }));
     state.toast = "BOSS WAVE";
     state.toastTimer = 2.4;
   }
+  applyWaveRider(state);
 }
 
 function popNextSpawn(state: GameState): { hpScale: number; sent: boolean } | null {
@@ -484,6 +541,7 @@ function respawnDelay(state: GameState): number {
 
 function killHero(state: GameState): void {
   if (!state.hero.alive) return;
+  if (tryPhoenixRevive(state)) return;
   state.hero.alive = false;
   state.hero.hp = 0;
   state.deathCount += 1;
@@ -634,6 +692,12 @@ function afterWaveClear(state: GameState, input: Input): boolean {
     return true;
   }
   applySecondWind(state);
+  if (state.hero.heroId === "medic") {
+    const missing = state.hero.maxHp - state.hero.hp;
+    if (missing > 0) {
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + missing * 0.25);
+    }
+  }
   state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
@@ -700,8 +764,7 @@ export function update(state: GameState, input: Input, dt: number): void {
     tryUpgradeBase(state);
   }
 
-  for (const pack of SEND_PACKS) {
-    if (pack.minBaseLevel > state.baseLevel) continue;
+  for (const pack of availableSendPacks(state)) {
     if (pack.digit >= 4 && state.shopOpen) continue;
     if (input.consumePress(`Digit${pack.digit}`)) {
       buySendPack(state, pack.id);
@@ -740,6 +803,8 @@ export function update(state: GameState, input: Input, dt: number): void {
   updateEnemies(state, dt);
   updateTurrets(state, dt);
   updateOpponent(state, dt);
+  tickChests(state, dt);
+  tickMapSpecials(state, dt, state.spawning || state.enemies.some((e) => e.alive));
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);

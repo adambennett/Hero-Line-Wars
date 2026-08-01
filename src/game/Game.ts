@@ -351,11 +351,18 @@ export class Game {
       friendlyFire: opts?.friendlyFire ?? this.runDefaults.friendlyFire ?? false,
       ascension,
       modifiers: playerMods,
+      teamSize: opts?.teamSize ?? 1,
+      chestOpenMul: opts?.chestOpenMul ?? 1,
+      chestDespawnSec: opts?.chestDespawnSec ?? 28,
+      chestSpawnChance: opts?.chestSpawnChance ?? 0.08,
     };
 
     const opp = resolveSelectedOpponent();
-    if (opp.kind === "neural") {
-      this.beginSoloVsAi(heroId, merged, opp);
+    const teamSize = merged.teamSize ?? 1;
+
+    // Dual-lane when team size > 1 (AI allies) or neural opponent selected
+    if (teamSize > 1 || opp.kind === "neural") {
+      this.beginSoloVsAi(heroId, merged, opp.kind === "neural" ? opp : null, teamSize);
       return;
     }
 
@@ -388,7 +395,8 @@ export class Game {
   private beginSoloVsAi(
     heroId: HeroId,
     opts: RunOptions,
-    opp: Extract<ReturnType<typeof resolveSelectedOpponent>, { kind: "neural" }>,
+    opp: Extract<ReturnType<typeof resolveSelectedOpponent>, { kind: "neural" }> | null,
+    teamSize: 1 | 2 | 3 = 1,
   ): void {
     this.mpHost = true;
     this.remoteIntents.clear();
@@ -396,11 +404,9 @@ export class Game {
     const playerMods = opts.modifiers ?? composeRunModifiers(opts.ascension, meta.ranks, true);
     const enemyMods = composeRunModifiers(opts.ascension, meta.ranks, false);
     const agg = playerMods.opponentAggressionMul;
-    const neural = createNeuralLaneAi(
-      opp.genome,
-      Math.max(0, opp.hesitation / agg),
-      opp.label,
-    );
+    const neural = opp
+      ? createNeuralLaneAi(opp.genome, Math.max(0, opp.hesitation / agg), opp.label)
+      : null;
     this.mpMatch = buildSoloVsAiMatch({
       playerHeroId: heroId,
       mapId: opts.mapId,
@@ -410,9 +416,13 @@ export class Game {
       wavesToWin: opts.wavesToWin,
       friendlyFire: opts.friendlyFire,
       neural,
-      opponentLabel: opp.label,
+      opponentLabel: opp?.label ?? "Lane AI",
       playerModifiers: playerMods,
       enemyModifiers: enemyMods,
+      teamSize,
+      chestOpenMul: opts.chestOpenMul,
+      chestDespawnSec: opts.chestDespawnSec,
+      chestSpawnChance: opts.chestSpawnChance,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -691,6 +701,7 @@ export class Game {
       ascension: this.state.ascension,
       deaths: this.state.deathCount,
       unlimited: this.state.wavesToWin <= 0,
+      crestGainMul: this.state.modifiers.crestGainMul,
     });
     const crestLine = `+${payout.crests} War Crests (${payout.store.crests} total)${
       payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""
@@ -1205,6 +1216,7 @@ export class Game {
         ascension: myLane.ascension,
         deaths: myLane.deathCount,
         unlimited: myLane.wavesToWin <= 0,
+        crestGainMul: myLane.modifiers.crestGainMul,
       });
       crestLine = ` +${payout.crests} War Crests (${payout.store.crests} total)${
         payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""

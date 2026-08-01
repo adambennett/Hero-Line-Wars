@@ -12,7 +12,12 @@ export type MapId =
   | "fortress"
   | "crossfire"
   | "island_hop"
-  | "shifting_grounds";
+  | "shifting_grounds"
+  | "broken_causeway"
+  | "mirror_trench"
+  | "bastion_run"
+  | "crushing_corridor"
+  | "eclipse_gauntlet";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -44,15 +49,28 @@ export type MapDef = {
   blurb: string;
   laneTop: number;
   laneBottom: number;
+  /** Original authored lane bounds (for shrinking reset). */
+  baseLaneTop?: number;
+  baseLaneBottom?: number;
   base: PointPad & { maxHp: number };
   shop: ShopPad;
   spawner: PointPad;
+  /** Optional second spawner for dual-spawn maps. */
+  spawnerAlt?: PointPad;
   highGrounds: HighGroundZone[];
   obstacles: Obstacle[];
   /** Preferred auto-turret placement points near the base. */
   turretSlots: TurretSlot[];
   /** Between waves, obstacles are reshuffled within the lane. */
   shiftingObstacles?: boolean;
+  /** During waves, lane edges slowly close in. */
+  shrinkingLane?: boolean;
+  /** Moving damage hazard drifts mid-lane. */
+  movingHazards?: boolean;
+  /** Periodic fog that dims the lane. */
+  eclipseFog?: boolean;
+  /** Alternate between two spawn Y bands. */
+  dualSpawners?: boolean;
 };
 
 /** Scale Y coords authored against the old 560-tall map. */
@@ -317,6 +335,140 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 95, y: MID_Y },
     ],
     shiftingObstacles: true,
+  },
+  broken_causeway: {
+    id: "broken_causeway",
+    name: "Broken Causeway",
+    blurb: "Collapsed bridge spans — fight across staggered gaps of cover.",
+    laneTop: sy(100),
+    laneBottom: MAP_H - sy(100),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 120 },
+    shop: { x: 148, y: MID_Y - sy(90), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 30 },
+    highGrounds: [HG(600, 160, 160, 100), HG(1000, 280, 160, 100)],
+    obstacles: [
+      { x: 300, y: sy(130), w: 90, h: sh(40), label: "span" },
+      { x: 300, y: sy(380), w: 90, h: sh(40), label: "span" },
+      { x: 520, y: MID_Y - sh(50), w: 36, h: sh(100) },
+      { x: 780, y: sy(120), w: 50, h: sh(50) },
+      { x: 780, y: sy(370), w: 50, h: sh(50) },
+      { x: 1150, y: MID_Y - sh(40), w: 70, h: sh(80), label: "ruin" },
+      { x: 1350, y: sy(150), w: 40, h: sh(55) },
+      { x: 1350, y: sy(340), w: 40, h: sh(55) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(200) },
+      { x: 120, y: sy(360) },
+      { x: 200, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+  },
+  mirror_trench: {
+    id: "mirror_trench",
+    name: "Mirror Trench",
+    blurb: "Symmetric trenches — twin high grounds and a razor mid channel.",
+    laneTop: sy(80),
+    laneBottom: MAP_H - sy(80),
+    base: { x: 56, y: MID_Y, radius: 44, maxHp: 122 },
+    shop: { x: 155, y: MID_Y + sy(100), radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 54, y: MID_Y, radius: 30 },
+    highGrounds: [HG(420, 90, 180, 110), HG(420, 340, 180, 110)],
+    obstacles: [
+      { x: 340, y: MID_Y - sh(20), w: 200, h: sh(40), label: "trench" },
+      { x: 700, y: sy(110), w: 40, h: sh(70) },
+      { x: 700, y: sy(360), w: 40, h: sh(70) },
+      { x: 980, y: MID_Y - sh(55), w: 44, h: sh(110) },
+      { x: 1250, y: sy(130), w: 48, h: sh(50) },
+      { x: 1250, y: sy(360), w: 48, h: sh(50) },
+    ],
+    turretSlots: [
+      { x: 125, y: sy(180) },
+      { x: 125, y: sy(380) },
+      { x: 205, y: MID_Y },
+    ],
+  },
+  bastion_run: {
+    id: "bastion_run",
+    name: "Bastion Run",
+    blurb: "Stacked fortifications near base, then a long open push.",
+    laneTop: sy(70),
+    laneBottom: MAP_H - sy(70),
+    base: { x: 58, y: MID_Y, radius: 48, maxHp: 135 },
+    shop: { x: 168, y: sy(120), radius: 38, interactRange: 58 },
+    spawner: { x: MAP_W - 50, y: MID_Y, radius: 30 },
+    highGrounds: [HG(180, 150, 200, 240)],
+    obstacles: [
+      { x: 220, y: sy(95), w: 40, h: sh(100), label: "bastion" },
+      { x: 220, y: sy(340), w: 40, h: sh(100), label: "bastion" },
+      { x: 320, y: MID_Y - sh(45), w: 55, h: sh(90) },
+      { x: 480, y: sy(130), w: 36, h: sh(60) },
+      { x: 480, y: sy(350), w: 36, h: sh(60) },
+      { x: 900, y: MID_Y - sh(30), w: 50, h: sh(60) },
+      { x: 1200, y: sy(160), w: 44, h: sh(50) },
+      { x: 1200, y: sy(360), w: 44, h: sh(50) },
+    ],
+    turretSlots: [
+      { x: 130, y: sy(170) },
+      { x: 130, y: sy(390) },
+      { x: 210, y: MID_Y },
+      { x: 100, y: MID_Y },
+      { x: 185, y: sy(230) },
+    ],
+  },
+  crushing_corridor: {
+    id: "crushing_corridor",
+    name: "Crushing Corridor",
+    blurb: "Special — the lane slowly squeezes shut during each wave.",
+    laneTop: sy(60),
+    laneBottom: MAP_H - sy(60),
+    baseLaneTop: sy(60),
+    baseLaneBottom: MAP_H - sy(60),
+    base: { x: 55, y: MID_Y, radius: 45, maxHp: 125 },
+    shop: { x: 150, y: MID_Y + sy(90), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 30 },
+    highGrounds: [HG(750, 200, 200, 140)],
+    obstacles: [
+      { x: 380, y: sy(100), w: 40, h: sh(70) },
+      { x: 380, y: sy(370), w: 40, h: sh(70) },
+      { x: 700, y: MID_Y - sh(35), w: 50, h: sh(70) },
+      { x: 1100, y: sy(130), w: 42, h: sh(55) },
+      { x: 1100, y: sy(360), w: 42, h: sh(55) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(190) },
+      { x: 120, y: sy(370) },
+      { x: 200, y: MID_Y },
+    ],
+    shrinkingLane: true,
+  },
+  eclipse_gauntlet: {
+    id: "eclipse_gauntlet",
+    name: "Eclipse Gauntlet",
+    blurb: "Special — drifting hazards and timed darkness choke the mid.",
+    laneTop: sy(85),
+    laneBottom: MAP_H - sy(85),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 118 },
+    shop: { x: 148, y: MID_Y - sy(95), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y - sy(40), radius: 28 },
+    spawnerAlt: { x: MAP_W - 52, y: MID_Y + sy(40), radius: 28 },
+    highGrounds: [HG(500, 180, 180, 160)],
+    obstacles: [
+      { x: 320, y: sy(140), w: 44, h: sh(55) },
+      { x: 320, y: sy(360), w: 44, h: sh(55) },
+      { x: 620, y: MID_Y - sh(40), w: 48, h: sh(80) },
+      { x: 950, y: sy(150), w: 40, h: sh(50) },
+      { x: 950, y: sy(360), w: 40, h: sh(50) },
+      { x: 1280, y: MID_Y - sh(35), w: 50, h: sh(70) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(195) },
+      { x: 120, y: sy(365) },
+      { x: 200, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+    movingHazards: true,
+    eclipseFog: true,
+    dualSpawners: true,
   },
 };
 

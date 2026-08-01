@@ -5,7 +5,7 @@ import {
   hasLineOfSight,
   pointBlocked,
 } from "../data/maps";
-import { ENEMY_DEFS, type EnemyDef, type EnemyKind } from "../data/enemies";
+import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyDef, type EnemyKind } from "../data/enemies";
 import {
   ENEMY_CAMP_BREAK_SEC,
   ENEMY_STUCK_DESPAWN_SEC,
@@ -318,6 +318,10 @@ export function createEnemy(
     map.laneTop + 20,
     map.laneBottom - 20,
   );
+  if (map.dualSpawners && map.spawnerAlt) {
+    const band = state.mapActiveSpawner === 0 ? map.spawner : map.spawnerAlt;
+    y = clamp(band.y + (Math.random() * 2 - 1) * 30, map.laneTop + 20, map.laneBottom - 20);
+  }
   // Spawn slightly left of spawner, clear of obstacles
   let x = map.spawner.x - 24;
   const r = def.radius;
@@ -329,8 +333,8 @@ export function createEnemy(
 
   const waveScale = 1 + (state.wave - 1) * WAVE_SCALE.hpPerWave;
   let tierMul = 1;
-  if (kind === "elite") tierMul = WAVE_SCALE.eliteHpMul * state.modifiers.eliteBossHpExtra;
-  if (kind === "boss") tierMul = WAVE_SCALE.bossHpMul * state.modifiers.eliteBossHpExtra;
+  if (isEliteKind(kind)) tierMul = WAVE_SCALE.eliteHpMul * state.modifiers.eliteBossHpExtra;
+  if (isBossKind(kind)) tierMul = WAVE_SCALE.bossHpMul * state.modifiers.eliteBossHpExtra;
   const hpScale =
     (opts?.hpScale ?? 1) * waveScale * tierMul * state.modifiers.enemyHpMul;
   return {
@@ -427,7 +431,7 @@ export function updateEnemies(state: GameState, dt: number): void {
         const rad = e.slamRadius ?? 70;
         const dmg = e.slamDamage ?? 20;
         addFx(state, e.x, e.y, rad, "#ff4040aa", 0.35);
-        state.shake = Math.max(state.shake, e.kind === "boss" ? 0.55 : 0.32);
+        state.shake = Math.max(state.shake, isBossKind(e.kind) ? 0.55 : 0.32);
         playSfx("boss_slam");
         for (const h of livingHeroes(state)) {
           if (dist(e, h) <= rad + h.radius) damageHero(state, h, dmg);

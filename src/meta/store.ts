@@ -61,6 +61,12 @@ export function getRank(store: MetaStore, id: MetaUpgradeId): number {
 export function isHeroUnlocked(heroId: HeroId, store: MetaStore = loadMetaStore()): boolean {
   if (heroId === "coil") return getRank(store, "unlock_coil") >= 1;
   if (heroId === "thorn") return getRank(store, "unlock_thorn") >= 1;
+  if (heroId === "ember") return getRank(store, "unlock_ember") >= 1;
+  if (heroId === "void") return getRank(store, "unlock_void") >= 1;
+  if (heroId === "titan") return getRank(store, "unlock_titan") >= 1;
+  if (heroId === "mirage") return getRank(store, "unlock_mirage") >= 1;
+  if (heroId === "medic") return getRank(store, "unlock_medic") >= 1;
+  if (heroId === "tempest") return getRank(store, "unlock_tempest") >= 1;
   return true;
 }
 
@@ -85,6 +91,7 @@ export type RunPayoutInput = {
   ascension: number;
   deaths: number;
   unlimited: boolean;
+  crestGainMul?: number;
 };
 
 export type RunPayout = {
@@ -126,6 +133,13 @@ export function computeRunPayout(input: RunPayoutInput): RunPayout {
     const before = crests;
     crests = Math.round(crests * ascMul);
     breakdown.push(`A${input.ascension} ×${ascMul.toFixed(2)} (+${crests - before})`);
+  }
+
+  const forgeMul = input.crestGainMul ?? 1;
+  if (forgeMul > 1.001) {
+    const before = crests;
+    crests = Math.round(crests * forgeMul);
+    breakdown.push(`Crest Forge ×${forgeMul.toFixed(2)} (+${crests - before})`);
   }
 
   return { crests, unlockedAscension: null, breakdown };

@@ -4,7 +4,7 @@ import { MAP_H, MAP_W } from "../data/constants";
 import { RELIC_LIST } from "../data/relics";
 import { SHOP_ITEMS } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
-import { ENEMY_DEFS, type EnemyKind } from "../data/enemies";
+import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyKind } from "../data/enemies";
 import { RARITY_LABEL, RARITY_COLOR, RARITY_ORDER, type Rarity } from "../data/rarity";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
@@ -84,7 +84,7 @@ export type MenuCallbacks = {
   onRunOptionsChanged?: (opts: Partial<RunOptions>) => void;
 };
 
-type CompTab = "heroes" | "items" | "relics" | "enemies" | "sends" | "maps";
+type CompTab = "heroes" | "items" | "relics" | "enemies" | "sends" | "maps" | "ascensions";
 
 const MODE_OPTIONS: { id: MatchMode; label: string; hint: string }[] = [
   { id: "1v1", label: "1v1 PvP", hint: "One hero per side" },
@@ -127,6 +127,10 @@ export class MenuController {
   private spWavesToWin = WIN_WAVES;
   private spFriendlyFire = false;
   private spAscension = 0;
+  private spTeamSize: 1 | 2 | 3 = 1;
+  private spChestOpenMul = 1;
+  private spChestDespawnSec = 28;
+  private spChestSpawnChance = 0.08;
   private settings: ClientSettings = loadSettings();
   private compendiumTab: CompTab = "heroes";
   private compSearch = "";
@@ -213,6 +217,10 @@ export class MenuController {
           wavesToWin: this.spWavesToWin,
           friendlyFire: this.spFriendlyFire,
           ascension: this.spAscension,
+          teamSize: this.spTeamSize,
+          chestOpenMul: this.spChestOpenMul,
+          chestDespawnSec: this.spChestDespawnSec,
+          chestSpawnChance: this.spChestSpawnChance,
         });
         break;
       case "set-sp-map":
@@ -373,13 +381,13 @@ export class MenuController {
       if (label) label.textContent = `${Math.round(this.settings.masterVolume * 100)}%`;
     }
     if (el.dataset.field === "mp-turrets") {
-      this.lobby.maxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
+      this.lobby.maxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
       this.emitLobbyOpts();
       const label = this.root.querySelector("#mp-turret-label");
       if (label) label.textContent = String(this.lobby.maxTurrets);
     }
     if (el.dataset.field === "sp-turrets") {
-      this.spMaxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
+      this.spMaxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
       const label = this.root.querySelector("#sp-turret-label");
       if (label) label.textContent = String(this.spMaxTurrets);
     }
@@ -435,12 +443,21 @@ export class MenuController {
     } else if (el.dataset.field === "sp-friendly-fire") {
       this.spFriendlyFire = el.value === "1";
     } else if (el.dataset.field === "sp-turrets") {
-      this.spMaxTurrets = Math.max(1, Math.min(6, Number(el.value) || DEFAULT_MAX_TURRETS));
+      this.spMaxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
     } else if (el.dataset.field === "sp-ascension") {
       this.spAscension = Number(el.value) || 0;
       this.paintSpRunMeta();
     } else if (el.dataset.field === "sp-map") {
       this.spMapChoice = el.value as MapId | "random";
+    } else if (el.dataset.field === "sp-team-size") {
+      this.spTeamSize = (Number(el.value) || 1) as 1 | 2 | 3;
+      this.render();
+    } else if (el.dataset.field === "sp-chest-open") {
+      this.spChestOpenMul = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-chest-despawn") {
+      this.spChestDespawnSec = Number(el.value) || 28;
+    } else if (el.dataset.field === "sp-chest-chance") {
+      this.spChestSpawnChance = Number(el.value) || 0.08;
     } else if (el.dataset.field === "sp-opponent-ai") {
       setSelectedOpponent(parseAiSelectValue(el.value));
     } else if (el.dataset.field === "ai-opponent") {
@@ -614,28 +631,66 @@ export class MenuController {
     const gold = scope === "sp" ? this.spStartingGold : this.lobby.startingGold;
     const waves = scope === "sp" ? this.spWavesToWin : this.lobby.wavesToWin;
     const ff = scope === "sp" ? this.spFriendlyFire : this.lobby.friendlyFire;
-    const goldOpts = [45, 60, 80, 100, 150]
+    const goldOpts = [0, 10, 45, 50, 60, 80, 100, 150, 200, 500, 1000]
       .map(
         (g) =>
           `<option value="${g}" ${gold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
       )
       .join("");
-    const waveOpts = [8, 10, 12, 15, 20, 0]
+    const waveOpts = [1, 2, 3, 5, 8, 10, 12, 15, 20, 25, 50, 100, 500, 0]
       .map((w) => {
         const label = w === 0 ? "Unlimited" : String(w);
         const def = w === WIN_WAVES ? " (default)" : "";
         return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const turretOpts = [1, 2, 3, 4, 5, 6]
+    const turretOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       .map(
         (n) =>
           `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
+    const showFf = scope === "mp" ? this.lobby.mode !== "1v1" : this.spTeamSize > 1;
+    const ffField = showFf
+      ? `<label class="run-field">
+            <span>Friendly fire</span>
+            <select data-field="${scope}-friendly-fire">
+              <option value="0" ${!ff ? "selected" : ""}>Off</option>
+              <option value="1" ${ff ? "selected" : ""}>On</option>
+            </select>
+          </label>`
+      : "";
     if (scope === "sp") {
+      const teamOpts = [1, 2, 3]
+        .map(
+          (n) =>
+            `<option value="${n}" ${this.spTeamSize === n ? "selected" : ""}>${n}v${n}${n === 1 ? " (classic)" : " (+ AI allies)"}</option>`,
+        )
+        .join("");
+      const openOpts = [0.75, 1, 1.25, 1.5, 2]
+        .map(
+          (n) =>
+            `<option value="${n}" ${this.spChestOpenMul === n ? "selected" : ""}>${n}× open time</option>`,
+        )
+        .join("");
+      const despawnOpts = [12, 20, 28, 40, 60]
+        .map(
+          (n) =>
+            `<option value="${n}" ${this.spChestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`,
+        )
+        .join("");
+      const chanceOpts = [0.04, 0.08, 0.12, 0.2]
+        .map(
+          (n) =>
+            `<option value="${n}" ${this.spChestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`,
+        )
+        .join("");
       return `
         <div class="run-grid cols-4">
+          <label class="run-field">
+            <span>Team size</span>
+            <select data-field="sp-team-size">${teamOpts}</select>
+          </label>
           <label class="run-field">
             <span>Turrets</span>
             <select data-field="sp-turrets">${turretOpts}</select>
@@ -648,12 +703,20 @@ export class MenuController {
             <span>Waves to win</span>
             <select data-field="sp-waves-to-win">${waveOpts}</select>
           </label>
+          ${ffField}
+        </div>
+        <div class="run-grid cols-3" style="margin-top:8px">
           <label class="run-field">
-            <span>Friendly fire</span>
-            <select data-field="sp-friendly-fire">
-              <option value="0" ${!ff ? "selected" : ""}>Off</option>
-              <option value="1" ${ff ? "selected" : ""}>On</option>
-            </select>
+            <span>Chest open</span>
+            <select data-field="sp-chest-open">${openOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest despawn</span>
+            <select data-field="sp-chest-despawn">${despawnOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest spawn</span>
+            <select data-field="sp-chest-chance">${chanceOpts}</select>
           </label>
         </div>
       `;
@@ -661,7 +724,7 @@ export class MenuController {
     return `
       <label class="setting-row">
         <span>Max turrets <em id="${scope}-turret-label">${turrets}</em></span>
-        <input type="range" min="1" max="6" step="1" value="${turrets}" data-field="${scope}-turrets" />
+        <input type="range" min="1" max="10" step="1" value="${turrets}" data-field="${scope}-turrets" />
       </label>
       <label class="setting-row">
         <span>Starting gold</span>
@@ -671,13 +734,17 @@ export class MenuController {
         <span>Waves to win</span>
         <select data-field="${scope}-waves-to-win">${waveOpts}</select>
       </label>
-      <label class="setting-row">
+      ${
+        showFf
+          ? `<label class="setting-row">
         <span>Friendly fire</span>
         <select data-field="${scope}-friendly-fire">
           <option value="0" ${!ff ? "selected" : ""}>Off</option>
           <option value="1" ${ff ? "selected" : ""}>On</option>
         </select>
-      </label>
+      </label>`
+          : ""
+      }
     `;
   }
 
@@ -1017,31 +1084,55 @@ export class MenuController {
       return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "enemies") {
-      const byRole = new Map<string, EnemyKind[]>();
-      for (const k of ENEMY_KINDS) {
-        const d = ENEMY_DEFS[k];
-        if (!this.matchesFilter(d.name, `${d.intent} ${d.kind}`)) continue;
-        const list = byRole.get(d.kind) ?? [];
-        list.push(k);
-        byRole.set(d.kind, list);
-      }
-      const sections = [...byRole.entries()]
-        .map(([role, kinds]) => {
+      const tiers: { id: string; title: string; filter: (k: EnemyKind) => boolean }[] = [
+        {
+          id: "normal",
+          title: "Normal",
+          filter: (k) => !isEliteKind(k) && !isBossKind(k),
+        },
+        { id: "elite", title: "Elites", filter: (k) => isEliteKind(k) },
+        { id: "boss", title: "Bosses", filter: (k) => isBossKind(k) },
+      ];
+      const sections = tiers
+        .map(({ title, filter }) => {
+          const kinds = ENEMY_KINDS.filter(
+            (k) => filter(k) && this.matchesFilter(ENEMY_DEFS[k].name, `${ENEMY_DEFS[k].intent} ${k}`),
+          );
+          if (kinds.length === 0) return "";
           const cards = kinds
             .map((k) => {
               const d = ENEMY_DEFS[k];
               return `
             <article class="comp-card compact">
               <h3>${escapeHtml(d.name)}</h3>
-              <p>Intent: <strong>${escapeHtml(d.intent)}</strong>${d.ranged ? " · ranged" : ""}${d.dashSpeed ? " · dash" : ""}${d.projectileAoe ? " · AoE shell" : ""}</p>
+              <p>Intent: <strong>${escapeHtml(d.intent)}</strong>${d.ranged ? " · ranged" : ""}${d.dashSpeed ? " · dash" : ""}${d.projectileAoe ? " · AoE shell" : ""}${d.slamRadius ? " · slam" : ""}</p>
               <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s${d.attackDamage ? ` · Shot ${d.attackDamage}` : ""} · Gold ${d.goldReward}</p>
             </article>`;
             })
             .join("");
-          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(capitalize(role))}</h2><div class="comp-grid">${cards}</div></section>`;
+          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(title)}</h2><div class="comp-grid">${cards}</div></section>`;
         })
         .join("");
       return sections || emptyComp();
+    }
+    if (this.compendiumTab === "ascensions") {
+      const cards = ASCENSIONS.filter((a) => this.matchesFilter(a.name, a.blurb))
+        .map((a) => {
+          const stack =
+            a.level <= 0
+              ? "Baseline difficulty."
+              : ASCENSIONS.filter((x) => x.level >= 1 && x.level <= a.level)
+                  .map((x) => `A${x.level}: ${x.blurb}`)
+                  .join(" · ");
+          return `
+          <article class="comp-card compact">
+            <h3>A${a.level} · ${escapeHtml(a.name)}</h3>
+            <p>${escapeHtml(a.blurb)}</p>
+            <p class="comp-meta">${escapeHtml(stack)}</p>
+          </article>`;
+        })
+        .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "sends") {
       const cards = SEND_PACKS.filter((p) => this.matchesFilter(p.name, p.detail))
@@ -1061,7 +1152,7 @@ export class MenuController {
         (m) => `
         <article class="comp-card map-comp">
           <div class="map-thumb"><canvas data-map="${m.id}"></canvas></div>
-          <h3>${escapeHtml(m.name)}${m.shiftingObstacles ? ` <em class="special-tag">Special</em>` : ""}</h3>
+          <h3>${escapeHtml(m.name)}${m.shiftingObstacles || m.shrinkingLane || m.movingHazards || m.eclipseFog || m.dualSpawners ? ` <em class="special-tag">Special</em>` : ""}</h3>
           <p>${escapeHtml(m.blurb)}</p>
           <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Turrets ${m.turretSlots.length}</p>
         </article>`,
@@ -1071,7 +1162,7 @@ export class MenuController {
   }
 
   private renderCompendium(): string {
-    const tabs = (["heroes", "items", "relics", "enemies", "sends", "maps"] as const)
+    const tabs = (["heroes", "items", "relics", "enemies", "sends", "maps", "ascensions"] as const)
       .map(
         (tab) => `
         <button type="button" class="chip ${this.compendiumTab === tab ? "selected" : ""}" data-action="comp-tab" data-tab="${tab}">

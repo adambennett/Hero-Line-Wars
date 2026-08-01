@@ -4,7 +4,12 @@ import type { HighGroundZone } from "../data/maps";
 import { hasLineOfSight, rayObstacleHitT } from "../data/maps";
 import { dist, normalize, type Vec2 } from "../game/math";
 import type { EnemyUnit, GameState, Projectile } from "../game/state";
-import { hasRelic } from "./relics";
+import {
+  hasRelic,
+  killGoldRelicMul,
+  relicDamageMul,
+} from "./relics";
+import { isBossKind, isEliteKind } from "../data/enemies";
 import { grantKillXp } from "./xp";
 import { playSfx } from "./audio";
 
@@ -51,7 +56,7 @@ export function attackDamage(state: GameState): number {
   const hg = zone
     ? 1 + (hasRelic(state, "high_ground_oath") ? zone.oathDamageBonus : zone.damageBonus)
     : 1;
-  let dmg = base * hg;
+  let dmg = base * hg * relicDamageMul(state);
 
   // Scatter Close Quarters
   if (state.hero.heroId === "scatter") {
@@ -98,11 +103,13 @@ export function addFx(
 export function killEnemy(state: GameState, e: EnemyUnit): void {
   if (!e.alive) return;
   e.alive = false;
-  let gold = e.goldReward;
-  if (hasRelic(state, "gold_fever")) gold *= 1.6;
+  let gold = e.goldReward * killGoldRelicMul(state);
   gold += state.hero.killGoldBonus;
   state.gold += gold;
   grantKillXp(state, e);
+  if (hasRelic(state, "blood_tithe")) {
+    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 4);
+  }
   // Ranger Marksman
   if (state.hero.heroId === "ranger") {
     state.hero.marksmanTimer = 2.5;
@@ -110,6 +117,10 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
   // Coil Overcharge
   if (state.hero.heroId === "coil") {
     state.hero.overchargeTimer = 2;
+  }
+  // Void Riftmark
+  if (state.hero.heroId === "void" && state.hero.abilityCds[0] != null) {
+    state.hero.abilityCds[0] = Math.max(0, state.hero.abilityCds[0]! * 0.85);
   }
 }
 
@@ -123,7 +134,17 @@ export function damageEnemy(
 
   let dmg = damage;
   if (opts?.fromBasic && state.hero.heroId === "arbalest") {
-    if (e.kind === "brute" || e.kind === "elite" || e.kind === "boss") dmg *= 1.4;
+    if (e.kind === "brute" || isEliteKind(e.kind) || isBossKind(e.kind)) dmg *= 1.4;
+  }
+  if (hasRelic(state, "line_tyrant") && (isEliteKind(e.kind) || isBossKind(e.kind))) {
+    dmg *= 1.3;
+  }
+  if (opts?.fromBasic && state.hero.mirageEmpowered) {
+    dmg *= 1.4;
+    state.hero.mirageEmpowered = false;
+  }
+  if (opts?.fromBasic && state.hero.heroId === "ember" && e.alive) {
+    // Scorch splash handled below like splinter
   }
 
   e.hp -= dmg;
@@ -132,22 +153,45 @@ export function damageEnemy(
   if (
     opts?.lifesteal ||
     (opts?.fromBasic && hasRelic(state, "hungry_blade")) ||
-    (opts?.fromBasic && state.hero.heroId === "thorn")
+    (opts?.fromBasic && state.hero.heroId === "thorn") ||
+    hasRelic(state, "vampiric_edge")
   ) {
-    const steal = state.hero.heroId === "thorn" && opts?.fromBasic ? 0.12 : 0.18;
-    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + dmg * steal);
+    let steal = 0;
+    if (hasRelic(state, "vampiric_edge")) steal = Math.max(steal, 0.1);
+    if (opts?.fromBasic && hasRelic(state, "hungry_blade")) steal = Math.max(steal, 0.18);
+    if (opts?.fromBasic && state.hero.heroId === "thorn") steal = Math.max(steal, 0.12);
+    if (opts?.lifesteal) steal = Math.max(steal, 0.18);
+    if (steal > 0) {
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + dmg * steal);
+    }
   }
   if (
     opts?.slow ||
     (opts?.fromBasic &&
-      (state.hero.heroId === "frost" || state.hero.heroId === "thorn" || hasRelic(state, "frost_sigil")))
+      (state.hero.heroId === "frost" ||
+        state.hero.heroId === "thorn" ||
+        state.hero.heroId === "tempest" ||
+        hasRelic(state, "frost_sigil")))
   ) {
-    const mul = state.hero.heroId === "thorn" ? 0.35 : state.hero.heroId === "frost" ? 0.6 : 0.75;
-    const dur = state.hero.heroId === "thorn" ? 0.85 : state.hero.heroId === "frost" ? 1.5 : 1.2;
+    const mul =
+      state.hero.heroId === "thorn"
+        ? 0.35
+        : state.hero.heroId === "frost"
+          ? 0.6
+          : state.hero.heroId === "tempest"
+            ? 0.8
+            : 0.75;
+    const dur =
+      state.hero.heroId === "thorn" ? 0.85 : state.hero.heroId === "frost" ? 1.5 : 1.0;
     applySlow(e, mul, dur);
   }
-  if ((opts?.splash || (opts?.fromBasic && hasRelic(state, "splinter_tip"))) && e.alive) {
-    const splash = dmg * 0.4;
+  const splashRelic =
+    opts?.fromBasic && (hasRelic(state, "splinter_tip") || hasRelic(state, "shockwave_core"));
+  const emberSplash = opts?.fromBasic && state.hero.heroId === "ember";
+  if ((opts?.splash || splashRelic || emberSplash) && e.alive) {
+    const splash =
+      dmg *
+      (emberSplash ? 0.2 : hasRelic(state, "shockwave_core") ? 0.55 : 0.4);
     for (const other of state.enemies) {
       if (!other.alive || other.id === e.id) continue;
       if (dist(e, other) <= 55 + other.radius) {
@@ -408,6 +452,7 @@ export function applyPlayerDamage(state: GameState, amount: number): void {
   if (amount <= 0 || !state.hero.alive) return;
   let dmg = amount;
   if (hasRelic(state, "blood_price")) dmg *= 1.25;
+  if (state.hero.heroId === "titan" && state.hero.barrierTimer > 0) dmg *= 0.85;
   state.hero.hp -= dmg;
   state.damageFlash = Math.max(state.damageFlash, 0.28);
   state.vignette = Math.max(state.vignette, 0.45);

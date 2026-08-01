@@ -28,6 +28,14 @@ export type RunModifiers = {
   startingLevelDrafts: number;
   startingRelic: StartingRelicTier;
   applyPlayerMeta: boolean;
+  /** Multiplier on War Crest payout. */
+  crestGainMul: number;
+  sendCostMul: number;
+  sendIncomeMetaMul: number;
+  startingDamageFlat: number;
+  startingHpFlat: number;
+  attackSpeedMetaMul: number;
+  baseDamageTakenMetaMul: number;
 };
 
 export type MetaRanks = Partial<Record<MetaUpgradeId, number>>;
@@ -62,6 +70,13 @@ export function composeRunModifiers(
     startingLevelDrafts: 0,
     startingRelic: "none",
     applyPlayerMeta,
+    crestGainMul: 1,
+    sendCostMul: 1,
+    sendIncomeMetaMul: 1,
+    startingDamageFlat: 0,
+    startingHpFlat: 0,
+    attackSpeedMetaMul: 1,
+    baseDamageTakenMetaMul: 1,
   };
 
   if (a >= 1) mods.enemyHpMul *= 1.12;
@@ -85,10 +100,27 @@ export function composeRunModifiers(
     mods.shopPriceMul *= Math.max(0.7, 1 - rank(ranks, "quartermaster") * 0.05);
     mods.maxTurretsBonus += rank(ranks, "turret_permit");
     mods.startingLevelDrafts += rank(ranks, "drill_yard");
+    mods.crestGainMul *= 1 + rank(ranks, "crest_forge") * 0.01;
+    mods.goldRewardMul *= 1 + rank(ranks, "bounty_board") * 0.04;
+    mods.startingGoldDelta += rank(ranks, "veteran_pay") * 6;
+    mods.incomeFlat += rank(ranks, "veteran_pay") * 0.1;
+    mods.startingDamageFlat += rank(ranks, "lane_optics") * 2;
+    mods.startingHpFlat += rank(ranks, "steel_ration") * 6;
+    mods.sendCostMul *= Math.max(0.7, 1 - rank(ranks, "courier_guild") * 0.04);
+    mods.shopPriceMul *= Math.max(0.7, 1 - rank(ranks, "arcane_cache") * 0.03);
+    mods.attackSpeedMetaMul *= Math.max(0.75, 1 - rank(ranks, "war_drums") * 0.03);
+    mods.baseDamageTakenMetaMul *= Math.max(0.75, 1 - rank(ranks, "bastion_rites") * 0.04);
+    mods.sendIncomeMetaMul *= 1 + rank(ranks, "send_doctrine") * 0.05;
+    mods.startingLevelDrafts += rank(ranks, "relic_attunement") >= 1 ? 1 : 0;
     const sn = rank(ranks, "scout_network");
     if (sn >= 3) mods.startingRelic = "rare";
     else if (sn >= 2) mods.startingRelic = "uncommon";
     else if (sn >= 1) mods.startingRelic = "common";
+    if (rank(ranks, "relic_attunement") >= 2 && mods.startingRelic === "none") {
+      mods.startingRelic = "uncommon";
+    } else if (rank(ranks, "relic_attunement") >= 2 && mods.startingRelic === "common") {
+      mods.startingRelic = "uncommon";
+    }
   }
 
   return mods;

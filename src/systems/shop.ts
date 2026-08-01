@@ -130,6 +130,83 @@ export function buyShopItem(state: GameState, itemId: ShopItemId): string | null
       state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 30);
       state.incomePerSec += 0.5;
       break;
+    case "lucky_dice":
+      state.hero.luck += 0.06;
+      break;
+    case "copper_ring":
+      state.incomePerSec += 0.35;
+      break;
+    case "leather_wrap":
+      state.hero.speedBonus += 20;
+      break;
+    case "whetstone":
+      state.hero.damageBonus += 4;
+      break;
+    case "traveler_cloak":
+      state.hero.speedBonus += 25;
+      state.hero.maxHp += 8;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
+      break;
+    case "merchant_seal":
+      state.modifiers.shopPriceMul *= 0.92;
+      break;
+    case "thorn_bracer":
+      state.hero.damageBonus += 3;
+      state.hero.maxHp += 12;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 12);
+      break;
+    case "crystal_vial":
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 35);
+      break;
+    case "scout_glass":
+      state.hero.attackSpeedMul *= 0.94;
+      state.hero.damageBonus += 3;
+      break;
+    case "iron_spikes":
+      state.baseHp = Math.min(state.map.base.maxHp + 60, state.baseHp + 15);
+      break;
+    case "gold_magnet":
+      state.hero.killGoldBonus += 3;
+      break;
+    case "berserker_tonic":
+      state.hero.damageBonus += 14;
+      state.hero.maxHp = Math.max(40, state.hero.maxHp - 10);
+      state.hero.hp = Math.min(state.hero.hp, state.hero.maxHp);
+      break;
+    case "guardian_crest":
+      state.hero.maxHp += 50;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 25);
+      state.baseHp = Math.min(state.map.base.maxHp + 40, state.baseHp + 10);
+      break;
+    case "chrono_sand":
+      state.hero.attackSpeedMul *= 0.82;
+      break;
+    case "phantom_ink":
+      state.hero.speedBonus += 55;
+      break;
+    case "warhorn":
+      state.incomePerSec += 1;
+      break;
+    case "soul_lantern":
+      state.hero.damageBonus += 12;
+      state.incomePerSec += 0.6;
+      break;
+    case "dragon_scale":
+      state.hero.maxHp += 45;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 45);
+      state.hero.damageBonus += 8;
+      state.baseHp = Math.min(state.map.base.maxHp + 80, state.baseHp + 25);
+      break;
+    case "void_splinter":
+      state.hero.damageBonus += 20;
+      state.hero.attackSpeedMul *= 0.9;
+      break;
+    case "king_scepter":
+      state.hero.damageBonus += 15;
+      state.incomePerSec += 1.5;
+      state.hero.maxHp += 20;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 20);
+      break;
     case "ballista":
     case "brazier":
     case "hex_totem":

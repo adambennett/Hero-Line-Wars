@@ -13,7 +13,13 @@ export type EnemyKind =
   | "hexer"
   | "charger"
   | "elite"
-  | "boss";
+  | "boss"
+  | "wraith"
+  | "juggernaut"
+  | "hexlord"
+  | "colossus"
+  | "siren"
+  | "reaver";
 
 /**
  * Who the unit prioritizes while moving / attacking.
@@ -69,6 +75,8 @@ export type EnemyDef = {
   slamCooldown?: number;
   /** Melee DPS vs turrets when in contact. */
   turretDamage?: number;
+  /** Tier for HP scaling / UI. */
+  tier?: "normal" | "elite" | "boss";
 };
 
 export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
@@ -298,6 +306,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     slamDamage: 32,
     slamCooldown: 3.2,
     turretDamage: 22,
+    tier: "elite",
   },
   boss: {
     kind: "boss",
@@ -316,8 +325,164 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     slamDamage: 50,
     slamCooldown: 2.6,
     turretDamage: 30,
+    tier: "boss",
+  },
+  wraith: {
+    kind: "wraith",
+    name: "Phase Wraith",
+    intent: "hero",
+    shape: "diamond",
+    color: "#6a8ad4",
+    stroke: "#c0d8ff",
+    radius: 16,
+    speed: 105,
+    maxHp: 140,
+    contactDamage: 14,
+    baseDamage: 16,
+    goldReward: 24,
+    dashSpeed: 320,
+    dashRange: 200,
+    dashDuration: 0.32,
+    dashCooldown: 2.2,
+    turretDamage: 14,
+    tier: "elite",
+  },
+  juggernaut: {
+    kind: "juggernaut",
+    name: "Iron Juggernaut",
+    intent: "base",
+    shape: "square",
+    color: "#6a7078",
+    stroke: "#c0c8d0",
+    radius: 22,
+    speed: 42,
+    maxHp: 260,
+    contactDamage: 24,
+    baseDamage: 28,
+    goldReward: 26,
+    slamRadius: 85,
+    slamDamage: 40,
+    slamCooldown: 3.8,
+    turretDamage: 30,
+    tier: "elite",
+  },
+  hexlord: {
+    kind: "hexlord",
+    name: "Hexlord",
+    intent: "hero",
+    shape: "hex",
+    color: "#2a8a6a",
+    stroke: "#80ffc0",
+    radius: 17,
+    speed: 58,
+    maxHp: 170,
+    contactDamage: 8,
+    baseDamage: 14,
+    goldReward: 25,
+    ranged: true,
+    attackRange: 200,
+    attackCooldown: 1.4,
+    attackDamage: 22,
+    projectileSpeed: 240,
+    projectileRadius: 7,
+    projectileColor: "#60ffb0",
+    heroSlowMul: 0.3,
+    heroSlowDuration: 2.8,
+    turretDamage: 10,
+    tier: "elite",
+  },
+  colossus: {
+    kind: "colossus",
+    name: "Siege Colossus",
+    intent: "base",
+    shape: "square",
+    color: "#8a6030",
+    stroke: "#ffd090",
+    radius: 30,
+    speed: 38,
+    maxHp: 620,
+    contactDamage: 32,
+    baseDamage: 50,
+    goldReward: 70,
+    slamRadius: 120,
+    slamDamage: 60,
+    slamCooldown: 3.0,
+    turretDamage: 40,
+    tier: "boss",
+  },
+  siren: {
+    kind: "siren",
+    name: "Void Siren",
+    intent: "hero",
+    shape: "star",
+    color: "#9030a0",
+    stroke: "#e090ff",
+    radius: 24,
+    speed: 48,
+    maxHp: 420,
+    contactDamage: 12,
+    baseDamage: 30,
+    goldReward: 65,
+    ranged: true,
+    attackRange: 260,
+    attackCooldown: 1.6,
+    attackDamage: 28,
+    projectileSpeed: 200,
+    projectileRadius: 8,
+    projectileColor: "#d070ff",
+    projectileCount: 3,
+    projectileSpread: 0.4,
+    heroSlowMul: 0.45,
+    heroSlowDuration: 2.0,
+    slamRadius: 80,
+    slamDamage: 35,
+    slamCooldown: 4.0,
+    turretDamage: 18,
+    tier: "boss",
+  },
+  reaver: {
+    kind: "reaver",
+    name: "Blood Reaver",
+    intent: "nearest",
+    shape: "triangle",
+    color: "#a02040",
+    stroke: "#ff7090",
+    radius: 25,
+    speed: 72,
+    maxHp: 500,
+    contactDamage: 36,
+    baseDamage: 35,
+    goldReward: 68,
+    dashSpeed: 340,
+    dashRange: 220,
+    dashDuration: 0.4,
+    dashCooldown: 2.8,
+    slamRadius: 90,
+    slamDamage: 45,
+    slamCooldown: 3.4,
+    turretDamage: 28,
+    tier: "boss",
   },
 };
+
+export const ELITE_KINDS: EnemyKind[] = ["elite", "wraith", "juggernaut", "hexlord"];
+export const BOSS_KINDS: EnemyKind[] = ["boss", "colossus", "siren", "reaver"];
+
+export function isEliteKind(kind: EnemyKind): boolean {
+  return ENEMY_DEFS[kind].tier === "elite" || ELITE_KINDS.includes(kind);
+}
+
+export function isBossKind(kind: EnemyKind): boolean {
+  return ENEMY_DEFS[kind].tier === "boss" || BOSS_KINDS.includes(kind);
+}
+
+export function pickEliteKind(): EnemyKind {
+  return ELITE_KINDS[Math.floor(Math.random() * ELITE_KINDS.length)]!;
+}
+
+export function pickBossKind(): EnemyKind {
+  return BOSS_KINDS[Math.floor(Math.random() * BOSS_KINDS.length)]!;
+}
 
 export type WaveTier = "normal" | "elite" | "boss";
 

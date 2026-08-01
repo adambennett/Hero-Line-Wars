@@ -4,6 +4,7 @@ import {
   baseLevelSendHpBonus,
   baseUpgradePackMul,
   unlockedSendPacks,
+  type SendPackDef,
 } from "../data/send";
 import type { GameState, PendingSend } from "../game/state";
 import { sendCostMul, sendIncomeMul, sendRefundMul, sendHpMulFromRelics } from "./relics";
@@ -14,16 +15,23 @@ export function sendPackCost(state: GameState, packId: SendPackId): number {
   const def = SEND_PACKS.find((p) => p.id === packId);
   if (!def) return Infinity;
   const mul = baseUpgradePackMul(state.baseLevel, def);
-  return Math.ceil(def.cost * mul.costMul * sendCostMul(state));
+  return Math.ceil(def.cost * mul.costMul * sendCostMul(state) * state.modifiers.sendCostMul);
 }
 
-export function availableSendPacks(state: GameState) {
-  return unlockedSendPacks(state.baseLevel);
+/** Available packs for this hero/base, with hotkeys remapped to 1..9. */
+export function availableSendPacks(state: GameState): SendPackDef[] {
+  const packs = unlockedSendPacks(state.baseLevel, state.hero.heroId);
+  // Prefer shared packs first, then hero-unique; limit to 9 for digit keys
+  const shared = packs.filter((p) => !p.heroId);
+  const unique = packs.filter((p) => p.heroId);
+  const ordered = [...shared, ...unique].slice(0, 9);
+  return ordered.map((p, i) => ({ ...p, digit: i + 1 }));
 }
 
 export function buySendPack(state: GameState, packId: SendPackId): string | null {
   const def = SEND_PACKS.find((p) => p.id === packId);
   if (!def) return "Unknown pack";
+  if (def.heroId && def.heroId !== state.hero.heroId) return "Wrong hero";
   if (def.minBaseLevel > state.baseLevel) return "Upgrade your base to unlock";
   const cost = sendPackCost(state, packId);
   if (state.gold < cost) return "Not enough gold";
@@ -33,7 +41,7 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
   if (refund > 0) state.gold += refund;
 
   const mul = baseUpgradePackMul(state.baseLevel, def);
-  const income = def.incomeBonus * mul.incomeMul * sendIncomeMul(state);
+  const income = def.incomeBonus * mul.incomeMul * sendIncomeMul(state) * state.modifiers.sendIncomeMetaMul;
   state.incomePerSec += income;
 
   const hpScale =
@@ -47,10 +55,8 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
     hpScale,
   };
   if (state.mpLane) {
-    // Multiplayer: host exchanges pendingSends across lanes after the tick.
     state.pendingSends.push(pending);
   } else {
-    // Solo: abstract opponent receives pressure; AI sends arrive via pendingSends.
     queueSendToOpponent(state, pending, def.name);
   }
   state.sendsThisRun += 1;

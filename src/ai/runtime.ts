@@ -11,11 +11,11 @@ import {
 } from "./brain";
 import { MAP_W } from "../data/constants";
 import { HEROES } from "../data/heroes";
-import { SEND_PACKS } from "../data/send";
 import { hasLineOfSight } from "../data/maps";
 import { dist, normalize } from "../game/math";
 import type { GameState } from "../game/state";
 import { nearestEnemy } from "../systems/combat";
+import { availableSendPacks, sendPackCost } from "../systems/send";
 import { emptyIntent, type CombatIntent } from "../net/types";
 import { canUpgradeBase } from "../data/baseUpgrades";
 
@@ -118,7 +118,8 @@ export function scriptedIntent(state: GameState): CombatIntent {
     intent.upgradeBase = true;
   }
   if (state.gold > 35 && Math.random() < 0.012) {
-    const pack = SEND_PACKS.find((p) => p.minBaseLevel <= state.baseLevel && p.cost <= state.gold);
+    const packs = availableSendPacks(state).filter((p) => sendPackCost(state, p.id) <= state.gold);
+    const pack = packs[Math.floor(Math.random() * packs.length)];
     if (pack) intent.sendDigit = pack.digit;
   }
   // Auto-pick drafts
@@ -253,7 +254,8 @@ export function thinkNeural(
         intent.moveX *= 0.7;
         intent.moveY *= 0.7;
       }
-      const pack = SEND_PACKS.filter((p) => p.minBaseLevel <= state.baseLevel && p.cost <= state.gold).pop();
+      const packs = availableSendPacks(state).filter((p) => sendPackCost(state, p.id) <= state.gold);
+      const pack = packs[packs.length - 1];
       if (pack && Math.random() < 0.35) intent.sendDigit = pack.digit;
       break;
     }

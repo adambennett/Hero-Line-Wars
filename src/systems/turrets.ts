@@ -64,6 +64,7 @@ function nextTurretSlot(state: GameState): { x: number; y: number; index: number
 
 export function updateTurrets(state: GameState, dt: number): void {
   const dmgMul = hasRelic(state, "architects_favor") ? 1.25 : 1;
+  const cdMul = hasRelic(state, "turret_overclock") ? 0.7 : 1;
   for (const t of state.turrets) {
     if (!t.alive) continue;
     t.fireCd = Math.max(0, t.fireCd - dt);
@@ -100,7 +101,7 @@ export function updateTurrets(state: GameState, dt: number): void {
         fromBasic: false,
       });
     }
-    t.fireCd = def.fireCooldown;
+    t.fireCd = def.fireCooldown * cdMul;
   }
   state.turrets = state.turrets.filter((t) => t.alive);
 }

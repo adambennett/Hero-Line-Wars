@@ -1,4 +1,3 @@
-import { SEND_PACKS } from "../data/send";
 import { normalize } from "../game/math";
 import {
   chooseLevelUp,
@@ -12,14 +11,13 @@ import {
 import { tryCastAbility, tickAbilityEffects } from "../systems/abilities";
 import { tryBasicAttack } from "../systems/combat";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
-import { buyShopItem } from "../systems/shop";
-import { buySendPack } from "../systems/send";
-import { updateEnemies } from "../systems/enemies";
+import { buyShopItem, tickShopRotation, beginWaveShop } from "../systems/shop";
+import { buySendPack, availableSendPacks, consumePendingSends } from "../systems/send";
+import { updateEnemies, createEnemy } from "../systems/enemies";
 import { updateTurrets } from "../systems/turrets";
-import { tickShopRotation, beginWaveShop } from "../systems/shop";
-import { consumePendingSends } from "../systems/send";
-import { createEnemy } from "../systems/enemies";
-import { pickEnemyKind, waveTier } from "../data/enemies";
+import { tickChests, tickMapSpecials } from "../systems/chests";
+import { applyWaveRider } from "../systems/relics";
+import { pickBossKind, pickEliteKind, pickEnemyKind, waveTier } from "../data/enemies";
 import {
   ENEMIES_PER_WAVE_BASE,
   MAP_W,
@@ -105,7 +103,7 @@ function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
   if (intent.upgradeBase) tryUpgradeBase(state);
   if (intent.toggleShop && state.nearShop) state.shopOpen = !state.shopOpen;
   if (intent.sendDigit != null) {
-    const pack = SEND_PACKS.find((p) => p.digit === intent.sendDigit);
+    const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
     if (pack) buySendPack(state, pack.id);
   }
   if (intent.shopSlot != null && state.shopOpen) {
@@ -123,6 +121,10 @@ function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean 
 }
 
 function startWave(state: GameState): void {
+  if (state.map.shrinkingLane && state.map.baseLaneTop != null && state.map.baseLaneBottom != null) {
+    state.map.laneTop = state.map.baseLaneTop;
+    state.map.laneBottom = state.map.baseLaneBottom;
+  }
   if (state.map.shiftingObstacles) {
     const heroes = allLaneHeroes(state);
     const reserved = [
@@ -165,14 +167,15 @@ function startWave(state: GameState): void {
   }
 
   if (state.waveTier === "elite") {
-    state.enemies.push(createEnemy(state, "elite", { hpScale: 1 }));
+    state.enemies.push(createEnemy(state, pickEliteKind(), { hpScale: 1 }));
     state.toast = "ELITE WAVE";
     state.toastTimer = 2.2;
   } else if (state.waveTier === "boss") {
-    state.enemies.push(createEnemy(state, "boss", { hpScale: 1 }));
+    state.enemies.push(createEnemy(state, pickBossKind(), { hpScale: 1 }));
     state.toast = "BOSS WAVE";
     state.toastTimer = 2.4;
   }
+  applyWaveRider(state);
 }
 
 function popNextSpawn(state: GameState): { hpScale: number; sent: boolean } | null {
@@ -425,6 +428,8 @@ function updateLaneMp(
   updateProjectilesMp(state, dt);
   updateEnemies(state, dt);
   updateTurrets(state, dt);
+  tickChests(state, dt);
+  tickMapSpecials(state, dt, state.spawning || state.enemies.some((e) => e.alive));
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);

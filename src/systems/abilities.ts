@@ -12,7 +12,7 @@ import {
   pushProjectile,
   applySlow,
 } from "./combat";
-import { mobilityCdMul } from "./relics";
+import { mobilityCdMul, ultimateCdMul } from "./relics";
 import { playSfx } from "./audio";
 
 function dashHero(state: GameState, move: Vec2, distDash: number, color: string): void {
@@ -232,6 +232,135 @@ function castBloom(state: GameState): boolean {
   return true;
 }
 
+function castFlare(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 120, "#ff6a3a");
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 70, attackDamage(state) * 0.8);
+  return true;
+}
+
+function castInferno(state: GameState): boolean {
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 115, attackDamage(state) * 2.3);
+  addFx(state, state.hero.x, state.hero.y, 115, "#ff6a3a88", 0.5);
+  return true;
+}
+
+function castRift(state: GameState, move: Vec2): boolean {
+  const aim = normalize(state.aimWorldX - state.hero.x, state.aimWorldY - state.hero.y);
+  const dir =
+    Math.hypot(aim.x, aim.y) > 0.1
+      ? aim
+      : Math.hypot(move.x, move.y) > 0.1
+        ? normalize(move.x, move.y)
+        : { x: 1, y: 0 };
+  dashHero(state, dir, 160, "#7a5cff");
+  return true;
+}
+
+function castSingularity(state: GameState): boolean {
+  const rad = 105;
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) > rad + e.radius) continue;
+    const n = normalize(state.hero.x - e.x, state.hero.y - e.y);
+    e.x += n.x * 28;
+    e.y += n.y * 28;
+  }
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, rad, attackDamage(state) * 2.4);
+  addFx(state, state.hero.x, state.hero.y, rad, "#7a5cff88", 0.5);
+  return true;
+}
+
+function castCharge(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 150, "#c8a060");
+  state.hero.barrierTimer = Math.max(state.hero.barrierTimer, 1.8);
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 60, attackDamage(state) * 0.9);
+  return true;
+}
+
+function castQuake(state: GameState): boolean {
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, 110, attackDamage(state) * 2);
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) <= 110 + e.radius) applySlow(e, 0.35, 2);
+  }
+  addFx(state, state.hero.x, state.hero.y, 110, "#c8a06088", 0.45);
+  return true;
+}
+
+function castSwapBlink(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 130, "#50d0d8");
+  state.hero.mirageEmpowered = true;
+  return true;
+}
+
+function castMirrorShard(state: GameState): boolean {
+  const angle = Math.atan2(state.aimWorldY - state.hero.y, state.aimWorldX - state.hero.x);
+  const dmg = attackDamage(state) * 0.85;
+  for (let i = -3; i <= 3; i++) {
+    const a = angle + i * 0.14;
+    pushProjectile(state, {
+      x: state.hero.x,
+      y: state.hero.y,
+      vx: Math.cos(a) * 560,
+      vy: Math.sin(a) * 560,
+      damage: dmg,
+      radius: 4,
+      kind: "bolt",
+      color: "#50d0d8",
+      pierceLeft: 2,
+    });
+  }
+  addFx(state, state.hero.x, state.hero.y, 30, "#50d0d888");
+  return true;
+}
+
+function castFieldStep(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 100, "#70e090");
+  state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 12);
+  return true;
+}
+
+function castSanctuary(state: GameState): boolean {
+  state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + state.hero.maxHp * 0.28);
+  state.hero.barrierTimer = Math.max(state.hero.barrierTimer, 2);
+  for (const ally of state.allies) {
+    if (!ally.alive) continue;
+    ally.hp = Math.min(ally.maxHp, ally.hp + ally.maxHp * 0.2);
+    ally.barrierTimer = Math.max(ally.barrierTimer, 1.5);
+  }
+  addFx(state, state.hero.x, state.hero.y, 90, "#70e09088", 0.5);
+  return true;
+}
+
+function castGust(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 125, "#90c8ff");
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) > 80 + e.radius) continue;
+    const n = normalize(e.x - state.hero.x, e.y - state.hero.y);
+    e.x += n.x * 22;
+    e.y += n.y * 22;
+  }
+  return true;
+}
+
+function castCyclone(state: GameState): boolean {
+  const angle = Math.atan2(state.aimWorldY - state.hero.y, state.aimWorldX - state.hero.x);
+  pushProjectile(state, {
+    x: state.hero.x,
+    y: state.hero.y,
+    vx: Math.cos(angle) * 620,
+    vy: Math.sin(angle) * 620,
+    damage: attackDamage(state) * 2.2,
+    radius: 8,
+    kind: "heavy",
+    color: "#90c8ff",
+    pierceLeft: 8,
+  });
+  addFx(state, state.hero.x, state.hero.y, 28, "#90c8ff88");
+  return true;
+}
+
 const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = {
   dash: (s, m) => castDash(s, m),
   slide: (s, m) => castSlide(s, m),
@@ -251,6 +380,18 @@ const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = 
   stormcage: (s) => castStormCage(s),
   burrow: (s, m) => castBurrow(s, m),
   bloom: (s) => castBloom(s),
+  flare: (s, m) => castFlare(s, m),
+  inferno: (s) => castInferno(s),
+  rift: (s, m) => castRift(s, m),
+  singularity: (s) => castSingularity(s),
+  charge: (s, m) => castCharge(s, m),
+  quake: (s) => castQuake(s),
+  swapblink: (s, m) => castSwapBlink(s, m),
+  mirrorshard: (s) => castMirrorShard(s),
+  fieldstep: (s, m) => castFieldStep(s, m),
+  sanctuary: (s) => castSanctuary(s),
+  gust: (s, m) => castGust(s, m),
+  cyclone: (s) => castCyclone(s),
 };
 
 export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2): void {
@@ -269,6 +410,7 @@ export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2):
   if (ok) {
     let cd = ability.cooldown;
     if (slot === "mobility") cd *= mobilityCdMul(state);
+    if (slot === "ultimate") cd *= ultimateCdMul(state);
     // blinkrng may have set CD negative to refund
     if ((state.hero.abilityCds[index] ?? 0) < 0) {
       state.hero.abilityCds[index] = 0;

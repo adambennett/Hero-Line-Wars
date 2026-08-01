@@ -1,5 +1,5 @@
 import { MAP_H, MAP_W } from "../data/constants";
-import { ENEMY_DEFS } from "../data/enemies";
+import { ENEMY_DEFS, isBossKind, isEliteKind } from "../data/enemies";
 import { HEROES } from "../data/heroes";
 import { TURRET_DEFS } from "../data/turrets";
 import { type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
@@ -56,7 +56,7 @@ function drawEnemyShape(ctx: CanvasRenderingContext2D, e: EnemyUnit): void {
   const r = e.radius;
   ctx.fillStyle = e.sent ? mixTint(def.color, "#a34bd4", 0.45) : def.color;
   ctx.strokeStyle = def.stroke;
-  ctx.lineWidth = e.kind === "boss" || e.kind === "elite" ? 3 : 2;
+  ctx.lineWidth = isBossKind(e.kind) || isEliteKind(e.kind) ? 3 : 2;
 
   ctx.beginPath();
   switch (def.shape) {
@@ -115,11 +115,11 @@ function drawEnemyShape(ctx: CanvasRenderingContext2D, e: EnemyUnit): void {
     ctx.setLineDash([]);
   }
 
-  if (e.kind === "boss" || e.kind === "elite") {
+  if (e.kind === "boss" || e.kind === "elite" || isBossKind(e.kind) || isEliteKind(e.kind)) {
     ctx.fillStyle = "#fff8";
     ctx.font = "bold 9px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(e.kind === "boss" ? "BOSS" : "ELITE", e.x, e.y + 3);
+    ctx.fillText(isBossKind(e.kind) ? "BOSS" : "ELITE", e.x, e.y + 3);
   } else if (e.kind === "sniper" || e.kind === "mortar" || e.kind === "hexer") {
     ctx.fillStyle = "#ffffff66";
     ctx.font = "bold 8px Segoe UI, sans-serif";
@@ -255,6 +255,48 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.lineWidth = 2;
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
+  }
+
+  // Moving hazard
+  if (map.movingHazards) {
+    const hx = state.mapHazardX;
+    const hy = (map.laneTop + map.laneBottom) / 2;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 42, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff404033";
+    ctx.fill();
+    ctx.strokeStyle = "#ff6060aa";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#ffb0b0";
+    ctx.font = "bold 9px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("HAZARD", hx, hy + 3);
+  }
+
+  // Chests
+  for (const c of state.chests) {
+    const colors: Record<string, string> = {
+      common: "#9ab0c8",
+      uncommon: "#5ecf8a",
+      rare: "#5a9cff",
+      mythic: "#c86cff",
+    };
+    ctx.beginPath();
+    ctx.rect(c.x - 14, c.y - 10, 28, 20);
+    ctx.fillStyle = "#1a1420";
+    ctx.fill();
+    ctx.strokeStyle = colors[c.rarity] ?? "#fff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (c.openProgress > 0) {
+      ctx.fillStyle = "#ffe080";
+      ctx.fillRect(c.x - 14, c.y + 12, 28 * Math.min(1, c.openProgress / c.openDuration), 4);
+    }
+    ctx.fillStyle = colors[c.rarity] ?? "#fff";
+    ctx.font = "bold 8px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("CHEST", c.x, c.y + 3);
   }
 
   // Shop pad
@@ -404,6 +446,18 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
     ctx.fillStyle = p.color ?? "#ffcc55";
     ctx.fill();
+  }
+
+  if (state.mapFogActive) {
+    ctx.fillStyle = "rgba(8, 10, 20, 0.55)";
+    ctx.fillRect(0, map.laneTop, MAP_W, map.laneBottom - map.laneTop);
+    // Keep a small clear radius around the hero
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.beginPath();
+    ctx.arc(state.hero.x, state.hero.y, 120, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   ctx.restore();

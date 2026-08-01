@@ -18,6 +18,26 @@ export type ShopItemId =
   | "blood_charm"
   | "storm_core"
   | "apex_relic"
+  | "lucky_dice"
+  | "copper_ring"
+  | "leather_wrap"
+  | "whetstone"
+  | "traveler_cloak"
+  | "merchant_seal"
+  | "thorn_bracer"
+  | "crystal_vial"
+  | "scout_glass"
+  | "iron_spikes"
+  | "gold_magnet"
+  | "berserker_tonic"
+  | "guardian_crest"
+  | "chrono_sand"
+  | "phantom_ink"
+  | "warhorn"
+  | "soul_lantern"
+  | "dragon_scale"
+  | "void_splinter"
+  | "king_scepter"
   | TurretKind;
 
 export type ShopCategory = "gear" | "artifact";
@@ -175,6 +195,186 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     name: "Apex Shard",
     cost: 180,
     effect: "+18 damage, +30 max HP, +0.5 income",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "legendary",
+  },
+  {
+    id: "lucky_dice",
+    name: "Lucky Dice",
+    cost: 40,
+    effect: "+6% crit chance",
+    maxStacks: 3,
+    category: "gear",
+    rarity: "common",
+  },
+  {
+    id: "copper_ring",
+    name: "Copper Ring",
+    cost: 30,
+    effect: "+0.35 gold/sec income",
+    maxStacks: 3,
+    category: "gear",
+    rarity: "common",
+  },
+  {
+    id: "leather_wrap",
+    name: "Leather Wrap",
+    cost: 28,
+    effect: "+20 move speed",
+    maxStacks: 3,
+    category: "gear",
+    rarity: "common",
+  },
+  {
+    id: "whetstone",
+    name: "Whetstone",
+    cost: 38,
+    effect: "+4 attack damage",
+    maxStacks: 4,
+    category: "gear",
+    rarity: "common",
+  },
+  {
+    id: "traveler_cloak",
+    name: "Traveler Cloak",
+    cost: 50,
+    effect: "+25 speed, +8 max HP",
+    maxStacks: 2,
+    category: "gear",
+    rarity: "uncommon",
+  },
+  {
+    id: "merchant_seal",
+    name: "Merchant Seal",
+    cost: 85,
+    effect: "Shop prices −8%",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "rare",
+  },
+  {
+    id: "thorn_bracer",
+    name: "Thorn Bracer",
+    cost: 55,
+    effect: "+3 damage, +12 max HP",
+    maxStacks: 2,
+    category: "gear",
+    rarity: "uncommon",
+  },
+  {
+    id: "crystal_vial",
+    name: "Crystal Vial",
+    cost: 48,
+    effect: "Heal 35 HP immediately",
+    maxStacks: 4,
+    category: "gear",
+    rarity: "common",
+  },
+  {
+    id: "scout_glass",
+    name: "Scout Glass",
+    cost: 65,
+    effect: "Attacks 6% faster, +3 damage",
+    maxStacks: 2,
+    category: "gear",
+    rarity: "uncommon",
+  },
+  {
+    id: "iron_spikes",
+    name: "Iron Spikes",
+    cost: 70,
+    effect: "Base +15 HP (repairs 15)",
+    maxStacks: 3,
+    category: "gear",
+    rarity: "uncommon",
+  },
+  {
+    id: "gold_magnet",
+    name: "Gold Magnet",
+    cost: 95,
+    effect: "+3 gold per enemy kill",
+    maxStacks: 2,
+    category: "gear",
+    rarity: "rare",
+  },
+  {
+    id: "berserker_tonic",
+    name: "Berserker Tonic",
+    cost: 100,
+    effect: "+14 damage, −10 max HP",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "rare",
+  },
+  {
+    id: "guardian_crest",
+    name: "Guardian Crest",
+    cost: 105,
+    effect: "+50 max HP (heals 25), base +10 HP",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "rare",
+  },
+  {
+    id: "chrono_sand",
+    name: "Chrono Sand",
+    cost: 120,
+    effect: "Attacks 18% faster",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "mythic",
+  },
+  {
+    id: "phantom_ink",
+    name: "Phantom Ink",
+    cost: 75,
+    effect: "+55 move speed",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "rare",
+  },
+  {
+    id: "warhorn",
+    name: "Warhorn",
+    cost: 115,
+    effect: "+1.0 gold/sec income",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "mythic",
+  },
+  {
+    id: "soul_lantern",
+    name: "Soul Lantern",
+    cost: 125,
+    effect: "+12 damage, +0.6 income",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "mythic",
+  },
+  {
+    id: "dragon_scale",
+    name: "Dragon Scale",
+    cost: 160,
+    effect: "+45 max HP, +8 damage, base +25 HP",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "legendary",
+  },
+  {
+    id: "void_splinter",
+    name: "Void Splinter",
+    cost: 155,
+    effect: "+20 damage, attacks 10% faster",
+    maxStacks: 1,
+    category: "gear",
+    rarity: "legendary",
+  },
+  {
+    id: "king_scepter",
+    name: "King's Scepter",
+    cost: 200,
+    effect: "+15 damage, +1.5 income, +20 max HP",
     maxStacks: 1,
     category: "gear",
     rarity: "legendary",

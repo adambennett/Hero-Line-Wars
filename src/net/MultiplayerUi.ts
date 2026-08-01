@@ -134,25 +134,27 @@ export class MultiplayerUi {
           `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
       ),
     ].join("");
-    const turretOpts = [1, 2, 3, 4, 5, 6]
+    const turretOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       .map(
         (n) =>
           `<option value="${n}" ${this.maxTurrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
-    const goldOpts = [45, 60, 80, 100, 150]
+    const goldOpts = [0, 10, 45, 50, 60, 80, 100, 150, 200, 500, 1000]
       .map(
         (g) =>
           `<option value="${g}" ${this.startingGold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
       )
       .join("");
-    const waveOpts = [8, 10, 12, 15, 20, 0]
+    const waveOpts = [1, 2, 3, 5, 8, 10, 12, 15, 20, 25, 50, 100, 500, 0]
       .map((w) => {
         const label = w === 0 ? "Unlimited" : String(w);
         const def = w === WIN_WAVES ? " (default)" : "";
         return `<option value="${w}" ${this.wavesToWin === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
+
+    const showFf = this.mode !== "1v1";
 
     return `
       <section class="sp-setup">
@@ -176,13 +178,17 @@ export class MultiplayerUi {
             <span>Waves to win</span>
             <select id="${prefix}-waves" ${dis}>${waveOpts}</select>
           </label>
-          <label class="run-field">
+          ${
+            showFf
+              ? `<label class="run-field">
             <span>Friendly fire</span>
             <select id="${prefix}-ff" ${dis}>
               <option value="0" ${!this.friendlyFire ? "selected" : ""}>Off</option>
               <option value="1" ${this.friendlyFire ? "selected" : ""}>On</option>
             </select>
-          </label>
+          </label>`
+              : `<div class="run-field"></div>`
+          }
           <div class="run-field"></div>
         </div>
       </section>

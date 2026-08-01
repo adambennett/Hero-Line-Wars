@@ -656,13 +656,60 @@ body,
   font: inherit;
 }
 
-.comp-select {
-  padding: 8px 10px;
-  border-radius: 8px;
+.comp-select,
+.setting-row select,
+.menu-input select,
+select.menu-input {
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: dark;
+  background-color: #0a0f1a;
+  background-image: linear-gradient(45deg, transparent 50%, #7f93b5 50%),
+    linear-gradient(135deg, #7f93b5 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% + 1px),
+    calc(100% - 11px) calc(50% + 1px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  color: #e8eef8;
   border: 1px solid #2c3d5c;
+  border-radius: 8px;
+  padding: 8px 28px 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.comp-select:hover,
+.setting-row select:hover,
+.menu-input select:hover,
+select.menu-input:hover {
+  border-color: #3d5580;
+  background-color: #101828;
+}
+
+.comp-select:focus,
+.setting-row select:focus,
+.menu-input select:focus,
+select.menu-input:focus {
+  outline: none;
+  border-color: #5ef0c8;
+  box-shadow: 0 0 0 2px #5ef0c822;
+}
+
+.comp-select option,
+.setting-row select option,
+.menu-input select option,
+select.menu-input option {
   background: #0a0f1a;
   color: #e8eef8;
-  font: inherit;
+}
+
+.comp-select {
+  min-width: 140px;
 }
 
 .rarity-badge {
@@ -2100,12 +2147,34 @@ body,
   appearance: none;
   -webkit-appearance: none;
   color-scheme: dark;
-  background: #0a0f1a;
+  background-color: #0a0f1a;
+  background-image: linear-gradient(45deg, transparent 50%, #7f93b5 50%),
+    linear-gradient(135deg, #7f93b5 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% + 1px),
+    calc(100% - 11px) calc(50% + 1px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
   color: #e8eef8;
   border: 1px solid #2c3d5c;
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: 8px;
+  padding: 6px 28px 6px 10px;
   font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.setting-row select:focus {
+  outline: none;
+  border-color: #5ef0c8;
+  box-shadow: 0 0 0 2px #5ef0c822;
+}
+
+.setting-row select option {
+  background: #0a0f1a;
+  color: #e8eef8;
 }
 
 .setting-row.check input {
