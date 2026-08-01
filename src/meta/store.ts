@@ -1,11 +1,20 @@
 /**
- * Persist War Crests, Barracks ranks, Ascension unlock, run stats.
+ * Persist War Crests, Barracks ranks, Ascension unlock, run stats, challenges.
  */
 
 import { MAX_ASCENSION } from "./ascension";
 import { META_UPGRADES, nextCost, type MetaUpgradeId } from "./upgrades";
 import type { MetaRanks } from "./modifiers";
 import type { HeroId } from "../data/heroes";
+import type { ChallengeId } from "./challenges";
+import { areCheatsEnabled, loadCheatOptions } from "./cheats";
+import {
+  applyRunToCareer,
+  EMPTY_CAREER,
+  normalizeCareer,
+  type CareerStats,
+  type RunStatDelta,
+} from "./careerStats";
 
 const STORE_KEY = "hlw-meta-v1";
 
@@ -20,6 +29,12 @@ export type MetaStore = {
   totalRuns: number;
   bestWave: number;
   lifetimeCrests: number;
+  /** Completed challenge ids. */
+  challengesCompleted?: Partial<Record<ChallengeId, boolean>>;
+  /** Maps where player reached wave 12+. */
+  mapsReachedWave12?: Record<string, boolean>;
+  /** Detailed lifetime career stats. */
+  career?: CareerStats;
 };
 
 const DEFAULT: MetaStore = {
@@ -31,6 +46,9 @@ const DEFAULT: MetaStore = {
   totalRuns: 0,
   bestWave: 0,
   lifetimeCrests: 0,
+  challengesCompleted: {},
+  mapsReachedWave12: {},
+  career: structuredClone(EMPTY_CAREER),
 };
 
 export function loadMetaStore(): MetaStore {
@@ -38,12 +56,23 @@ export function loadMetaStore(): MetaStore {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return structuredClone(DEFAULT);
     const parsed = JSON.parse(raw) as Partial<MetaStore>;
+    const career = normalizeCareer(parsed.career);
+    // Backfill career from legacy counters if empty
+    if (career.runs === 0 && (parsed.totalRuns ?? 0) > 0) {
+      career.runs = parsed.totalRuns ?? 0;
+      career.wins = parsed.totalWins ?? 0;
+      career.losses = Math.max(0, career.runs - career.wins);
+      career.bestWave = parsed.bestWave ?? 0;
+    }
     return {
       ...DEFAULT,
       ...parsed,
       ranks: { ...DEFAULT.ranks, ...(parsed.ranks ?? {}) },
       ascensionUnlocked: Math.max(0, Math.min(MAX_ASCENSION, parsed.ascensionUnlocked ?? 0)),
       highestAscensionCleared: parsed.highestAscensionCleared ?? -1,
+      challengesCompleted: { ...(parsed.challengesCompleted ?? {}) },
+      mapsReachedWave12: { ...(parsed.mapsReachedWave12 ?? {}) },
+      career,
     };
   } catch {
     return structuredClone(DEFAULT);
@@ -58,22 +87,49 @@ export function getRank(store: MetaStore, id: MetaUpgradeId): number {
   return store.ranks[id] ?? 0;
 }
 
+const HERO_UNLOCK: Partial<Record<HeroId, MetaUpgradeId>> = {
+  coil: "unlock_coil",
+  thorn: "unlock_thorn",
+  ember: "unlock_ember",
+  void: "unlock_void",
+  titan: "unlock_titan",
+  mirage: "unlock_mirage",
+  medic: "unlock_medic",
+  tempest: "unlock_tempest",
+  curses: "unlock_curses",
+  warp: "unlock_warp",
+  gyro: "unlock_gyro",
+};
+
 export function isHeroUnlocked(heroId: HeroId, store: MetaStore = loadMetaStore()): boolean {
-  if (heroId === "coil") return getRank(store, "unlock_coil") >= 1;
-  if (heroId === "thorn") return getRank(store, "unlock_thorn") >= 1;
-  if (heroId === "ember") return getRank(store, "unlock_ember") >= 1;
-  if (heroId === "void") return getRank(store, "unlock_void") >= 1;
-  if (heroId === "titan") return getRank(store, "unlock_titan") >= 1;
-  if (heroId === "mirage") return getRank(store, "unlock_mirage") >= 1;
-  if (heroId === "medic") return getRank(store, "unlock_medic") >= 1;
-  if (heroId === "tempest") return getRank(store, "unlock_tempest") >= 1;
-  return true;
+  if (areCheatsEnabled() && loadCheatOptions().unlockAll) return true;
+  const key = HERO_UNLOCK[heroId];
+  if (!key) return true;
+  return getRank(store, key) >= 1;
+}
+
+/** Challenge-locked content packs purchased in Barracks. */
+export function isContentPackUnlocked(
+  pack: MetaUpgradeId,
+  store: MetaStore = loadMetaStore(),
+): boolean {
+  if (areCheatsEnabled() && loadCheatOptions().unlockAll) return true;
+  return getRank(store, pack) >= 1;
 }
 
 export function purchaseUpgrade(id: MetaUpgradeId): { ok: boolean; message: string; store: MetaStore } {
   const store = loadMetaStore();
   const def = META_UPGRADES.find((u) => u.id === id);
   if (!def) return { ok: false, message: "Unknown upgrade", store };
+
+  // Challenge-gated unlocks require the challenge first
+  if (def.requiresChallenge) {
+    const done = store.challengesCompleted?.[def.requiresChallenge as import("./challenges").ChallengeId];
+    if (!done && getRank(store, id) < 1) {
+      return { ok: false, message: "Complete the linked challenge first", store };
+    }
+  }
+
   const cur = getRank(store, id);
   const cost = nextCost(id, cur);
   if (cost == null) return { ok: false, message: "Max rank", store };
@@ -92,6 +148,8 @@ export type RunPayoutInput = {
   deaths: number;
   unlimited: boolean;
   crestGainMul?: number;
+  /** When present, merges into lifetime career stats. */
+  careerDelta?: RunStatDelta;
 };
 
 export type RunPayout = {
@@ -163,6 +221,17 @@ export function applyRunPayout(input: RunPayoutInput): RunPayout & { store: Meta
       payout.breakdown.push(`Unlocked Ascension ${store.ascensionUnlocked}`);
     }
   }
+  if (input.careerDelta) {
+    store.career = applyRunToCareer(normalizeCareer(store.career), input.careerDelta);
+    // Keep legacy fields in sync with career
+    store.totalRuns = store.career.runs;
+    store.totalWins = store.career.wins;
+    store.bestWave = Math.max(store.bestWave, store.career.bestWave);
+  }
   saveMetaStore(store);
   return { ...payout, store };
+}
+
+export function getCareerStats(store: MetaStore = loadMetaStore()): CareerStats {
+  return normalizeCareer(store.career);
 }

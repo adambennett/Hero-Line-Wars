@@ -15,16 +15,34 @@ import {
   type EnemyKind,
   type WaveTier,
 } from "../data/enemies";
-import { HEROES, type HeroId } from "../data/heroes";
-import { getMap, resolveMapChoice, circleHitsObstacle, reshuffleObstacles, findClearSpot, blockedByObstacle, type MapDef, type MapId } from "../data/maps";
+import { type HeroId } from "../data/heroes";
+import {
+  circleHitsObstacle,
+  reshuffleObstacles,
+  findClearSpot,
+  blockedByObstacle,
+  resolveMapChoice,
+  type MapDef,
+  type MapId,
+} from "../data/maps";
+import { resolveHero, resolveMap, heroUsesGyroKit, heroUsesWarpKit } from "../custom/registry";
 import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
 import { draftRelicChoices, type RelicId } from "../data/relics";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
 import { DEFAULT_MAX_TURRETS, type TurretKind } from "../data/turrets";
 import type { LevelPassiveId } from "../data/xp";
+import { DEFAULT_UTILITY_DRAFT_LEVEL, type UtilityId } from "../data/utilities";
 import { clamp, dist, normalize } from "./math";
 import type { Input } from "../systems/input";
-import { tickAbilityEffects, tryCastAbility } from "../systems/abilities";
+import {
+  applyCurseChoice,
+  clearTeleporters,
+  fireChargedBladeHook,
+  tickAbilityEffects,
+  tickHeroKits,
+  tryCastAbility,
+} from "../systems/abilities";
+import type { CurseId } from "../data/curses";
 import {
   applyPlayerDamage,
   applySlow,
@@ -40,11 +58,14 @@ import { beginWaveShop, buyShopItem, tickShopRotation } from "../systems/shop";
 import { buySendPack, consumePendingSends, availableSendPacks } from "../systems/send";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { chooseLevelPassive, openLevelDraft } from "../systems/xp";
+import { applyUtilityChoice, tickUtilityEffects, tryCastUtility } from "../systems/utility";
 import { updateTurrets } from "../systems/turrets";
 import { tickChests, tickMapSpecials } from "../systems/chests";
 import { playSfx } from "../systems/audio";
 import { pickEliteKind, pickBossKind } from "../data/enemies";
 import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
+import { emptyBranchMods } from "../data/baseBranches";
+import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
 
 export type Unit = {
   id: number;
@@ -106,6 +127,11 @@ export type EnemyUnit = Unit & {
   campTimer?: number;
   dashTimer?: number;
   dashCd?: number;
+  /** Poison / burn DoT from hex / ember basics. */
+  dotTimer?: number;
+  dotDps?: number;
+  burnTimer?: number;
+  burnDps?: number;
 };
 
 export type TurretUnit = {
@@ -144,6 +170,12 @@ export type Projectile = {
   /** Slow applied to hero when this hostile projectile connects. */
   heroSlowMul?: number;
   heroSlowDuration?: number;
+  /** Curses basic: apply poison DoT on hit. */
+  hexDot?: boolean;
+  /** Ember basic: apply burn DoT on hit. */
+  burnDot?: boolean;
+  /** Medic syringe: heal hero on hit. */
+  healOnHit?: number;
 };
 
 export type FxRing = {
@@ -169,7 +201,49 @@ export type BeamFx = {
 };
 
 export type GameStatus = "playing" | "won" | "lost";
-export type DraftKind = "relic" | "level" | null;
+export type DraftKind = "relic" | "level" | "base" | "utility" | "curse" | "chest" | null;
+
+export type TeleporterPad = {
+  x: number;
+  y: number;
+};
+
+export type TeleporterState = {
+  a: TeleporterPad | null;
+  b: TeleporterPad | null;
+  linked: boolean;
+  /** After first link, alternate which pad the next mobility replaces. */
+  nextReplace: "a" | "b";
+  /** Per-pad shockwave cooldown after leaving that pad. */
+  shockCdA?: number;
+  shockCdB?: number;
+};
+
+export type ChestRewardOption =
+  | { kind: "gold"; amount: number; label: string; blurb: string }
+  | { kind: "item"; itemId: ShopItemId; label: string; blurb: string }
+  | { kind: "relic"; relicId: RelicId; label: string; blurb: string };
+
+export type BladeMode = "wrapped" | "flying" | "sling" | "rewinding" | "reforming";
+
+export type HexZone = {
+  x: number;
+  y: number;
+  radius: number;
+  life: number;
+  dps: number;
+};
+
+export type OutgoingCurse = {
+  shopBlock: number;
+  sendBlock: number;
+  upgradeBlock: number;
+  incomeTaxMul: number;
+  incomeTaxDuration: number;
+  fogDuration: number;
+  shopRefreshSlow: number;
+  shopRefreshDuration: number;
+};
 
 export type HeroRuntime = Unit & {
   heroId: HeroId;
@@ -193,12 +267,42 @@ export type HeroRuntime = Unit & {
   /** Temporary movement slow from hexer bolts etc. */
   slowMul?: number;
   slowTimer?: number;
+  /** Warp Gatewalker speed after pad hop. */
+  gatewalkTimer?: number;
+  /** Gyro: spin charge 0–1 while holding attack. */
+  bladeSpin?: number;
+  bladeAngle?: number;
+  bladeMode?: BladeMode;
+  bladeTipX?: number;
+  bladeTipY?: number;
+  bladeHookX?: number;
+  bladeHookY?: number;
+  /** Gyro vulnerable window after Blade Storm. */
+  bladeReformTimer?: number;
+  /** Ignore attack-hold spin for a moment after spawn (menu LMB leak). */
+  bladeSpawnGrace?: number;
+  /** Blade Hook hold-to-charge 0–1. */
+  bladeHookCharge?: number;
+  bladeHookCharging?: boolean;
+  bladeFlyDirX?: number;
+  bladeFlyDirY?: number;
+  bladeFlyRange?: number;
+  bladeFlyDist?: number;
+  /** Timed mobility states. */
+  slideTimer?: number;
+  slideVx?: number;
+  slideVy?: number;
+  chargeTimer?: number;
+  chargeVx?: number;
+  chargeVy?: number;
+  phaseTimer?: number;
+  burrowTimer?: number;
   /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
   controllerSlot?: number | null;
 };
 
 export type RunOptions = {
-  mapId: MapId | "random";
+  mapId: MapId | string | "random";
   maxTurrets: number;
   /** Starting gold for the run. */
   startingGold: number;
@@ -212,18 +316,43 @@ export type RunOptions = {
   modifiers?: RunModifiers;
   /** SP team size: 1 = classic abstract/opponent, 2/3 = dual-lane with AI allies. */
   teamSize?: 1 | 2 | 3;
+  /** Solo survival: no enemy lane; sends queue into your own next wave. */
+  endless?: boolean;
   /** Chest stand-to-open duration multiplier (1 = default). */
   chestOpenMul?: number;
   /** Seconds before an unopened chest despawns. */
   chestDespawnSec?: number;
   /** Chance per spawn tick to roll a chest while enemies are present (0–1). */
   chestSpawnChance?: number;
+  /** Creative / SP options */
+  enemyDensityMul?: number;
+  enemyHpMul?: number;
+  enemySpeedMul?: number;
+  incomeMul?: number;
+  respawnMul?: number;
+  startingBaseLevel?: number;
+  levelDraftSize?: number;
+  relicDraftSize?: number;
+  /** Level when global utility draft appears; 0 = Never. */
+  utilityDraftLevel?: number;
+  disableArtifacts?: boolean;
+  disableChests?: boolean;
+  disableElites?: boolean;
+  disableBosses?: boolean;
+  disableShop?: boolean;
+  disableSends?: boolean;
+  disableRelics?: boolean;
+  allyAiAggression?: number;
+  fogAlways?: boolean;
+  doubleElites?: boolean;
+  suddenDeathBaseHp?: number;
+  sharedFriendlyFire?: boolean;
 };
 
 export type GameState = {
   status: GameStatus;
   map: MapDef;
-  mapId: MapId;
+  mapId: MapId | string;
   maxTurrets: number;
   startingGold: number;
   /** 0 = unlimited. */
@@ -305,9 +434,85 @@ export type GameState = {
   /** PvE enemy lane driven by simple AI intents. */
   aiControlled?: boolean;
   teamSize: 1 | 2 | 3;
+  /** Solo endless survival (no rival lane). */
+  endless: boolean;
   chestOpenMul: number;
   chestDespawnSec: number;
   chestSpawnChance: number;
+  /** Reroll tokens for level/relic drafts. */
+  rerollTokens: number;
+  /** Challenge / run tracking. */
+  shopBuys: number;
+  chestsOpened: number;
+  bossesKilled: number;
+  elitesKilled: number;
+  artifactsPlaced: number;
+  levelDraftsTaken: number;
+  /** Session combat / economy counters for career stats. */
+  damageDealt: number;
+  damageTaken: number;
+  baseDamageTaken: number;
+  healingDone: number;
+  kills: number;
+  abilitiesCast: number;
+  basicsFired: number;
+  goldFromKills: number;
+  goldFromIncome: number;
+  goldSpent: number;
+  peakGold: number;
+  peakIncome: number;
+  baseUpgrades: number;
+  /** Soft curses applied TO this lane (from enemy Curses hero / dual-lane). */
+  curseShopBlock: number;
+  curseSendBlock: number;
+  curseUpgradeBlock: number;
+  curseIncomeTaxTimer: number;
+  curseIncomeTaxMul: number;
+  curseFogTimer: number;
+  curseShopRefreshSlowTimer: number;
+  curseShopRefreshSlowMul: number;
+  /** Payload waiting to be applied to the other lane (MP) or opponent. */
+  outgoingCurse: OutgoingCurse | null;
+  /** Hex Storm: choose 1 of 3 curses (pauses local lane). */
+  curseDraft: CurseId[] | null;
+  /** Chest open: pick 1 of 2 rewards (pauses local lane in SP). */
+  chestDraft: ChestRewardOption[] | null;
+  hexZones: HexZone[];
+  /** Warp hero teleporter pads (team-usable). */
+  teleporters: TeleporterState;
+  /** Brief lockout after a pad hop to prevent bounce loops. */
+  teleportLock: number;
+  /** Global utility (Spacebar slot). */
+  utilityId: UtilityId | null;
+  utilityCd: number;
+  utilityDraft: UtilityId[] | null;
+  utilityDraftOffered: boolean;
+  utilityDraftLevel: number;
+  utilityIncomeBoost: number;
+  utilityIncomeAmount: number;
+  utilityTurretBoost: number;
+  utilitySendDiscount: boolean;
+  utilitySprintTimer: number;
+  utilityDamageBoost: number;
+  utilityBountyKills: number;
+  /** Branching base upgrades. */
+  baseBranches: import("../data/baseBranches").BaseBranchId[];
+  baseBranchDraft: import("../data/baseBranches").BaseBranchId[] | null;
+  baseBranchMods: import("../data/baseBranches").BaseBranchMods;
+  /** Pending linear upgrade that should open a branch draft. */
+  pendingBaseBranch: boolean;
+  /** Creative run option mirrors. */
+  levelDraftSize: number;
+  relicDraftSize: number;
+  disableArtifacts: boolean;
+  disableChests: boolean;
+  disableElites: boolean;
+  disableBosses: boolean;
+  disableShop: boolean;
+  disableSends: boolean;
+  disableRelics: boolean;
+  fogAlways: boolean;
+  doubleElites: boolean;
 };
 
 export function createState(
@@ -315,28 +520,45 @@ export function createState(
   opts?: Partial<RunOptions>,
 ): GameState {
   const mapId = resolveMapChoice(opts?.mapId ?? "random");
-  const map = structuredClone(getMap(mapId));
+  const map = structuredClone(resolveMap(mapId));
   if (map.shiftingObstacles) reshuffleObstacles(map);
-  const def = HEROES[heroId];
+  const def = resolveHero(heroId);
   const mods = opts?.modifiers ?? defaultModifiers();
   const startingGold = Math.max(
     0,
     (opts?.startingGold ?? STARTING_GOLD) + mods.startingGoldDelta,
   );
-  const wavesToWin = opts?.wavesToWin ?? WIN_WAVES;
+  const endless = !!opts?.endless;
+  const wavesToWin = endless ? 0 : (opts?.wavesToWin ?? WIN_WAVES);
   const friendlyFire = opts?.friendlyFire ?? false;
   const baseMax = Math.round(map.base.maxHp * mods.baseHpMul);
   map.base.maxHp = baseMax;
   const maxTurrets =
     (opts?.maxTurrets ?? DEFAULT_MAX_TURRETS) + (mods.applyPlayerMeta ? mods.maxTurretsBonus : 0);
+  // Creative run option overlays
+  if (opts?.enemyHpMul) mods.enemyHpMul *= opts.enemyHpMul;
+  if (opts?.enemySpeedMul) mods.enemySpeedMul *= opts.enemySpeedMul;
+  if (opts?.enemyDensityMul) mods.enemyCountMul *= opts.enemyDensityMul;
+  if (opts?.incomeMul) mods.incomeMul *= opts.incomeMul;
+  if (opts?.respawnMul) mods.respawnMul *= opts.respawnMul;
+  if (opts?.sharedFriendlyFire) {
+    /* flag used by combat — mirrored via friendlyFire below if needed */
+  }
+  let baseHp = baseMax;
+  if (opts?.suddenDeathBaseHp) {
+    baseHp = Math.max(20, Math.round(opts.suddenDeathBaseHp));
+    map.base.maxHp = baseHp;
+  }
+  const startBase = Math.max(0, opts?.startingBaseLevel ?? 0);
+  const cheats = areCheatsEnabled() ? loadCheatOptions() : null;
   return {
     status: "playing",
     map,
     mapId,
-    maxTurrets,
+    maxTurrets: opts?.disableArtifacts ? 0 : maxTurrets,
     startingGold,
     wavesToWin,
-    friendlyFire,
+    friendlyFire: friendlyFire || !!opts?.sharedFriendlyFire,
     ascension: mods.ascension,
     modifiers: mods,
     hero: {
@@ -359,15 +581,26 @@ export function createState(
       luck: 0,
       marksmanTimer: 0,
       chaosIndex: 0,
+      bladeSpin: 0,
+      bladeAngle: 0,
+      bladeMode: "wrapped",
+      bladeReformTimer: 0,
+      bladeSpawnGrace: 0.45,
+      bladeHookCharge: 0,
+      bladeHookCharging: false,
+      slideTimer: 0,
+      chargeTimer: 0,
+      phaseTimer: 0,
+      burrowTimer: 0,
     },
     enemies: [],
     turrets: [],
     projectiles: [],
     fx: [],
     beam: null,
-    baseHp: baseMax,
-    baseLevel: 0,
-    gold: startingGold,
+    baseHp,
+    baseLevel: startBase,
+    gold: cheats?.infiniteGold ? 99999 : startingGold,
     incomePerSec: (BASE_INCOME_GOLD_PER_SEC + mods.incomeFlat) * mods.incomeMul,
     wave: 0,
     waveTier: "normal",
@@ -412,17 +645,79 @@ export function createState(
     chestSpawnCd: 8,
     mapSpecialTimer: 0,
     mapHazardX: MAP_W * 0.55,
-    mapFogActive: false,
+    mapFogActive: !!opts?.fogAlways,
     mapActiveSpawner: 0,
     aimWorldX: map.base.x + 200,
     aimWorldY: map.base.y,
-    opponent: createOpponent(heroId, baseMax, map.base.y),
+    opponent: createOpponent(heroId, baseHp, map.base.y),
     viewOpponentLane: false,
     allies: [],
     teamSize: opts?.teamSize ?? 1,
+    endless,
     chestOpenMul: opts?.chestOpenMul ?? 1,
     chestDespawnSec: opts?.chestDespawnSec ?? 28,
-    chestSpawnChance: opts?.chestSpawnChance ?? 0.08,
+    chestSpawnChance: opts?.disableChests ? 0 : (opts?.chestSpawnChance ?? 0.08),
+    rerollTokens: cheats?.infiniteRerolls ? 99 : 0,
+    shopBuys: 0,
+    chestsOpened: 0,
+    bossesKilled: 0,
+    elitesKilled: 0,
+    artifactsPlaced: 0,
+    levelDraftsTaken: 0,
+    damageDealt: 0,
+    damageTaken: 0,
+    baseDamageTaken: 0,
+    healingDone: 0,
+    kills: 0,
+    abilitiesCast: 0,
+    basicsFired: 0,
+    goldFromKills: 0,
+    goldFromIncome: 0,
+    goldSpent: 0,
+    peakGold: startingGold,
+    peakIncome: (BASE_INCOME_GOLD_PER_SEC + mods.incomeFlat) * mods.incomeMul,
+    baseUpgrades: 0,
+    curseShopBlock: 0,
+    curseSendBlock: 0,
+    curseUpgradeBlock: 0,
+    curseIncomeTaxTimer: 0,
+    curseIncomeTaxMul: 1,
+    curseFogTimer: 0,
+    curseShopRefreshSlowTimer: 0,
+    curseShopRefreshSlowMul: 1,
+    outgoingCurse: null,
+    curseDraft: null,
+    chestDraft: null,
+    hexZones: [],
+    teleporters: { a: null, b: null, linked: false, nextReplace: "a", shockCdA: 0, shockCdB: 0 },
+    teleportLock: 0,
+    utilityId: null,
+    utilityCd: 0,
+    utilityDraft: null,
+    utilityDraftOffered: false,
+    utilityDraftLevel: opts?.utilityDraftLevel ?? DEFAULT_UTILITY_DRAFT_LEVEL,
+    utilityIncomeBoost: 0,
+    utilityIncomeAmount: 0,
+    utilityTurretBoost: 0,
+    utilitySendDiscount: false,
+    utilitySprintTimer: 0,
+    utilityDamageBoost: 0,
+    utilityBountyKills: 0,
+    baseBranches: [],
+    baseBranchDraft: null,
+    baseBranchMods: emptyBranchMods(),
+    pendingBaseBranch: false,
+    levelDraftSize: opts?.levelDraftSize ?? 3,
+    relicDraftSize: opts?.relicDraftSize ?? 3,
+    disableArtifacts: !!opts?.disableArtifacts,
+    disableChests: !!opts?.disableChests,
+    disableElites: !!opts?.disableElites,
+    disableBosses: !!opts?.disableBosses,
+    disableShop: !!opts?.disableShop,
+    disableSends: !!opts?.disableSends,
+    disableRelics: !!opts?.disableRelics,
+    fogAlways: !!opts?.fogAlways,
+    doubleElites: !!opts?.doubleElites,
   };
 }
 
@@ -527,8 +822,19 @@ export function waveVictoryReached(state: GameState): boolean {
 }
 
 export function heroMoveSpeed(state: GameState): number {
-  let spd = HEROES[state.hero.heroId].speed + state.hero.speedBonus;
+  let spd = resolveHero(state.hero.heroId).speed + state.hero.speedBonus;
   if ((state.hero.zipSpeedTimer ?? 0) > 0) spd += 40;
+  if ((state.hero.gatewalkTimer ?? 0) > 0) spd *= 1.3;
+  if (state.utilitySprintTimer > 0) spd += 70;
+  // Gyro kit: slow more as spin ramps (cap ~55% slow); lock move while blades detached
+  if (heroUsesGyroKit(state.hero.heroId)) {
+    const spin = state.hero.bladeSpin ?? 0;
+    const mode = state.hero.bladeMode ?? "wrapped";
+    if (mode === "wrapped" && spin > 0) spd *= 1 - Math.min(0.55, spin * 0.55);
+    if (mode === "rewinding" || mode === "flying" || mode === "sling") return 0;
+  }
+  // Timed mobility overrides player steer a bit
+  if ((state.hero.slideTimer ?? 0) > 0 || (state.hero.chargeTimer ?? 0) > 0) spd *= 0.15;
   if ((state.hero.slowTimer ?? 0) > 0) spd *= state.hero.slowMul ?? 1;
   return spd;
 }
@@ -547,15 +853,24 @@ function killHero(state: GameState): void {
   state.deathCount += 1;
   state.respawnTimer = respawnDelay(state);
   state.shopOpen = false;
+  if (heroUsesWarpKit(state.hero.heroId)) clearTeleporters(state);
+  // Reset gyro blades on death
+  if (heroUsesGyroKit(state.hero.heroId)) {
+    state.hero.bladeMode = "wrapped";
+    state.hero.bladeSpin = 0;
+    state.hero.bladeReformTimer = 0;
+    state.hero.bladeHookCharging = false;
+    state.hero.bladeHookCharge = 0;
+  }
   state.toast = `Downed — respawn ${state.respawnTimer.toFixed(1)}s`;
   state.toastTimer = 2;
-  state.damageFlash = 0.4;
-  state.vignette = 0.7;
-  state.shake = 0.3;
+  state.damageFlash = Math.min(0.45, Math.max(state.damageFlash, 0.4));
+  state.vignette = Math.min(0.75, Math.max(state.vignette, 0.7));
+  state.shake = Math.min(0.35, Math.max(state.shake, 0.3));
 }
 
 function respawnHero(state: GameState): void {
-  const def = HEROES[state.hero.heroId];
+  const def = resolveHero(state.hero.heroId);
   state.hero.alive = true;
   state.hero.hp = state.hero.maxHp;
   state.hero.x = state.map.base.x + 120;
@@ -654,6 +969,17 @@ function updateProjectiles(state: GameState, dt: number): void {
           slow: p.appliesSlow,
         });
         if (p.appliesSlow) applySlow(e, 0.6, 1.5);
+        if (p.hexDot) {
+          e.dotTimer = Math.max(e.dotTimer ?? 0, 2.4);
+          e.dotDps = Math.max(e.dotDps ?? 0, p.damage * 0.55);
+        }
+        if (p.burnDot) {
+          e.burnTimer = Math.max(e.burnTimer ?? 0, 1.8);
+          e.burnDps = Math.max(e.burnDps ?? 0, p.damage * 0.4);
+        }
+        if (p.healOnHit && p.fromBasic) {
+          state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + (p.healOnHit ?? 0));
+        }
         if ((p.pierceLeft ?? 0) > 0) {
           p.pierceLeft = (p.pierceLeft ?? 0) - 1;
           continue;
@@ -671,7 +997,7 @@ const MAP_H_PAD = 600;
 
 function afterWaveClear(state: GameState, input: Input): boolean {
   if (state.waveTier === "elite" || state.waveTier === "boss") {
-    const choices = draftRelicChoices(state.relics, 3);
+    const choices = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
     if (choices.length > 0) {
       state.relicDraft = choices;
       state.pausedForDraft = true;
@@ -718,14 +1044,57 @@ export function update(state: GameState, input: Input, dt: number): void {
     return;
   }
 
-  if (state.pausedForDraft && (state.relicDraft || state.levelDraft)) {
+  if (
+    state.pausedForDraft &&
+    (state.relicDraft ||
+      state.levelDraft ||
+      state.baseBranchDraft ||
+      state.utilityDraft ||
+      state.curseDraft ||
+      state.chestDraft)
+  ) {
     state.elapsed += dt;
     input.endFrame();
     return;
   }
 
   state.elapsed += dt;
-  state.gold += state.incomePerSec * dt;
+  let income = state.incomePerSec;
+  if (state.curseIncomeTaxTimer > 0) {
+    income *= state.curseIncomeTaxMul;
+  }
+  income += state.baseBranchMods.incomeFlat;
+  if (state.utilityIncomeBoost > 0) income += state.utilityIncomeAmount;
+  const gained = income * dt;
+  state.gold += gained;
+  state.goldFromIncome += gained;
+  state.peakGold = Math.max(state.peakGold, state.gold);
+  state.peakIncome = Math.max(state.peakIncome, income);
+  if (areCheatsEnabled() && loadCheatOptions().infiniteGold) {
+    state.gold = Math.max(state.gold, 99999);
+  }
+
+  // Tick soft curses on this lane
+  const tick = (v: number) => Math.max(0, v - dt);
+  state.curseShopBlock = tick(state.curseShopBlock);
+  state.curseSendBlock = tick(state.curseSendBlock);
+  state.curseUpgradeBlock = tick(state.curseUpgradeBlock);
+  state.curseIncomeTaxTimer = tick(state.curseIncomeTaxTimer);
+  state.curseFogTimer = tick(state.curseFogTimer);
+  state.curseShopRefreshSlowTimer = tick(state.curseShopRefreshSlowTimer);
+  if (state.fogAlways || state.curseFogTimer > 0) state.mapFogActive = true;
+
+  // Hex DoT zones
+  for (const z of state.hexZones) {
+    z.life -= dt;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(e, z) <= z.radius + e.radius) {
+        damageEnemy(state, e, z.dps * dt);
+      }
+    }
+  }
+  state.hexZones = state.hexZones.filter((z) => z.life > 0);
 
   if (state.toastTimer > 0) {
     state.toastTimer = Math.max(0, state.toastTimer - dt);
@@ -754,24 +1123,47 @@ export function update(state: GameState, input: Input, dt: number): void {
 
   const shop = state.map.shop;
   state.nearShop = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
-  if (!state.nearShop && state.shopOpen) state.shopOpen = false;
-
-  if (state.hero.alive && input.consumePress("KeyF") && state.nearShop) {
-    state.shopOpen = !state.shopOpen;
+  // Auto-close when leaving interact range (also covers death via nearShop=false).
+  if (state.shopOpen && !state.nearShop) {
+    state.shopOpen = false;
   }
 
-  if (input.consumePress("KeyU")) {
-    tryUpgradeBase(state);
-  }
-
-  for (const pack of availableSendPacks(state)) {
-    if (pack.digit >= 4 && state.shopOpen) continue;
-    if (input.consumePress(`Digit${pack.digit}`)) {
-      buySendPack(state, pack.id);
+  if (
+    state.hero.alive &&
+    input.consumeAction("shop") &&
+    !state.disableShop &&
+    state.curseShopBlock <= 0
+  ) {
+    if (state.shopOpen) {
+      state.shopOpen = false;
+    } else if (state.nearShop) {
+      state.shopOpen = true;
     }
   }
 
-  if (state.shopOpen && state.hero.alive) {
+  if (input.consumeAction("upgradeBase") && state.curseUpgradeBlock <= 0) {
+    tryUpgradeBase(state);
+  }
+
+  if (!state.disableSends && state.curseSendBlock <= 0) {
+    for (const pack of availableSendPacks(state)) {
+      if (pack.digit >= 4 && state.shopOpen) continue;
+      const sendAction = `send${pack.digit}` as
+        | "send1"
+        | "send2"
+        | "send3"
+        | "send4"
+        | "send5"
+        | "send6";
+      if (pack.digit <= 6 && input.consumeAction(sendAction)) {
+        buySendPack(state, pack.id);
+      } else if (input.consumePress(`Digit${pack.digit}`)) {
+        buySendPack(state, pack.id);
+      }
+    }
+  }
+
+  if (state.shopOpen && state.hero.alive && state.curseShopBlock <= 0 && !state.disableShop) {
     (["Digit4", "Digit5", "Digit6"] as const).forEach((code, i) => {
       const id = state.shopOffer[i];
       if (input.consumePress(code) && id) buyShopItem(state, id);
@@ -789,12 +1181,41 @@ export function update(state: GameState, input: Input, dt: number): void {
       state.hero.abilityCds[i] = Math.max(0, state.hero.abilityCds[i]! - dt);
     }
 
-    if (input.consumeAction("mobility")) tryCastAbility(state, "mobility", axis);
+    // Gyro Blade Hook: hold to charge range, release / cap to fire
+    if (heroUsesGyroKit(state.hero.heroId)) {
+      const mode = state.hero.bladeMode ?? "wrapped";
+      const canCharge =
+        (mode === "wrapped" || mode === "reforming") &&
+        (state.hero.bladeReformTimer ?? 0) <= 0 &&
+        state.hero.abilityCds[0]! <= 0;
+      const held = input.isActionHeld("mobility");
+      if (canCharge && held) {
+        state.hero.bladeHookCharging = true;
+        state.hero.bladeHookCharge = Math.min(1, (state.hero.bladeHookCharge ?? 0) + dt / 0.9);
+        if ((state.hero.bladeHookCharge ?? 0) >= 1) {
+          fireChargedBladeHook(state, axis);
+        }
+      } else if (state.hero.bladeHookCharging) {
+        fireChargedBladeHook(state, axis);
+      } else {
+        state.hero.bladeHookCharge = 0;
+        // Consume stray press so it doesn't linger
+        input.consumeAction("mobility");
+      }
+    } else if (input.consumeAction("mobility")) {
+      tryCastAbility(state, "mobility", axis);
+    }
     if (input.consumeAction("ultimate")) tryCastAbility(state, "ultimate", axis);
+    if (input.consumeAction("utility")) tryCastUtility(state);
 
     tickAbilityEffects(state, dt);
+    tickUtilityEffects(state, dt);
+    tickHeroKits(state, dt, input.isActionHeld("attack"));
 
-    if (input.isActionHeld("attack") && state.hero.attackCd <= 0) {
+    const canBasic =
+      !heroUsesGyroKit(state.hero.heroId) ||
+      (state.hero.bladeMode ?? "wrapped") === "wrapped";
+    if (canBasic && input.isActionHeld("attack") && state.hero.attackCd <= 0) {
       tryBasicAttack(state);
     }
   }
@@ -802,7 +1223,7 @@ export function update(state: GameState, input: Input, dt: number): void {
   updateProjectiles(state, dt);
   updateEnemies(state, dt);
   updateTurrets(state, dt);
-  updateOpponent(state, dt);
+  if (!state.endless && !state.mpLane) updateOpponent(state, dt);
   tickChests(state, dt);
   tickMapSpecials(state, dt, state.spawning || state.enemies.some((e) => e.alive));
 
@@ -884,6 +1305,29 @@ export function chooseLevelUp(state: GameState, id: LevelPassiveId): void {
     applySecondWind(state);
     if (waveVictoryReached(state)) state.status = "won";
   }
+}
+
+export function chooseUtility(state: GameState, id: UtilityId): void {
+  if (!state.utilityDraft?.includes(id)) return;
+  applyUtilityChoice(state, id);
+  if (state.pendingLevelUps > 0 && !state.levelDraft) {
+    openLevelDraft(state);
+  } else if (state.levelDraft) {
+    state.draftKind = "level";
+    state.pausedForDraft = true;
+  } else if (state.relicDraft) {
+    state.draftKind = "relic";
+    state.pausedForDraft = true;
+  } else {
+    state.draftKind = null;
+    state.pausedForDraft = false;
+    applySecondWind(state);
+    if (waveVictoryReached(state)) state.status = "won";
+  }
+}
+
+export function chooseCurse(state: GameState, id: CurseId): void {
+  applyCurseChoice(state, id);
 }
 
 export function heroOnHighGround(state: GameState): boolean {

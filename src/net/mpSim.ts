@@ -1,21 +1,30 @@
 import { normalize } from "../game/math";
 import {
+  chooseCurse,
   chooseLevelUp,
   chooseRelic,
+  chooseUtility,
   heroMoveSpeed,
   skipRelic,
   waveVictoryReached,
   type GameState,
   type HeroRuntime,
 } from "../game/state";
-import { tryCastAbility, tickAbilityEffects } from "../systems/abilities";
+import {
+  clearTeleporters,
+  fireChargedBladeHook,
+  tryCastAbility,
+  tickAbilityEffects,
+  tickHeroKits,
+} from "../systems/abilities";
 import { tryBasicAttack } from "../systems/combat";
+import { tryCastUtility, tickUtilityEffects } from "../systems/utility";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { buyShopItem, tickShopRotation, beginWaveShop } from "../systems/shop";
 import { buySendPack, availableSendPacks, consumePendingSends } from "../systems/send";
 import { updateEnemies, createEnemy } from "../systems/enemies";
 import { updateTurrets } from "../systems/turrets";
-import { tickChests, tickMapSpecials } from "../systems/chests";
+import { chooseChestReward, tickChests, tickMapSpecials } from "../systems/chests";
 import { applyWaveRider } from "../systems/relics";
 import { pickBossKind, pickEliteKind, pickEnemyKind, waveTier } from "../data/enemies";
 import {
@@ -27,7 +36,23 @@ import {
 } from "../data/constants";
 import { circleHitsObstacle, findClearSpot, reshuffleObstacles, blockedByObstacle } from "../data/maps";
 import { clamp, dist } from "../game/math";
-import { HEROES } from "../data/heroes";
+import { heroUsesGyroKit, heroUsesWarpKit, resolveHero } from "../custom/registry";
+
+function applyOutgoingCurseTo(from: GameState, to: GameState): void {
+  const c = from.outgoingCurse;
+  if (!c) return;
+  to.curseShopBlock = Math.max(to.curseShopBlock, c.shopBlock);
+  to.curseSendBlock = Math.max(to.curseSendBlock, c.sendBlock);
+  to.curseUpgradeBlock = Math.max(to.curseUpgradeBlock, c.upgradeBlock);
+  to.curseIncomeTaxTimer = Math.max(to.curseIncomeTaxTimer, c.incomeTaxDuration);
+  to.curseIncomeTaxMul = c.incomeTaxMul;
+  to.curseFogTimer = Math.max(to.curseFogTimer, c.fogDuration);
+  to.curseShopRefreshSlowTimer = Math.max(to.curseShopRefreshSlowTimer, c.shopRefreshDuration);
+  to.curseShopRefreshSlowMul = c.shopRefreshSlow;
+  from.outgoingCurse = null;
+  to.toast = "Hex Storm hits your lane!";
+  to.toastTimer = 2;
+}
 import { draftRelicChoices } from "../data/relics";
 import { applySecondWind } from "../systems/relics";
 import { openLevelDraft } from "../systems/xp";
@@ -89,11 +114,37 @@ function applyHeroCombat(state: GameState, hero: HeroRuntime, intent: CombatInte
       hero.abilityCds[i] = Math.max(0, hero.abilityCds[i]! - dt);
     }
 
-    if (intent.mobility) tryCastAbility(state, "mobility", { x: intent.moveX, y: intent.moveY });
-    if (intent.ultimate) tryCastAbility(state, "ultimate", { x: intent.moveX, y: intent.moveY });
+    const axis = { x: intent.moveX, y: intent.moveY };
+    if (heroUsesGyroKit(hero.heroId)) {
+      const mode = hero.bladeMode ?? "wrapped";
+      const canCharge =
+        (mode === "wrapped" || mode === "reforming") &&
+        (hero.bladeReformTimer ?? 0) <= 0 &&
+        hero.abilityCds[0]! <= 0;
+      const held = !!intent.mobilityHeld || intent.mobility;
+      if (canCharge && held) {
+        hero.bladeHookCharging = true;
+        hero.bladeHookCharge = Math.min(1, (hero.bladeHookCharge ?? 0) + dt / 0.9);
+        if ((hero.bladeHookCharge ?? 0) >= 1 || intent.mobility) {
+          fireChargedBladeHook(state, axis);
+        }
+      } else if (hero.bladeHookCharging) {
+        fireChargedBladeHook(state, axis);
+      } else {
+        hero.bladeHookCharge = 0;
+      }
+    } else if (intent.mobility) {
+      tryCastAbility(state, "mobility", axis);
+    }
+    if (intent.ultimate) tryCastAbility(state, "ultimate", axis);
+    if (intent.utility) tryCastUtility(state);
     tickAbilityEffects(state, dt);
+    tickUtilityEffects(state, dt);
+    tickHeroKits(state, dt, intent.attackHeld);
 
-    if (intent.attackHeld && hero.attackCd <= 0) {
+    const canBasic =
+      !heroUsesGyroKit(hero.heroId) || (hero.bladeMode ?? "wrapped") === "wrapped";
+    if (canBasic && intent.attackHeld && hero.attackCd <= 0) {
       tryBasicAttack(state);
     }
   });
@@ -101,7 +152,10 @@ function applyHeroCombat(state: GameState, hero: HeroRuntime, intent: CombatInte
 
 function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
   if (intent.upgradeBase) tryUpgradeBase(state);
-  if (intent.toggleShop && state.nearShop) state.shopOpen = !state.shopOpen;
+  if (intent.toggleShop) {
+    if (state.shopOpen) state.shopOpen = false;
+    else if (state.nearShop) state.shopOpen = true;
+  }
   if (intent.sendDigit != null) {
     const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
     if (pack) buySendPack(state, pack.id);
@@ -113,6 +167,9 @@ function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
   if (intent.chooseRelic) chooseRelic(state, intent.chooseRelic);
   if (intent.skipRelic) skipRelic(state);
   if (intent.chooseLevel) chooseLevelUp(state, intent.chooseLevel);
+  if (intent.chooseUtility) chooseUtility(state, intent.chooseUtility);
+  if (intent.chooseCurse) chooseCurse(state, intent.chooseCurse);
+  if (intent.chooseChest != null) chooseChestReward(state, intent.chooseChest);
 }
 
 function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean }): void {
@@ -218,12 +275,21 @@ function killHeroObj(state: GameState, hero: HeroRuntime): void {
   } else {
     hero.attackCd = respawnDelay(state); // reuse as respawn timer for allies
   }
+  if (heroUsesWarpKit(hero.heroId) && hero === state.hero) clearTeleporters(state);
+  if (heroUsesGyroKit(hero.heroId)) {
+    hero.bladeMode = "wrapped";
+    hero.bladeSpin = 0;
+    hero.bladeReformTimer = 0;
+    hero.bladeHookCharging = false;
+    hero.bladeHookCharge = 0;
+    hero.bladeSpawnGrace = 0.35;
+  }
   state.toast = "Ally downed!";
   state.toastTimer = 1.4;
 }
 
 function respawnHeroObj(state: GameState, hero: HeroRuntime): void {
-  const def = HEROES[hero.heroId];
+  const def = resolveHero(hero.heroId);
   hero.alive = true;
   hero.hp = hero.maxHp;
   hero.x = state.map.base.x + 120;
@@ -355,7 +421,14 @@ function updateLaneMp(
   holdNextWave = false,
 ): void {
   if (state.status !== "playing") return;
-  if (state.pausedForDraft && (state.relicDraft || state.levelDraft)) {
+  if (
+    state.pausedForDraft &&
+    (state.relicDraft ||
+      state.levelDraft ||
+      state.utilityDraft ||
+      state.curseDraft ||
+      state.chestDraft)
+  ) {
     state.elapsed += dt;
     if (state.aiControlled) {
       applyLaneUiIntent(state, resolveAiIntent(state, neural, dt));
@@ -366,7 +439,13 @@ function updateLaneMp(
   }
 
   state.elapsed += dt;
-  state.gold += state.incomePerSec * dt;
+  let incomeMp = state.incomePerSec;
+  if (state.utilityIncomeBoost > 0) incomeMp += state.utilityIncomeAmount;
+  const gainedMp = incomeMp * dt;
+  state.gold += gainedMp;
+  state.goldFromIncome += gainedMp;
+  state.peakGold = Math.max(state.peakGold, state.gold);
+  state.peakIncome = Math.max(state.peakIncome, incomeMp);
 
   if (state.toastTimer > 0) {
     state.toastTimer = Math.max(0, state.toastTimer - dt);
@@ -402,6 +481,10 @@ function updateLaneMp(
   const shop = state.map.shop;
   state.nearShop =
     state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
+  // Auto-close when leaving interact range (also covers death via nearShop=false).
+  if (state.shopOpen && !state.nearShop) {
+    state.shopOpen = false;
+  }
 
   const beforeSends = state.pendingSends.length;
 
@@ -504,6 +587,10 @@ export function stepMpMatch(
   match.lanes[1].pendingSends.push(...out0);
   match.lanes[0].pendingSends.push(...out1);
 
+  // Transfer Hex soft-locks between lanes
+  applyOutgoingCurseTo(match.lanes[0], match.lanes[1]);
+  applyOutgoingCurseTo(match.lanes[1], match.lanes[0]);
+
   if (syncWaves && laneReadyToStartWave(match.lanes[0]) && laneReadyToStartWave(match.lanes[1])) {
     // Keep wave indices aligned if somehow drifted
     const w = Math.max(match.lanes[0].wave, match.lanes[1].wave);
@@ -525,8 +612,8 @@ export function stepMpMatch(
 export function gatherLocalIntent(
   input: {
     moveAxis: () => { x: number; y: number };
-    isActionHeld: (a: "attack" | "mobility" | "ultimate") => boolean;
-    consumeAction: (a: "attack" | "mobility" | "ultimate") => boolean;
+    isActionHeld: (a: "attack" | "mobility" | "ultimate" | "utility") => boolean;
+    consumeAction: (a: "attack" | "mobility" | "ultimate" | "utility") => boolean;
     consumePress: (code: string) => boolean;
   },
   aimWorld: { x: number; y: number },
@@ -553,14 +640,17 @@ export function gatherLocalIntent(
   let shopSlot: number | null = null;
   // Digit4-6 also used for shop when open — handled via sendDigit conflict; Game can set shopSlot
 
+  const mobilityHeld = input.isActionHeld("mobility");
   return {
     moveX: move.x,
     moveY: move.y,
     aimX,
     aimY,
     attackHeld: input.isActionHeld("attack"),
-    mobility: input.consumeAction("mobility"),
+    mobility: hero && heroUsesGyroKit(hero.heroId) ? false : input.consumeAction("mobility"),
+    mobilityHeld,
     ultimate: input.consumeAction("ultimate"),
+    utility: input.consumeAction("utility"),
     toggleShop: input.consumePress("KeyF"),
     upgradeBase: input.consumePress("KeyU"),
     sendDigit,
@@ -568,6 +658,9 @@ export function gatherLocalIntent(
     chooseRelic: null,
     skipRelic: false,
     chooseLevel: null,
+    chooseUtility: null,
+    chooseCurse: null,
+    chooseChest: null,
     viewOpponent: null,
   };
 }

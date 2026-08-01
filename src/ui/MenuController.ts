@@ -13,15 +13,20 @@ import type { MatchMode, MatchPrivacy } from "../net/types";
 import {
   ACTION_HINTS,
   ACTION_LABELS,
+  ALL_BINDABLE,
+  COMBAT_ACTIONS,
   DAMAGE_FX_LABELS,
+  DEFAULT_GAMEPAD,
   DEFAULT_KEYBINDS,
+  MOVE_ACTIONS,
+  UTILITY_ACTIONS,
   bindingEquals,
   formatBinding,
   loadSettings,
   saveSettings,
   type Binding,
-  type ClientSettings,
-  type CombatAction,
+  type BindableAction,
+  type ClientSettingsFull,
   type DamageScreenFx,
 } from "./settings";
 import { RECIPES, type RecipeId } from "../ai/brain";
@@ -39,13 +44,41 @@ import {
   ascensionLabel,
 } from "../meta/ascension";
 import {
+  getCareerStats,
   getRank,
   isHeroUnlocked,
   loadMetaStore,
   purchaseUpgrade,
 } from "../meta/store";
 import { META_UPGRADES, nextCost } from "../meta/upgrades";
+import {
+  CHALLENGES,
+  challengeProgressHint,
+  isChallengeComplete,
+} from "../meta/challenges";
+import {
+  areCheatsEnabled,
+  disableCheats,
+  enableCheats,
+  loadCheatOptions,
+  updateCheatOption,
+  type CheatOptions,
+} from "../meta/cheats";
+import { downloadSaveExport, importSaveFromFile } from "../meta/saveio";
+import { isMapUnlocked } from "../meta/contentLocks";
 import { unlockAudio } from "../systems/audio";
+import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
+import { isCustomHeroId } from "../custom/types";
+import { MapEditorPanel } from "./MapEditorPanel";
+import { HeroEditorPanel } from "./HeroEditorPanel";
+import {
+  formatCompact,
+  formatDuration,
+  topEntries,
+  winRate,
+  type CareerStats,
+} from "../meta/careerStats";
+import { MainMenuFx } from "./mainMenuFx";
 
 export type { MatchMode, MatchPrivacy } from "../net/types";
 
@@ -59,7 +92,14 @@ export type MenuScreen =
   | "settings"
   | "controls"
   | "ai-lab"
-  | "barracks";
+  | "barracks"
+  | "challenges"
+  | "cheats"
+  | "map-editor"
+  | "hero-editor"
+  | "stats";
+
+type StatsTab = "overview" | "combat" | "economy" | "progress" | "favorites";
 
 export type MatchRole = "host" | "join";
 
@@ -69,12 +109,14 @@ export type LobbyDraft = {
   role: MatchRole;
   joinCode: string;
   hostCode: string;
-  mapChoice: MapId | "random";
+  mapChoice: MapId | string | "random";
   maxTurrets: number;
   startingGold: number;
   /** 0 = unlimited. */
   wavesToWin: number;
   friendlyFire: boolean;
+  /** Level for global utility draft; 0 = Never. */
+  utilityDraftLevel: number;
 };
 
 export type MenuCallbacks = {
@@ -94,7 +136,6 @@ const MODE_OPTIONS: { id: MatchMode; label: string; hint: string }[] = [
   { id: "3p-pve", label: "3 Player PvE", hint: "Co-op vs AI" },
 ];
 
-const COMBAT_ACTIONS: CombatAction[] = ["attack", "mobility", "ultimate"];
 const ENEMY_KINDS = Object.keys(ENEMY_DEFS) as EnemyKind[];
 
 function randomLobbyCode(): string {
@@ -120,26 +161,54 @@ export class MenuController {
     startingGold: STARTING_GOLD,
     wavesToWin: WIN_WAVES,
     friendlyFire: false,
+    utilityDraftLevel: 10,
   };
-  private spMapChoice: MapId | "random" = "random";
+  private spMapChoice: MapId | string | "random" = "random";
   private spMaxTurrets = DEFAULT_MAX_TURRETS;
   private spStartingGold = STARTING_GOLD;
   private spWavesToWin = WIN_WAVES;
   private spFriendlyFire = false;
   private spAscension = 0;
   private spTeamSize: 1 | 2 | 3 = 1;
+  private spEndless = false;
   private spChestOpenMul = 1;
   private spChestDespawnSec = 28;
   private spChestSpawnChance = 0.08;
-  private settings: ClientSettings = loadSettings();
+  private spEnemyDensity = 1;
+  private spEnemyHp = 1;
+  private spEnemySpeed = 1;
+  private spIncomeMul = 1;
+  private spRespawnMul = 1;
+  private spStartingBase = 0;
+  private spLevelDraftSize = 3;
+  private spRelicDraftSize = 3;
+  private spUtilityDraftLevel = 10;
+  private spDisableArtifacts = false;
+  private spDisableChests = false;
+  private spDisableElites = false;
+  private spDisableBosses = false;
+  private spDisableShop = false;
+  private spDisableSends = false;
+  private spDisableRelics = false;
+  private spFogAlways = false;
+  private spDoubleElites = false;
+  private spSuddenDeath = 0;
+  private spAllyAi = 1;
+  private settings: ClientSettingsFull = loadSettings();
   private compendiumTab: CompTab = "heroes";
   private compSearch = "";
   private compRarity: Rarity | "all" = "all";
   private compSort: "name" | "rarity" = "rarity";
   private toast = "";
-  private rebinding: CombatAction | null = null;
+  private rebinding: BindableAction | null = null;
+  private rebindingPad = false;
   private unbindListen: (() => void) | null = null;
   private trainProgress: TrainProgress | null = null;
+  private readonly mapEditor = new MapEditorPanel();
+  private readonly heroEditor = new HeroEditorPanel();
+  private statsTab: StatsTab = "overview";
+  private readonly mainFx = new MainMenuFx();
+  private cheatOpts: CheatOptions = loadCheatOptions();
 
   constructor(root: HTMLElement, callbacks: MenuCallbacks) {
     this.root = root;
@@ -158,6 +227,7 @@ export class MenuController {
 
   hide(): void {
     this.stopRebindListen();
+    this.mainFx.stop();
     this.root.classList.add("hidden");
     this.root.innerHTML = "";
   }
@@ -189,6 +259,20 @@ export class MenuController {
     const action = t.dataset.action;
     if (!action) return;
 
+    if (action.startsWith("me-") && this.mapEditor.handleAction(action, t)) {
+      this.render();
+      return;
+    }
+    if (action.startsWith("he-") && this.heroEditor.handleAction(action, t)) {
+      this.render();
+      return;
+    }
+    if (action === "stats-tab") {
+      this.statsTab = (t.dataset.tab as StatsTab) || "overview";
+      this.render();
+      return;
+    }
+
     switch (action) {
       case "goto":
         if (t.dataset.screen === "multiplayer") {
@@ -206,7 +290,7 @@ export class MenuController {
         else this.render();
         break;
       case "play-sp":
-        if (!isHeroUnlocked(this.selectedHero)) {
+        if (!isCustomHeroId(this.selectedHero) && !isHeroUnlocked(this.selectedHero)) {
           this.setToast("Commission that hero in the Barracks first.");
           break;
         }
@@ -214,13 +298,35 @@ export class MenuController {
           mapId: this.spMapChoice,
           maxTurrets: this.spMaxTurrets,
           startingGold: this.spStartingGold,
-          wavesToWin: this.spWavesToWin,
-          friendlyFire: this.spFriendlyFire,
+          wavesToWin: this.spEndless ? 0 : this.spWavesToWin,
+          friendlyFire: this.spEndless ? false : this.spFriendlyFire,
           ascension: this.spAscension,
-          teamSize: this.spTeamSize,
+          teamSize: this.spEndless ? 1 : this.spTeamSize,
+          endless: this.spEndless,
           chestOpenMul: this.spChestOpenMul,
           chestDespawnSec: this.spChestDespawnSec,
           chestSpawnChance: this.spChestSpawnChance,
+          enemyDensityMul: this.spEnemyDensity,
+          enemyHpMul: this.spEnemyHp,
+          enemySpeedMul: this.spEnemySpeed,
+          incomeMul: this.spIncomeMul,
+          respawnMul: this.spRespawnMul,
+          startingBaseLevel: this.spStartingBase,
+          levelDraftSize: this.spLevelDraftSize,
+          relicDraftSize: this.spRelicDraftSize,
+          utilityDraftLevel: this.spUtilityDraftLevel,
+          disableArtifacts: this.spDisableArtifacts,
+          disableChests: this.spDisableChests,
+          disableElites: this.spDisableElites,
+          disableBosses: this.spDisableBosses,
+          disableShop: this.spDisableShop,
+          disableSends: this.spDisableSends,
+          disableRelics: this.spDisableRelics,
+          fogAlways: this.spFogAlways,
+          doubleElites: this.spDoubleElites,
+          suddenDeathBaseHp: this.spSuddenDeath > 0 ? this.spSuddenDeath : undefined,
+          allyAiAggression: this.spAllyAi,
+          sharedFriendlyFire: this.spFriendlyFire && this.spTeamSize > 1,
         });
         break;
       case "set-sp-map":
@@ -278,17 +384,66 @@ export class MenuController {
           reduceMotion: false,
           damageScreenFx: "full",
           keybinds: { ...DEFAULT_KEYBINDS },
+          gamepadEnabled: true,
+          gamepadBinds: { ...DEFAULT_GAMEPAD },
         };
         this.persist();
         this.setToast("Settings reset.");
         break;
       case "reset-binds":
         this.settings.keybinds = { ...DEFAULT_KEYBINDS };
+        this.settings.gamepadBinds = { ...DEFAULT_GAMEPAD };
         this.persist();
-        this.setToast("Controls reset to mouse defaults.");
+        this.setToast("Controls reset to defaults.");
         break;
       case "rebind":
-        this.beginRebind(t.dataset.bind as CombatAction);
+        this.rebindingPad = false;
+        this.beginRebind(t.dataset.bind as BindableAction);
+        break;
+      case "rebind-pad":
+        this.rebindingPad = true;
+        this.beginRebind(t.dataset.bind as BindableAction);
+        break;
+      case "export-save":
+        downloadSaveExport({ includeSettings: true, includeAi: true });
+        this.setToast("Save exported.");
+        break;
+      case "import-save":
+        {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = "application/json,.json";
+          input.addEventListener("change", () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            if (!confirm("Import will overwrite local meta progress. Continue?")) return;
+            void importSaveFromFile(file).then((res) => {
+              this.setToast(res.message);
+              if (res.ok) this.render();
+            });
+          });
+          input.click();
+        }
+        break;
+      case "toggle-cheats":
+        if (areCheatsEnabled()) {
+          disableCheats();
+          this.setToast("Cheats off — real profile restored.");
+        } else {
+          if (
+            !confirm(
+              "Cheats use a SEPARATE sandbox profile. Your real Barracks progress is cached and restored when you turn cheats off. Continue?",
+            )
+          )
+            break;
+          enableCheats();
+          this.setToast("Cheats on — sandbox profile active.");
+        }
+        this.cheatOpts = loadCheatOptions();
+        this.render();
+        break;
+      case "cheat-opt":
+        // Handled via change on checkbox; ignore click toggle race
         break;
       case "cancel-rebind":
         this.stopRebindListen();
@@ -319,12 +474,13 @@ export class MenuController {
     }
   }
 
-  private beginRebind(action: CombatAction): void {
+  private beginRebind(action: BindableAction): void {
     this.stopRebindListen();
     this.rebinding = action;
     this.render();
 
     const onKey = (ev: KeyboardEvent) => {
+      if (this.rebindingPad) return;
       ev.preventDefault();
       ev.stopPropagation();
       if (ev.code === "Escape") {
@@ -335,30 +491,55 @@ export class MenuController {
       this.applyBinding(action, { device: "key", code: ev.code });
     };
     const onMouse = (ev: MouseEvent) => {
+      if (this.rebindingPad) return;
       ev.preventDefault();
       ev.stopPropagation();
       if (ev.button > 2) return;
       this.applyBinding(action, { device: "mouse", button: ev.button as 0 | 1 | 2 });
     };
+    let padPoll: number | null = null;
+    if (this.rebindingPad) {
+      const prev = new Map<number, boolean>();
+      padPoll = window.setInterval(() => {
+        const pads = navigator.getGamepads?.() ?? [];
+        const pad = pads.find((p) => p) ?? null;
+        if (!pad) return;
+        for (let i = 0; i < pad.buttons.length; i++) {
+          const pressed = !!pad.buttons[i]?.pressed;
+          if (pressed && !prev.get(i)) {
+            this.applyBinding(action, { device: "gamepad", button: i });
+            if (padPoll != null) clearInterval(padPoll);
+            return;
+          }
+          prev.set(i, pressed);
+        }
+      }, 50);
+    }
 
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onMouse, true);
     this.unbindListen = () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousedown", onMouse, true);
+      if (padPoll != null) clearInterval(padPoll);
       this.rebinding = null;
+      this.rebindingPad = false;
       this.unbindListen = null;
     };
   }
 
-  private applyBinding(action: CombatAction, binding: Binding): void {
-    for (const other of COMBAT_ACTIONS) {
-      if (other === action) continue;
-      if (bindingEquals(this.settings.keybinds[other], binding)) {
-        this.settings.keybinds[other] = this.settings.keybinds[action];
+  private applyBinding(action: BindableAction, binding: Binding): void {
+    if (binding.device === "gamepad") {
+      this.settings.gamepadBinds[action] = binding;
+    } else {
+      for (const other of ALL_BINDABLE) {
+        if (other === action) continue;
+        if (bindingEquals(this.settings.keybinds[other], binding)) {
+          this.settings.keybinds[other] = this.settings.keybinds[action];
+        }
       }
+      this.settings.keybinds[action] = binding;
     }
-    this.settings.keybinds[action] = binding;
     this.persist();
     this.stopRebindListen();
     this.setToast(`${ACTION_LABELS[action]} → ${formatBinding(binding)}`);
@@ -404,6 +585,7 @@ export class MenuController {
       startingGold: this.lobby.startingGold,
       wavesToWin: this.lobby.wavesToWin,
       friendlyFire: this.lobby.friendlyFire,
+      utilityDraftLevel: this.lobby.utilityDraftLevel,
     });
   }
 
@@ -433,6 +615,9 @@ export class MenuController {
     } else if (el.dataset.field === "mp-waves-to-win") {
       this.lobby.wavesToWin = Number(el.value);
       this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-utility-level") {
+      this.lobby.utilityDraftLevel = Number(el.value);
+      this.emitLobbyOpts();
     } else if (el.dataset.field === "mp-friendly-fire") {
       this.lobby.friendlyFire = el.value === "1";
       this.emitLobbyOpts();
@@ -448,9 +633,15 @@ export class MenuController {
       this.spAscension = Number(el.value) || 0;
       this.paintSpRunMeta();
     } else if (el.dataset.field === "sp-map") {
-      this.spMapChoice = el.value as MapId | "random";
+      this.spMapChoice = el.value as MapId | string | "random";
     } else if (el.dataset.field === "sp-team-size") {
-      this.spTeamSize = (Number(el.value) || 1) as 1 | 2 | 3;
+      if (el.value === "endless") {
+        this.spEndless = true;
+        this.spTeamSize = 1;
+      } else {
+        this.spEndless = false;
+        this.spTeamSize = (Number(el.value) || 1) as 1 | 2 | 3;
+      }
       this.render();
     } else if (el.dataset.field === "sp-chest-open") {
       this.spChestOpenMul = Number(el.value) || 1;
@@ -458,6 +649,53 @@ export class MenuController {
       this.spChestDespawnSec = Number(el.value) || 28;
     } else if (el.dataset.field === "sp-chest-chance") {
       this.spChestSpawnChance = Number(el.value) || 0.08;
+    } else if (el.dataset.field === "sp-enemy-density") {
+      this.spEnemyDensity = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-enemy-hp") {
+      this.spEnemyHp = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-enemy-speed") {
+      this.spEnemySpeed = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-income") {
+      this.spIncomeMul = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-respawn") {
+      this.spRespawnMul = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-start-base") {
+      this.spStartingBase = Number(el.value) || 0;
+    } else if (el.dataset.field === "sp-level-draft") {
+      this.spLevelDraftSize = Number(el.value) || 3;
+    } else if (el.dataset.field === "sp-relic-draft") {
+      this.spRelicDraftSize = Number(el.value) || 3;
+    } else if (el.dataset.field === "sp-utility-level") {
+      this.spUtilityDraftLevel = Number(el.value);
+    } else if (el.dataset.field === "sp-ally-ai") {
+      this.spAllyAi = Number(el.value) || 1;
+    } else if (el.dataset.field === "sp-sudden") {
+      this.spSuddenDeath = Number(el.value) || 0;
+    } else if (el.dataset.field === "sp-no-art") {
+      this.spDisableArtifacts = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-chest") {
+      this.spDisableChests = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-elite") {
+      this.spDisableElites = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-boss") {
+      this.spDisableBosses = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-shop") {
+      this.spDisableShop = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-send") {
+      this.spDisableSends = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-no-relic") {
+      this.spDisableRelics = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-fog") {
+      this.spFogAlways = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-dbl-elite") {
+      this.spDoubleElites = (el as HTMLInputElement).checked;
+    } else if ((el as HTMLInputElement).dataset.setting === "gamepadEnabled") {
+      this.settings.gamepadEnabled = (el as HTMLInputElement).checked;
+      this.persist();
+    } else if ((el as HTMLInputElement).dataset.cheat) {
+      const key = (el as HTMLInputElement).dataset.cheat as keyof CheatOptions;
+      updateCheatOption(key, (el as HTMLInputElement).checked as never);
+      this.cheatOpts = loadCheatOptions();
     } else if (el.dataset.field === "sp-opponent-ai") {
       setSelectedOpponent(parseAiSelectValue(el.value));
     } else if (el.dataset.field === "ai-opponent") {
@@ -541,11 +779,36 @@ export class MenuController {
       case "barracks":
         body = this.renderBarracks();
         break;
+      case "challenges":
+        body = this.renderChallenges();
+        break;
+      case "cheats":
+        body = this.renderCheats();
+        break;
+      case "map-editor":
+        body = this.mapEditor.render();
+        break;
+      case "hero-editor":
+        body = this.heroEditor.render();
+        break;
+      case "stats":
+        body = this.renderStats();
+        break;
     }
 
+    this.mainFx.stop();
+    const isMain = this.screen === "main";
     this.root.innerHTML = `
-      <div class="menu-backdrop"></div>
-      <div class="menu-shell${this.screen === "singleplayer" ? " tight" : ""}">
+      <div class="menu-backdrop${isMain ? " main-fx" : ""}">
+        ${
+          isMain
+            ? `<div class="menu-aurora" aria-hidden="true"></div>
+               <div class="menu-waves" aria-hidden="true"></div>
+               <canvas id="menu-fx-canvas" aria-hidden="true"></canvas>`
+            : ""
+        }
+      </div>
+      <div class="menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" || this.screen === "stats" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}">
         ${body}
         ${toastHtml}
       </div>
@@ -554,8 +817,38 @@ export class MenuController {
     const shell = this.root.querySelector(".menu-shell");
     if (shell) shell.scrollTop = scroll;
 
+    if (isMain) {
+      const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
+      if (fxCanvas) this.mainFx.start(fxCanvas);
+    }
+
     if (this.screen === "compendium" && this.compendiumTab === "maps") {
       this.paintMapThumbs();
+    }
+    if (this.screen === "map-editor") this.mapEditor.bind(this.root);
+    if (this.screen === "hero-editor") this.heroEditor.bind(this.root);
+
+    const meImport = this.root.querySelector<HTMLInputElement>('input[data-action="me-import"]');
+    if (meImport) {
+      meImport.addEventListener("change", () => {
+        const file = meImport.files?.[0];
+        if (!file) return;
+        void this.mapEditor.handleImport(file).then((err) => {
+          if (err) this.setToast(err);
+          else this.render();
+        });
+      });
+    }
+    const heImport = this.root.querySelector<HTMLInputElement>('input[data-action="he-import"]');
+    if (heImport) {
+      heImport.addEventListener("change", () => {
+        const file = heImport.files?.[0];
+        if (!file) return;
+        void this.heroEditor.handleImport(file).then((err) => {
+          if (err) this.setToast(err);
+          else this.render();
+        });
+      });
     }
   }
 
@@ -606,22 +899,281 @@ export class MenuController {
     }
   }
 
+  private renderStats(): string {
+    const meta = loadMetaStore();
+    const c = getCareerStats(meta);
+    const tabs: { id: StatsTab; label: string }[] = [
+      { id: "overview", label: "Overview" },
+      { id: "combat", label: "Combat" },
+      { id: "economy", label: "Economy" },
+      { id: "progress", label: "Progress" },
+      { id: "favorites", label: "Favorites" },
+    ];
+    const tabNav = tabs
+      .map(
+        (t) =>
+          `<button type="button" class="stats-tab ${this.statsTab === t.id ? "active" : ""}" data-action="stats-tab" data-tab="${t.id}">${t.label}</button>`,
+      )
+      .join("");
+
+    return `
+      <header class="menu-header compact stats-header">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <div class="stats-header-text">
+          <h1 class="menu-title">Career Stats</h1>
+          <p class="menu-lead">Lifetime record across every finished run.</p>
+        </div>
+        <div class="stats-crest-pill" title="War Crests">
+          <span>Crests</span>
+          <strong>${formatCompact(meta.crests)}</strong>
+        </div>
+      </header>
+      <div class="stats-hero-strip">
+        <article class="stats-hero-card tone-win">
+          <span class="stats-hero-label">Win rate</span>
+          <strong>${c.runs ? winRate(c).toFixed(1) : "—"}%</strong>
+          <em>${c.wins}W · ${c.losses}L · ${c.runs} runs</em>
+        </article>
+        <article class="stats-hero-card tone-wave">
+          <span class="stats-hero-label">Best wave</span>
+          <strong>${formatCompact(Math.max(c.bestWave, meta.bestWave))}</strong>
+          <em>${formatCompact(c.wavesCleared)} waves cleared</em>
+        </article>
+        <article class="stats-hero-card tone-time">
+          <span class="stats-hero-label">Time in runs</span>
+          <strong>${formatDuration(c.playTimeSec)}</strong>
+          <em>${formatCompact(meta.lifetimeCrests)} lifetime crests</em>
+        </article>
+        <article class="stats-hero-card tone-kill">
+          <span class="stats-hero-label">Kills</span>
+          <strong>${formatCompact(c.kills)}</strong>
+          <em>${formatCompact(c.damageDealt)} damage dealt</em>
+        </article>
+      </div>
+      <nav class="stats-tabs" aria-label="Stats sections">${tabNav}</nav>
+      <div class="stats-panel">${this.renderStatsTab(c, meta.crests, meta.lifetimeCrests)}</div>
+    `;
+  }
+
+  private renderStatsTab(c: CareerStats, crests: number, lifetimeCrests: number): string {
+    const cell = (label: string, value: string, hint?: string) =>
+      `<div class="stats-cell"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${hint ? `<em>${escapeHtml(hint)}</em>` : ""}</div>`;
+
+    if (this.statsTab === "combat") {
+      return `
+        <div class="stats-grid two">
+          <section class="stats-section accent-crimson">
+            <h2>Offense</h2>
+            <div class="stats-cells">
+              ${cell("Damage dealt", formatCompact(c.damageDealt))}
+              ${cell("Kills", formatCompact(c.kills))}
+              ${cell("Boss kills", formatCompact(c.bossesKilled))}
+              ${cell("Elite kills", formatCompact(c.elitesKilled))}
+              ${cell("Basics fired", formatCompact(c.basicsFired))}
+              ${cell("Abilities cast", formatCompact(c.abilitiesCast))}
+            </div>
+          </section>
+          <section class="stats-section accent-slate">
+            <h2>Survival</h2>
+            <div class="stats-cells">
+              ${cell("Damage taken", formatCompact(c.damageTaken))}
+              ${cell("Base damage taken", formatCompact(c.baseDamageTaken))}
+              ${cell("Healing done", formatCompact(c.healingDone))}
+              ${cell("Deaths", formatCompact(c.deaths))}
+              ${cell("Flawless wins", formatCompact(c.flawlessWins))}
+              ${cell("Deaths / run", c.runs ? (c.deaths / c.runs).toFixed(2) : "—")}
+            </div>
+          </section>
+        </div>`;
+    }
+
+    if (this.statsTab === "economy") {
+      return `
+        <div class="stats-grid two">
+          <section class="stats-section accent-gold">
+            <h2>Gold flow</h2>
+            <div class="stats-cells">
+              ${cell("From kills", formatCompact(c.goldFromKills))}
+              ${cell("From income", formatCompact(c.goldFromIncome))}
+              ${cell("Gold spent", formatCompact(c.goldSpent))}
+              ${cell("Peak gold", formatCompact(c.peakGold))}
+              ${cell("Peak income /s", formatCompact(c.peakIncome))}
+              ${cell("Net from kills+income", formatCompact(c.goldFromKills + c.goldFromIncome))}
+            </div>
+          </section>
+          <section class="stats-section accent-teal">
+            <h2>Spending habits</h2>
+            <div class="stats-cells">
+              ${cell("Sends purchased", formatCompact(c.sends))}
+              ${cell("Shop buys", formatCompact(c.shopBuys))}
+              ${cell("Artifacts placed", formatCompact(c.artifactsPlaced))}
+              ${cell("Base upgrades", formatCompact(c.baseUpgrades))}
+              ${cell("Chests opened", formatCompact(c.chestsOpened))}
+              ${cell("Crests on hand", formatCompact(crests), `${formatCompact(lifetimeCrests)} earned lifetime`)}
+            </div>
+          </section>
+        </div>`;
+    }
+
+    if (this.statsTab === "progress") {
+      return `
+        <div class="stats-grid two">
+          <section class="stats-section accent-violet">
+            <h2>Run milestones</h2>
+            <div class="stats-cells">
+              ${cell("Best wave", formatCompact(c.bestWave))}
+              ${cell("Waves cleared", formatCompact(c.wavesCleared))}
+              ${cell("Highest hero Lv", formatCompact(c.highestHeroLevel))}
+              ${cell("Highest base Lv", formatCompact(c.highestBaseLevel))}
+              ${cell("Highest Asc played", `A${c.highestAscensionPlayed}`)}
+              ${cell("Level drafts", formatCompact(c.levelDrafts))}
+            </div>
+          </section>
+          <section class="stats-section accent-amber">
+            <h2>Modes &amp; build</h2>
+            <div class="stats-cells">
+              ${cell("Endless runs", formatCompact(c.endlessRuns))}
+              ${cell("Endless best wave", formatCompact(c.endlessBestWave))}
+              ${cell("Relics collected", formatCompact(c.relicsCollected))}
+              ${cell("Wins", formatCompact(c.wins))}
+              ${cell("Losses", formatCompact(c.losses))}
+              ${cell("Avg wave / run", c.runs ? (c.wavesCleared / c.runs).toFixed(1) : "—")}
+            </div>
+          </section>
+        </div>`;
+    }
+
+    if (this.statsTab === "favorites") {
+      const heroes = topEntries(c.heroRuns, 6);
+      const heroWins = topEntries(c.heroWins, 6);
+      const maps = topEntries(c.mapRuns, 6);
+      const mapWaves = topEntries(c.mapBestWave, 6);
+      const heroRow = (id: string, value: number, suffix: string) => {
+        const h = resolveHero(id);
+        return `<li class="stats-fav-row"><span class="swatch" style="background:${h.color}"></span><span class="name">${escapeHtml(h.name)}</span><strong>${formatCompact(value)} ${suffix}</strong></li>`;
+      };
+      const mapRow = (id: string, value: number, suffix: string) => {
+        const m = resolveMap(id);
+        return `<li class="stats-fav-row"><span class="swatch map"></span><span class="name">${escapeHtml(m.name)}</span><strong>${formatCompact(value)} ${suffix}</strong></li>`;
+      };
+      return `
+        <div class="stats-grid two">
+          <section class="stats-section accent-sky">
+            <h2>Most played heroes</h2>
+            <ul class="stats-fav-list">${heroes.length ? heroes.map((e) => heroRow(e.id, e.value, "runs")).join("") : `<li class="stats-empty">Play a run to begin tracking.</li>`}</ul>
+          </section>
+          <section class="stats-section accent-mint">
+            <h2>Most wins by hero</h2>
+            <ul class="stats-fav-list">${heroWins.length ? heroWins.map((e) => heroRow(e.id, e.value, "wins")).join("") : `<li class="stats-empty">No wins recorded yet.</li>`}</ul>
+          </section>
+          <section class="stats-section accent-rose">
+            <h2>Maps played</h2>
+            <ul class="stats-fav-list">${maps.length ? maps.map((e) => mapRow(e.id, e.value, "runs")).join("") : `<li class="stats-empty">No map history yet.</li>`}</ul>
+          </section>
+          <section class="stats-section accent-indigo">
+            <h2>Best wave by map</h2>
+            <ul class="stats-fav-list">${mapWaves.length ? mapWaves.map((e) => mapRow(e.id, e.value, "wave")).join("") : `<li class="stats-empty">No map peaks yet.</li>`}</ul>
+          </section>
+        </div>`;
+    }
+
+    // overview
+    const dmgPerKill = c.kills > 0 ? c.damageDealt / c.kills : 0;
+    return `
+      <div class="stats-grid two">
+        <section class="stats-section accent-ember">
+          <h2>At a glance</h2>
+          <div class="stats-cells">
+            ${cell("Runs finished", formatCompact(c.runs))}
+            ${cell("Win rate", c.runs ? `${winRate(c).toFixed(1)}%` : "—")}
+            ${cell("Time played", formatDuration(c.playTimeSec))}
+            ${cell("Flawless wins", formatCompact(c.flawlessWins))}
+            ${cell("Endless best", formatCompact(c.endlessBestWave))}
+            ${cell("Avg dmg / kill", formatCompact(dmgPerKill))}
+          </div>
+        </section>
+        <section class="stats-section accent-steel">
+          <h2>Pressure &amp; tempo</h2>
+          <div class="stats-cells">
+            ${cell("Damage dealt", formatCompact(c.damageDealt))}
+            ${cell("Damage taken", formatCompact(c.damageTaken))}
+            ${cell("Gold earned*", formatCompact(c.goldFromKills + c.goldFromIncome), "*kills + income")}
+            ${cell("Sends", formatCompact(c.sends))}
+            ${cell("Shop buys", formatCompact(c.shopBuys))}
+            ${cell("Abilities cast", formatCompact(c.abilitiesCast))}
+          </div>
+        </section>
+      </div>
+      <p class="stats-footnote">Stats update when a run ends (solo, endless, and offline solo-vs-AI). Older saves backfill wins/runs/best wave only.</p>`;
+  }
+
   private renderMain(): string {
     return `
-      <header class="menu-header">
-        <p class="menu-eyebrow">Prototype</p>
-        <h1 class="menu-title">Hero Line Wars</h1>
-        <p class="menu-sub">Hold the line. Grow your income. Outlast the waves.</p>
+      <header class="menu-header main-hero">
+        <h1 class="menu-title brand-title" aria-label="Hero Line Wars">
+          <span class="brand-line">
+            <span class="brand-word" data-text="Hero">Hero</span>
+            <span class="brand-word accent" data-text="Line">Line</span>
+          </span>
+          <span class="brand-line">
+            <span class="brand-word wars" data-text="Wars">Wars</span>
+          </span>
+        </h1>
+        <div class="menu-sub brand-sub">
+          <p>Hold the line.</p>
+          <p>Grow your income.</p>
+          <p>Outlast the waves.</p>
+        </div>
       </header>
-      <nav class="menu-nav">
-        <button type="button" class="menu-btn primary" data-action="goto" data-screen="singleplayer">Singleplayer</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="multiplayer">Multiplayer</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Barracks</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="ai-lab">AI Lab</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="compendium">Compendium</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="game-info">Game Info</button>
-        <button type="button" class="menu-btn" data-action="goto" data-screen="settings">Settings</button>
-        <button type="button" class="menu-btn ghost" data-action="quit">Quit</button>
+
+      <nav class="main-menu-grid" aria-label="Main menu">
+        <section class="main-group play">
+          <h2 class="main-group-label">Play</h2>
+          <div class="main-group-btns play-btns">
+            <button type="button" class="menu-btn primary shine-btn play-card" data-action="goto" data-screen="singleplayer">
+              <span class="btn-label">Singleplayer</span>
+              <span class="btn-hint">Solo runs, endless, Ascension</span>
+            </button>
+            <button type="button" class="menu-btn shine-btn play-card" data-action="goto" data-screen="multiplayer">
+              <span class="btn-label">Multiplayer</span>
+              <span class="btn-hint">Lobby codes &amp; online lanes</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="main-group progress">
+          <h2 class="main-group-label">Progress</h2>
+          <div class="main-group-btns cols-3">
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="barracks"><span class="btn-label">Barracks</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="stats"><span class="btn-label">Stats</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="challenges"><span class="btn-label">Challenges</span></button>
+          </div>
+        </section>
+
+        <section class="main-group workshop">
+          <h2 class="main-group-label">Workshop</h2>
+          <div class="main-group-btns cols-3">
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="map-editor"><span class="btn-label">Map Editor</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="hero-editor"><span class="btn-label">Hero Editor</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="ai-lab"><span class="btn-label">AI Lab</span></button>
+          </div>
+        </section>
+
+        <section class="main-group library">
+          <h2 class="main-group-label">Library</h2>
+          <div class="main-group-btns cols-2">
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="compendium"><span class="btn-label">Compendium</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="game-info"><span class="btn-label">Game Info</span></button>
+          </div>
+        </section>
+
+        <section class="main-group system">
+          <div class="main-group-btns system-btns">
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="settings"><span class="btn-label">Settings</span></button>
+            <button type="button" class="menu-btn ghost shine-btn" data-action="goto" data-screen="cheats"><span class="btn-label">Cheats</span></button>
+            <button type="button" class="menu-btn ghost shine-btn" data-action="quit"><span class="btn-label">Quit</span></button>
+          </div>
+        </section>
       </nav>
     `;
   }
@@ -650,7 +1202,8 @@ export class MenuController {
           `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
-    const showFf = scope === "mp" ? this.lobby.mode !== "1v1" : this.spTeamSize > 1;
+    const showFf =
+      scope === "mp" ? this.lobby.mode !== "1v1" : !this.spEndless && this.spTeamSize > 1;
     const ffField = showFf
       ? `<label class="run-field">
             <span>Friendly fire</span>
@@ -661,12 +1214,13 @@ export class MenuController {
           </label>`
       : "";
     if (scope === "sp") {
-      const teamOpts = [1, 2, 3]
-        .map(
+      const teamOpts = [
+        ...[1, 2, 3].map(
           (n) =>
-            `<option value="${n}" ${this.spTeamSize === n ? "selected" : ""}>${n}v${n}${n === 1 ? " (classic)" : " (+ AI allies)"}</option>`,
-        )
-        .join("");
+            `<option value="${n}" ${!this.spEndless && this.spTeamSize === n ? "selected" : ""}>${n}v${n}${n === 1 ? " (classic)" : " (+ AI allies)"}</option>`,
+        ),
+        `<option value="endless" ${this.spEndless ? "selected" : ""}>Endless (solo survival)</option>`,
+      ].join("");
       const openOpts = [0.75, 1, 1.25, 1.5, 2]
         .map(
           (n) =>
@@ -685,26 +1239,39 @@ export class MenuController {
             `<option value="${n}" ${this.spChestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`,
         )
         .join("");
+      const wavesField = this.spEndless
+        ? `<label class="run-field">
+            <span>Waves to win</span>
+            <select disabled title="Endless runs until your base falls">
+              <option selected>Until you fall</option>
+            </select>
+          </label>`
+        : `<label class="run-field">
+            <span>Waves to win</span>
+            <select data-field="sp-waves-to-win">${waveOpts}</select>
+          </label>`;
       return `
         <div class="run-grid cols-4">
           <label class="run-field">
-            <span>Team size</span>
+            <span>Mode</span>
             <select data-field="sp-team-size">${teamOpts}</select>
           </label>
           <label class="run-field">
-            <span>Turrets</span>
+            <span>Artifacts</span>
             <select data-field="sp-turrets">${turretOpts}</select>
           </label>
           <label class="run-field">
             <span>Starting gold</span>
             <select data-field="sp-starting-gold">${goldOpts}</select>
           </label>
-          <label class="run-field">
-            <span>Waves to win</span>
-            <select data-field="sp-waves-to-win">${waveOpts}</select>
-          </label>
+          ${wavesField}
           ${ffField}
         </div>
+        ${
+          this.spEndless
+            ? `<p class="panel-note" style="margin:8px 0 0">Endless: no enemy lane. Sends queue into <em>your</em> next wave for income — fight what you buy.</p>`
+            : ""
+        }
         <div class="run-grid cols-3" style="margin-top:8px">
           <label class="run-field">
             <span>Chest open</span>
@@ -719,11 +1286,67 @@ export class MenuController {
             <select data-field="sp-chest-chance">${chanceOpts}</select>
           </label>
         </div>
+        <details class="muted-box" style="margin-top:10px">
+          <summary>Creative options</summary>
+          <div class="run-grid cols-4" style="margin-top:8px">
+            <label class="run-field"><span>Enemy density</span>
+              <select data-field="sp-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spEnemyDensity === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Enemy HP</span>
+              <select data-field="sp-enemy-hp">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spEnemyHp === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Enemy speed</span>
+              <select data-field="sp-enemy-speed">${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.spEnemySpeed === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Income</span>
+              <select data-field="sp-income">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spIncomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Respawn</span>
+              <select data-field="sp-respawn">${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.spRespawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Start base Lv</span>
+              <select data-field="sp-start-base">${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.spStartingBase === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Level draft size</span>
+              <select data-field="sp-level-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.spLevelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Relic draft size</span>
+              <select data-field="sp-relic-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.spRelicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Utility draft Lv</span>
+              <select data-field="sp-utility-level">${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${this.spUtilityDraftLevel === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Ally AI</span>
+              <select data-field="sp-ally-ai">${[0.7, 1, 1.4, 1.8].map((n) => `<option value="${n}" ${this.spAllyAi === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Sudden death HP</span>
+              <select data-field="sp-sudden">${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.spSuddenDeath === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+            </label>
+          </div>
+          <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+            ${[
+              ["sp-no-art", "No artifacts", this.spDisableArtifacts],
+              ["sp-no-chest", "No chests", this.spDisableChests],
+              ["sp-no-elite", "No elites", this.spDisableElites],
+              ["sp-no-boss", "No bosses", this.spDisableBosses],
+              ["sp-no-shop", "No shop", this.spDisableShop],
+              ["sp-no-send", "No sends", this.spDisableSends],
+              ["sp-no-relic", "No relics", this.spDisableRelics],
+              ["sp-fog", "Fog always", this.spFogAlways],
+              ["sp-dbl-elite", "Double elites", this.spDoubleElites],
+            ]
+              .map(
+                ([field, label, on]) =>
+                  `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
+              )
+              .join("")}
+          </div>
+        </details>
       `;
     }
     return `
       <label class="setting-row">
-        <span>Max turrets <em id="${scope}-turret-label">${turrets}</em></span>
+        <span>Max artifacts <em id="${scope}-turret-label">${turrets}</em></span>
         <input type="range" min="1" max="10" step="1" value="${turrets}" data-field="${scope}-turrets" />
       </label>
       <label class="setting-row">
@@ -733,6 +1356,10 @@ export class MenuController {
       <label class="setting-row">
         <span>Waves to win</span>
         <select data-field="${scope}-waves-to-win">${waveOpts}</select>
+      </label>
+      <label class="setting-row">
+        <span>Utility draft Lv</span>
+        <select data-field="${scope}-utility-level">${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${(scope === "mp" ? this.lobby.utilityDraftLevel : this.spUtilityDraftLevel) === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
       </label>
       ${
         showFf
@@ -751,8 +1378,9 @@ export class MenuController {
   private spHeroDetailHtml(): string {
     const kb = this.settings.keybinds;
     const meta = loadMetaStore();
-    const h = HERO_LIST.find((x) => x.id === this.selectedHero) ?? HERO_LIST[0]!;
-    const unlocked = isHeroUnlocked(h.id, meta);
+    const h = resolveHero(this.selectedHero);
+    const custom = isCustomHeroId(this.selectedHero);
+    const unlocked = custom || isHeroUnlocked(h.id as HeroId, meta);
     if (!unlocked) {
       return `
         <div class="sp-hero-detail-inner locked">
@@ -766,7 +1394,7 @@ export class MenuController {
     return `
       <div class="sp-hero-detail-inner">
         <span class="hero-swatch" style="--hero:${h.color}"></span>
-        <strong style="color:${h.color}">${escapeHtml(h.name)}</strong>
+        <strong style="color:${h.color}">${escapeHtml(h.name)}${custom ? " · Custom" : ""}</strong>
         <p class="sp-hero-blurb">${escapeHtml(h.blurb)}</p>
         <ul class="hero-abilities">
           <li><em>Passive</em> ${escapeHtml(h.passive.name)} — ${escapeHtml(h.passive.blurb)}</li>
@@ -794,24 +1422,42 @@ export class MenuController {
   private renderSingleplayer(): string {
     const meta = loadMetaStore();
     this.spAscension = Math.min(this.spAscension, meta.ascensionUnlocked);
-    const cards = HERO_LIST.map((h) => {
+    const customHeroCards = listCustomHeroes().map((h) => {
       const selected = h.id === this.selectedHero;
-      const unlocked = isHeroUnlocked(h.id, meta);
       return `
+        <button type="button" class="hero-card compact ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
+          <span class="hero-swatch" style="--hero:${h.color}"></span>
+          <strong>${escapeHtml(h.name)}</strong>
+          <span>Custom · ${escapeHtml(h.blurb)}</span>
+        </button>
+      `;
+    });
+    const cards = [
+      ...customHeroCards,
+      ...HERO_LIST.map((h) => {
+        const selected = h.id === this.selectedHero;
+        const unlocked = isHeroUnlocked(h.id, meta);
+        return `
         <button type="button" class="hero-card compact ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong>${escapeHtml(h.name)}</strong>
           <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
         </button>
       `;
-    }).join("");
+      }),
+    ].join("");
 
+    const customMapOpts = listCustomMaps().map(
+      (m) =>
+        `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>Custom · ${escapeHtml(m.name)}</option>`,
+    );
     const mapOpts = [
       `<option value="random" ${this.spMapChoice === "random" ? "selected" : ""}>Random</option>`,
-      ...MAP_LIST.map(
-        (m) =>
-          `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`,
-      ),
+      ...customMapOpts,
+      ...MAP_LIST.map((m) => {
+        const unlocked = isMapUnlocked(m.id);
+        return `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""} ${unlocked ? "" : "disabled"}>${escapeHtml(m.name)}${unlocked ? "" : " (challenge)"}</option>`;
+      }),
     ].join("");
 
     const store = loadAiStore();
@@ -864,10 +1510,19 @@ export class MenuController {
             <span>Ascension</span>
             <select data-field="sp-ascension">${ascOpts}</select>
           </label>
-          <label class="run-field">
+          ${
+            this.spEndless
+              ? `<label class="run-field">
+            <span>Opponent AI</span>
+            <select disabled title="Endless has no rival lane">
+              <option selected>None (Endless)</option>
+            </select>
+          </label>`
+              : `<label class="run-field">
             <span>Opponent AI</span>
             <select data-field="sp-opponent-ai">${aiOpts}</select>
-          </label>
+          </label>`
+          }
         </div>
         ${this.runOptionsFields("sp")}
       </section>
@@ -955,10 +1610,10 @@ export class MenuController {
   private renderMpOptions(): string {
     const mapChips = [
       `<button type="button" class="chip ${this.lobby.mapChoice === "random" ? "selected" : ""}" data-action="set-mp-map" data-map-id="random">Random</button>`,
-      ...MAP_LIST.map(
-        (m) =>
-          `<button type="button" class="chip ${this.lobby.mapChoice === m.id ? "selected" : ""}" data-action="set-mp-map" data-map-id="${m.id}" title="${escapeHtml(m.blurb)}">${escapeHtml(m.name)}</button>`,
-      ),
+      ...MAP_LIST.map((m) => {
+        const unlocked = isMapUnlocked(m.id);
+        return `<button type="button" class="chip ${this.lobby.mapChoice === m.id ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="set-mp-map" data-map-id="${m.id}" title="${escapeHtml(m.blurb)}" ${unlocked ? "" : "disabled"}>${escapeHtml(m.name)}</button>`;
+      }),
     ].join("");
 
     const hostBits =
@@ -1154,7 +1809,7 @@ export class MenuController {
           <div class="map-thumb"><canvas data-map="${m.id}"></canvas></div>
           <h3>${escapeHtml(m.name)}${m.shiftingObstacles || m.shrinkingLane || m.movingHazards || m.eclipseFog || m.dualSpawners ? ` <em class="special-tag">Special</em>` : ""}</h3>
           <p>${escapeHtml(m.blurb)}</p>
-          <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Turrets ${m.turretSlots.length}</p>
+          <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Artifacts ${m.turretSlots.length}</p>
         </article>`,
       )
       .join("");
@@ -1281,44 +1936,133 @@ export class MenuController {
         </label>
       </section>
       <div class="menu-footer">
+        <button type="button" class="menu-btn" data-action="export-save">Export save JSON</button>
+        <button type="button" class="menu-btn" data-action="import-save">Import save JSON</button>
         <button type="button" class="menu-btn ghost" data-action="reset-settings">Reset to defaults</button>
       </div>
     `;
   }
 
   private renderControls(): string {
-    const rows = COMBAT_ACTIONS.map((action) => {
-      const listening = this.rebinding === action;
-      const bind = this.settings.keybinds[action];
-      return `
-        <div class="setting-row bind-row ${listening ? "listening" : ""}">
+    const section = (title: string, actions: BindableAction[]) => {
+      const rows = actions
+        .map((action) => {
+          const listening = this.rebinding === action && !this.rebindingPad;
+          const listeningPad = this.rebinding === action && this.rebindingPad;
+          const bind = this.settings.keybinds[action];
+          const pad = this.settings.gamepadBinds[action];
+          return `
+        <div class="setting-row bind-row ${listening || listeningPad ? "listening" : ""}">
           <span>
             <strong>${ACTION_LABELS[action]}</strong>
             <em>${ACTION_HINTS[action]}</em>
           </span>
-          <button type="button" class="bind-btn" data-action="rebind" data-bind="${action}">
-            ${listening ? "Press key / mouse…" : formatBinding(bind)}
-          </button>
-        </div>
-      `;
-    }).join("");
+          <div class="choice-row" style="gap:0.35rem">
+            <button type="button" class="bind-btn" data-action="rebind" data-bind="${action}">
+              ${listening ? "Press key / mouse…" : formatBinding(bind)}
+            </button>
+            <button type="button" class="bind-btn" data-action="rebind-pad" data-bind="${action}">
+              ${listeningPad ? "Press pad…" : pad ? formatBinding(pad) : "Pad —"}
+            </button>
+          </div>
+        </div>`;
+        })
+        .join("");
+      return `<h2>${title}</h2>${rows}`;
+    };
 
     return `
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="settings">← Back</button>
         <h1 class="menu-title">Controls</h1>
-        <p class="menu-lead">Defaults: LMB attack, RMB mobility, MMB ultimate.</p>
+        <p class="menu-lead">Keyboard/mouse + Xbox pad. Left stick always moves. Remap keys and pad buttons separately.</p>
       </header>
       <section class="menu-section settings-list">
-        ${rows}
+        <label class="setting-row">
+          <span>Enable gamepad</span>
+          <input type="checkbox" data-setting="gamepadEnabled" ${this.settings.gamepadEnabled ? "checked" : ""} />
+        </label>
+        ${section("Combat", COMBAT_ACTIONS)}
+        ${section("Movement", MOVE_ACTIONS)}
+        ${section("Utility / Sends", UTILITY_ACTIONS)}
       </section>
       ${
         this.rebinding
           ? `<p class="menu-footnote">Listening… Esc to cancel.</p>`
-          : `<div class="menu-footer"><button type="button" class="menu-btn ghost" data-action="reset-binds">Reset mouse defaults</button></div>`
+          : `<div class="menu-footer"><button type="button" class="menu-btn ghost" data-action="reset-binds">Reset defaults</button></div>`
       }
     `;
   }
+
+  private renderChallenges(): string {
+    const store = loadMetaStore();
+    const rows = CHALLENGES.map((c) => {
+      const done = isChallengeComplete(c.id, store);
+      const unlock = META_UPGRADES.find((u) => u.id === c.unlocks);
+      const owned = unlock ? getRank(store, unlock.id) >= 1 : false;
+      return `
+        <div class="meta-row">
+          <div>
+            <strong>${escapeHtml(c.name)}</strong>
+            <span class="stat-hint">${escapeHtml(c.blurb)}</span>
+            <em>${escapeHtml(challengeProgressHint(c, store))} · Reward: ${escapeHtml(unlock?.name ?? c.unlocks)}${owned ? " (purchased)" : done ? " (buy in Barracks)" : ""}</em>
+          </div>
+          <span class="chip ${done ? "selected" : ""}">${done ? "Done" : "Locked"}</span>
+        </div>`;
+    }).join("");
+    return `
+      <header class="menu-header compact">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <h1 class="menu-title">Challenges</h1>
+        <p class="menu-lead">Complete mid/end-run goals to unlock Barracks purchases — rewards are not free.</p>
+      </header>
+      <section class="menu-section muted-box meta-list">${rows}</section>
+      <div class="menu-footer">
+        <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Open Barracks</button>
+      </div>
+    `;
+  }
+
+  private renderCheats(): string {
+    const on = areCheatsEnabled();
+    const o = this.cheatOpts;
+    const toggles: { key: keyof CheatOptions; label: string }[] = [
+      { key: "unlockAll", label: "Unlock everything" },
+      { key: "infiniteGold", label: "Infinite gold" },
+      { key: "godMode", label: "God mode" },
+      { key: "skipWaves", label: "Skip waves (N)" },
+      { key: "forceChest", label: "Force chest (C)" },
+      { key: "infiniteRerolls", label: "Infinite rerolls" },
+      { key: "oneShot", label: "One-shot (reserved)" },
+      { key: "freeShop", label: "Free shop" },
+      { key: "revealFog", label: "Reveal fog" },
+    ];
+    return `
+      <header class="menu-header compact">
+        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        <h1 class="menu-title">Cheats</h1>
+        <p class="menu-lead" style="color:#e08060">Sandbox profile only. Enabling caches your real Barracks save and swaps a separate cheater profile so normal progress is not polluted.</p>
+      </header>
+      <section class="menu-section muted-box">
+        <button type="button" class="menu-btn ${on ? "" : "primary"}" data-action="toggle-cheats">
+          ${on ? "Disable cheats (restore real profile)" : "Enable cheats (enter sandbox)"}
+        </button>
+        <p class="menu-note">${on ? "CHEATS ACTIVE — sandbox profile" : "Cheats off — real profile"}</p>
+      </section>
+      <section class="menu-section settings-list">
+        ${toggles
+          .map(
+            (t) => `
+          <label class="setting-row">
+            <span>${t.label}</span>
+            <input type="checkbox" data-cheat="${t.key}" ${o[t.key] ? "checked" : ""} ${on ? "" : "disabled"} />
+          </label>`,
+          )
+          .join("")}
+      </section>
+    `;
+  }
+
 
   private renderAiLab(): string {
     const store = loadAiStore();
@@ -1417,17 +2161,24 @@ export class MenuController {
       const rank = getRank(store, u.id);
       const cost = nextCost(u.id, rank);
       const maxed = cost == null;
-      const canBuy = !maxed && store.crests >= cost!;
+      const challengeBlocked =
+        !!u.requiresChallenge &&
+        !store.challengesCompleted?.[u.requiresChallenge as import("../meta/challenges").ChallengeId] &&
+        rank < 1;
+      const canBuy = !maxed && !challengeBlocked && store.crests >= cost!;
       const rankLabel = u.kind === "unlock" ? (rank >= 1 ? "Owned" : "Locked") : `Rank ${rank}/${u.maxRank}`;
+      const challengeNote = challengeBlocked
+        ? ` · Requires challenge: ${u.requiresChallenge}`
+        : "";
       return `
         <div class="meta-row">
           <div>
             <strong>${escapeHtml(u.name)}</strong>
-            <span class="stat-hint">${escapeHtml(u.blurb)}</span>
+            <span class="stat-hint">${escapeHtml(u.blurb)}${escapeHtml(challengeNote)}</span>
             <em>${escapeHtml(rankLabel)}</em>
           </div>
           <button type="button" class="menu-btn ${canBuy ? "primary" : ""}" data-action="buy-meta" data-upgrade-id="${u.id}" ${maxed || !canBuy ? "disabled" : ""}>
-            ${maxed ? "Max" : `${cost} crests`}
+            ${maxed ? "Max" : challengeBlocked ? "Challenge" : `${cost} crests`}
           </button>
         </div>`;
     }).join("");

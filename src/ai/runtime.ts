@@ -10,7 +10,7 @@ import {
   N_IN,
 } from "./brain";
 import { MAP_W } from "../data/constants";
-import { HEROES } from "../data/heroes";
+import { resolveHero } from "../custom/registry";
 import { hasLineOfSight } from "../data/maps";
 import { dist, normalize } from "../game/math";
 import type { GameState } from "../game/state";
@@ -50,7 +50,7 @@ export function extractFeatures(state: GameState): Float64Array {
   const towardEnemy = nearest
     ? Math.sign(nearest.x - h.x)
     : Math.sign(map.spawner.x - h.x);
-  const aimThreat = nearest ? Math.min(1, (HEROES[h.heroId].attackRange + 20) / Math.max(20, dist(h, nearest))) : 0;
+  const aimThreat = nearest ? Math.min(1, (resolveHero(h.heroId).attackRange + 20) / Math.max(20, dist(h, nearest))) : 0;
 
   _in[0] = hx;
   _in[1] = hy;
@@ -123,8 +123,12 @@ export function scriptedIntent(state: GameState): CombatIntent {
     if (pack) intent.sendDigit = pack.digit;
   }
   // Auto-pick drafts
-  if (state.relicDraft?.length) intent.chooseRelic = state.relicDraft[0]!;
+  if (state.utilityDraft?.length) intent.chooseUtility = state.utilityDraft[0]!;
+  else if (state.relicDraft?.length) intent.chooseRelic = state.relicDraft[0]!;
   else if (state.levelDraft?.length) intent.chooseLevel = state.levelDraft[0]!;
+  else if (state.curseDraft?.length) intent.chooseCurse = state.curseDraft[0]!;
+  else if (state.chestDraft?.length) intent.chooseChest = 0;
+  applyHeroKitAi(state, intent);
   return intent;
 }
 
@@ -140,7 +144,7 @@ function steerToEngage(
 ): void {
   const h = state.hero;
   const map = state.map;
-  const range = HEROES[h.heroId].attackRange;
+  const range = resolveHero(h.heroId).attackRange;
   const d = dist(h, target);
   const los = hasLineOfSight(map, h.x, h.y, target.x, target.y, 4);
   const inRange = d <= range * 0.9;
@@ -208,18 +212,33 @@ export function thinkNeural(
 
   const intent = emptyIntent();
   if (!state.hero.alive) {
-    if (state.relicDraft?.length) intent.chooseRelic = state.relicDraft[0]!;
+    if (state.utilityDraft?.length) intent.chooseUtility = state.utilityDraft[0]!;
+    else if (state.relicDraft?.length) intent.chooseRelic = state.relicDraft[0]!;
     else if (state.levelDraft?.length) intent.chooseLevel = state.levelDraft[0]!;
+    else if (state.curseDraft?.length) intent.chooseCurse = state.curseDraft[0]!;
+    else if (state.chestDraft?.length) intent.chooseChest = 0;
     return intent;
   }
 
   // Auto-resolve drafts always (training + play)
+  if (state.utilityDraft?.length) {
+    intent.chooseUtility = state.utilityDraft[0]!;
+    return intent;
+  }
   if (state.relicDraft?.length) {
     intent.chooseRelic = state.relicDraft[0]!;
     return intent;
   }
   if (state.levelDraft?.length) {
     intent.chooseLevel = state.levelDraft[0]!;
+    return intent;
+  }
+  if (state.curseDraft?.length) {
+    intent.chooseCurse = state.curseDraft[0]!;
+    return intent;
+  }
+  if (state.chestDraft?.length) {
+    intent.chooseChest = 0;
     return intent;
   }
 
@@ -289,7 +308,7 @@ export function thinkNeural(
       if (target) {
         intent.attackHeld = true;
         // Don't ignore a corner-sitter while "holding"
-        const range = HEROES[state.hero.heroId].attackRange;
+        const range = resolveHero(state.hero.heroId).attackRange;
         if (
           dist(state.hero, target) > range * 0.9 ||
           !hasLineOfSight(map, state.hero.x, state.hero.y, target.x, target.y, 4)
@@ -332,5 +351,101 @@ export function thinkNeural(
     intent.moveY = n.y;
   }
 
+  applyHeroKitAi(state, intent);
   return intent;
+}
+
+/**
+ * Hero-specific combat instincts so kits aren't just "hold LMB and waddle".
+ */
+function applyHeroKitAi(state: GameState, intent: CombatIntent): void {
+  const id = state.hero.heroId;
+  const target = nearestEnemy(state);
+  const map = state.map;
+  const h = state.hero;
+
+  if (id === "gyro") {
+    const mode = h.bladeMode ?? "wrapped";
+    // Don't wander while blades are out
+    if (mode === "flying" || mode === "sling" || mode === "rewinding") {
+      intent.moveX = 0;
+      intent.moveY = 0;
+      intent.attackHeld = false;
+      return;
+    }
+    // Hold spin when creeps are near — don't let them walk past to base
+    if (target) {
+      const d = dist(h, target);
+      intent.attackHeld = d < 140;
+      // Stay between creep and base
+      if (target.x < h.x - 10) {
+        intent.moveX = Math.min(intent.moveX, -0.2);
+      } else if (target.x > h.x + 40) {
+        intent.moveX = Math.max(intent.moveX, 0.55);
+      }
+      // Hook toward walls for reposition / toward far threats
+      if (h.abilityCds[0]! <= 0 && Math.random() < 0.04) {
+        const towardWall = target.x > h.x ? 1 : -1;
+        intent.aimX = towardWall;
+        intent.aimY = (target.y - h.y) * 0.3;
+        intent.mobilityHeld = true;
+        h.bladeHookCharge = 0.55 + Math.random() * 0.35;
+        intent.mobility = true;
+      }
+    } else {
+      // Patrol mid-lane, keep spinning lightly
+      intent.moveX = h.x < map.base.x + 280 ? 0.4 : -0.15;
+      intent.attackHeld = false;
+    }
+    if (h.abilityCds[1]! <= 0 && target && dist(h, target) < 90 && Math.random() < 0.03) {
+      intent.ultimate = true;
+    }
+    return;
+  }
+
+  if (id === "curses") {
+    // Drop hex zones on packs; ult when wave is active
+    if (target) {
+      intent.attackHeld = true;
+      if (h.abilityCds[0]! <= 0 && dist(h, target) < 120 && Math.random() < 0.05) {
+        intent.mobility = true;
+      }
+      if (h.abilityCds[1]! <= 0 && (state.spawning || state.enemies.length > 3) && Math.random() < 0.04) {
+        intent.ultimate = true;
+      }
+    }
+    return;
+  }
+
+  if (id === "warp") {
+    const tp = state.teleporters;
+    // Place pads: A near base, B mid/forward
+    if (h.abilityCds[0]! <= 0) {
+      if (!tp.a) {
+        // Walk toward a pad spot then place
+        const spotX = map.base.x + 160;
+        intent.moveX = Math.sign(spotX - h.x) || 0.2;
+        if (Math.abs(h.x - spotX) < 40 && Math.random() < 0.15) intent.mobility = true;
+      } else if (!tp.b) {
+        const spotX = MAP_W * 0.45;
+        intent.moveX = Math.sign(spotX - h.x) || 0.3;
+        if (Math.abs(h.x - spotX) < 50 && Math.random() < 0.12) intent.mobility = true;
+      } else if (target && dist(h, target) > 160 && Math.random() < 0.03) {
+        // Refresh a pad occasionally
+        intent.mobility = true;
+      }
+    }
+    if (target) {
+      intent.attackHeld = true;
+      // Hop pads when threatened or to chase
+      if (tp.linked && h.hp / h.maxHp < 0.45 && Math.random() < 0.02) {
+        const n = normalize(map.base.x - h.x, map.base.y - h.y);
+        intent.moveX = n.x;
+        intent.moveY = n.y;
+      }
+    }
+    if (h.abilityCds[1]! <= 0 && tp.linked && target && Math.random() < 0.035) {
+      intent.ultimate = true;
+    }
+  }
 }

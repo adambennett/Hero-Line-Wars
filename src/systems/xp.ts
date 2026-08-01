@@ -5,6 +5,8 @@ import {
   type LevelPassiveId,
 } from "../data/xp";
 import { LEVEL_PASSIVES } from "../data/xp";
+import { draftRelicChoices } from "../data/relics";
+import { draftUtilities } from "../data/utilities";
 import type { EnemyUnit, GameState } from "../game/state";
 import { isBossKind, isEliteKind } from "../data/enemies";
 
@@ -24,22 +26,62 @@ export function grantKillXp(state: GameState, e: EnemyUnit): void {
   tryLevelUp(state);
 }
 
+export function shouldOfferUtilityDraft(state: GameState): boolean {
+  return (
+    !state.utilityId &&
+    !state.utilityDraftOffered &&
+    state.utilityDraftLevel > 0 &&
+    state.level >= state.utilityDraftLevel
+  );
+}
+
+export function openUtilityDraft(state: GameState): void {
+  if (!shouldOfferUtilityDraft(state)) return;
+  state.utilityDraft = draftUtilities(3);
+  state.utilityDraftOffered = true;
+  state.pausedForDraft = true;
+  state.draftKind = "utility";
+}
+
 function tryLevelUp(state: GameState): void {
   while (state.xp >= xpToNextLevel(state.level)) {
     state.xp -= xpToNextLevel(state.level);
     state.level += 1;
     state.pendingLevelUps += 1;
   }
-  if (state.pendingLevelUps > 0 && !state.levelDraft && !state.pausedForDraft) {
+  if (state.pausedForDraft) return;
+  if (shouldOfferUtilityDraft(state)) {
+    openUtilityDraft(state);
+    return;
+  }
+  if (state.pendingLevelUps > 0 && !state.levelDraft) {
     openLevelDraft(state);
   }
 }
 
 export function openLevelDraft(state: GameState): void {
   if (state.pendingLevelUps <= 0) return;
-  state.levelDraft = draftLevelPassives(3);
+  const size = state.levelDraftSize ?? 3;
+  state.levelDraft = draftLevelPassives(size);
   state.pausedForDraft = true;
   state.draftKind = "level";
+  state.levelDraftsTaken += 1;
+}
+
+export function rerollLevelDraft(state: GameState): boolean {
+  if (!state.levelDraft) return false;
+  if (state.rerollTokens <= 0) return false;
+  state.rerollTokens -= 1;
+  state.levelDraft = draftLevelPassives(state.levelDraftSize ?? 3);
+  return true;
+}
+
+export function rerollRelicDraft(state: GameState): boolean {
+  if (!state.relicDraft) return false;
+  if (state.rerollTokens <= 0) return false;
+  state.rerollTokens -= 1;
+  state.relicDraft = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
+  return true;
 }
 
 export function applyLevelPassive(state: GameState, id: LevelPassiveId): void {
@@ -75,9 +117,10 @@ export function chooseLevelPassive(state: GameState, id: LevelPassiveId): void {
   state.levelDraft = null;
   state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
   if (state.pendingLevelUps > 0) {
-    state.levelDraft = draftLevelPassives(3);
+    state.levelDraft = draftLevelPassives(state.levelDraftSize ?? 3);
     state.draftKind = "level";
     state.pausedForDraft = true;
+    state.levelDraftsTaken += 1;
   } else if (state.relicDraft) {
     state.draftKind = "relic";
     state.pausedForDraft = true;

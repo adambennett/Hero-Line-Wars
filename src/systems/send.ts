@@ -15,7 +15,14 @@ export function sendPackCost(state: GameState, packId: SendPackId): number {
   const def = SEND_PACKS.find((p) => p.id === packId);
   if (!def) return Infinity;
   const mul = baseUpgradePackMul(state.baseLevel, def);
-  return Math.ceil(def.cost * mul.costMul * sendCostMul(state) * state.modifiers.sendCostMul);
+  return Math.ceil(
+    def.cost *
+      mul.costMul *
+      sendCostMul(state) *
+      state.modifiers.sendCostMul *
+      (state.baseBranchMods?.sendCostMul ?? 1) *
+      (state.utilitySendDiscount ? 0.6 : 1),
+  );
 }
 
 /** Available packs for this hero/base, with hotkeys remapped to 1..9. */
@@ -29,6 +36,7 @@ export function availableSendPacks(state: GameState): SendPackDef[] {
 }
 
 export function buySendPack(state: GameState, packId: SendPackId): string | null {
+  if (state.disableSends || state.curseSendBlock > 0) return "Sends blocked";
   const def = SEND_PACKS.find((p) => p.id === packId);
   if (!def) return "Unknown pack";
   if (def.heroId && def.heroId !== state.hero.heroId) return "Wrong hero";
@@ -37,31 +45,44 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
   if (state.gold < cost) return "Not enough gold";
 
   state.gold -= cost;
+  state.goldSpent += cost;
+  if (state.utilitySendDiscount) state.utilitySendDiscount = false;
   const refund = cost * sendRefundMul(state);
-  if (refund > 0) state.gold += refund;
+  if (refund > 0) {
+    state.gold += refund;
+    state.goldSpent = Math.max(0, state.goldSpent - refund);
+  }
 
   const mul = baseUpgradePackMul(state.baseLevel, def);
-  const income = def.incomeBonus * mul.incomeMul * sendIncomeMul(state) * state.modifiers.sendIncomeMetaMul;
+  const income =
+    def.incomeBonus *
+    mul.incomeMul *
+    sendIncomeMul(state) *
+    state.modifiers.sendIncomeMetaMul *
+    (state.baseBranchMods?.sendIncomeMul ?? 1);
   state.incomePerSec += income;
 
   const hpScale =
     def.hpScale *
     mul.hpMul *
     baseLevelSendHpBonus(state.baseLevel) *
-    sendHpMulFromRelics(state);
+    sendHpMulFromRelics(state) *
+    (state.baseBranchMods?.sendHpMul ?? 1);
 
   const pending: PendingSend = {
     enemies: def.enemies,
     hpScale,
   };
-  if (state.mpLane) {
+  if (state.mpLane || state.endless) {
     state.pendingSends.push(pending);
   } else {
     queueSendToOpponent(state, pending, def.name);
   }
   state.sendsThisRun += 1;
 
-  state.toast = `Sent ${def.name} to enemy (+${income.toFixed(2)}/s)`;
+  state.toast = state.endless
+    ? `Queued ${def.name} into your next wave (+${income.toFixed(2)}/s)`
+    : `Sent ${def.name} to enemy (+${income.toFixed(2)}/s)`;
   state.toastTimer = 1.6;
   playSfx("send");
   return null;
@@ -69,7 +90,7 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
 
 export function consumePendingSends(state: GameState): PendingSend[] {
   const batch = state.pendingSends.splice(0, state.pendingSends.length);
-  if (state.opponent) {
+  if (state.opponent && !state.endless) {
     const n = batch.reduce((sum, s) => sum + s.enemies, 0);
     state.opponent.sendingToPlayer = Math.max(0, state.opponent.sendingToPlayer - n);
   }

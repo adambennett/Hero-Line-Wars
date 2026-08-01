@@ -1,6 +1,7 @@
 /** Build-defining relics — drafted after elite/boss waves. */
 
 import type { Rarity } from "./rarity";
+import { isRelicUnlocked } from "../meta/contentLocks";
 
 export type RelicId =
   | "crowded_ledger"
@@ -46,7 +47,27 @@ export type RelicId =
   | "eternal_engine"
   | "worldbreaker"
   | "sovereign_seal"
-  | "line_tyrant";
+  | "line_tyrant"
+  | "quiet_market"
+  | "send_silence"
+  | "iron_breath"
+  | "second_chance"
+  | "flawless_oath"
+  | "untouchable"
+  | "elite_bane"
+  | "trophy_hunter"
+  | "chest_magnet"
+  | "lucky_lockpick"
+  | "relic_nest"
+  | "stacked_fate"
+  | "draft_sage"
+  | "level_torrent"
+  | "bare_hands"
+  | "scrap_king"
+  | "cleaver_crown"
+  | "storm_sovereign"
+  | "curse_mirror"
+  | "twin_lanes";
 
 export type RelicDef = {
   id: RelicId;
@@ -312,8 +333,8 @@ export const RELICS: Record<RelicId, RelicDef> = {
   },
   turret_overclock: {
     id: "turret_overclock",
-    name: "Turret Overclock",
-    blurb: "Turrets fire 30% faster. Max turret cap +1.",
+    name: "Artifact Overclock",
+    blurb: "Artifacts fire 30% faster. Max artifact cap +1.",
     tag: "Artifacts",
     rarity: "mythic",
   },
@@ -366,13 +387,153 @@ export const RELICS: Record<RelicId, RelicDef> = {
     tag: "Power",
     rarity: "legendary",
   },
+  quiet_market: {
+    id: "quiet_market",
+    name: "Quiet Market",
+    blurb: "Shop prices −15%.",
+    tag: "Economy",
+    rarity: "rare",
+  },
+  send_silence: {
+    id: "send_silence",
+    name: "Send Silence",
+    blurb: "Start each wave with +20 gold if you bought no sends last wave.",
+    tag: "Economy",
+    rarity: "uncommon",
+  },
+  iron_breath: {
+    id: "iron_breath",
+    name: "Iron Breath",
+    blurb: "Respawn 20% faster.",
+    tag: "Sustain",
+    rarity: "uncommon",
+  },
+  second_chance: {
+    id: "second_chance",
+    name: "Second Chance",
+    blurb: "Once: on lethal hit, survive at 1 HP with a 1.5s barrier.",
+    tag: "Survival",
+    rarity: "mythic",
+  },
+  flawless_oath: {
+    id: "flawless_oath",
+    name: "Flawless Oath",
+    blurb: "While at full HP, deal +20% damage.",
+    tag: "Offense",
+    rarity: "rare",
+  },
+  untouchable: {
+    id: "untouchable",
+    name: "Untouchable",
+    blurb: "+25 max HP and take 8% less damage.",
+    tag: "Defense",
+    rarity: "rare",
+  },
+  elite_bane: {
+    id: "elite_bane",
+    name: "Elite Bane",
+    blurb: "+35% damage to elites.",
+    tag: "Offense",
+    rarity: "rare",
+  },
+  trophy_hunter: {
+    id: "trophy_hunter",
+    name: "Trophy Hunter",
+    blurb: "Elite kills grant +12 gold.",
+    tag: "Economy",
+    rarity: "uncommon",
+  },
+  chest_magnet: {
+    id: "chest_magnet",
+    name: "Chest Magnet",
+    blurb: "Chests open 30% faster.",
+    tag: "Utility",
+    rarity: "uncommon",
+  },
+  lucky_lockpick: {
+    id: "lucky_lockpick",
+    name: "Lucky Lockpick",
+    blurb: "Chest spawn chance +50%.",
+    tag: "Utility",
+    rarity: "rare",
+  },
+  relic_nest: {
+    id: "relic_nest",
+    name: "Relic Nest",
+    blurb: "+1 relic draft choice size.",
+    tag: "Draft",
+    rarity: "mythic",
+  },
+  stacked_fate: {
+    id: "stacked_fate",
+    name: "Stacked Fate",
+    blurb: "Gain a free common relic when you own 4+ relics.",
+    tag: "Draft",
+    rarity: "rare",
+  },
+  draft_sage: {
+    id: "draft_sage",
+    name: "Draft Sage",
+    blurb: "Level drafts offer +1 choice.",
+    tag: "Draft",
+    rarity: "rare",
+  },
+  level_torrent: {
+    id: "level_torrent",
+    name: "Level Torrent",
+    blurb: "+15% XP from kills.",
+    tag: "Growth",
+    rarity: "uncommon",
+  },
+  bare_hands: {
+    id: "bare_hands",
+    name: "Bare Hands",
+    blurb: "+18% damage while owning fewer than 3 shop items.",
+    tag: "Risk",
+    rarity: "mythic",
+  },
+  scrap_king: {
+    id: "scrap_king",
+    name: "Scrap King",
+    blurb: "Kills refund 1 gold to your purse.",
+    tag: "Economy",
+    rarity: "common",
+  },
+  cleaver_crown: {
+    id: "cleaver_crown",
+    name: "Cleaver Crown",
+    blurb: "+25% damage, +30 max HP, elites drop +8 gold.",
+    tag: "Power",
+    rarity: "legendary",
+  },
+  storm_sovereign: {
+    id: "storm_sovereign",
+    name: "Storm Sovereign",
+    blurb: "Attack 25% faster; ultimates cool 15% faster.",
+    tag: "Power",
+    rarity: "legendary",
+  },
+  curse_mirror: {
+    id: "curse_mirror",
+    name: "Curse Mirror",
+    blurb: "When hex-cursed, gain +15% damage for the duration.",
+    tag: "Hex",
+    rarity: "legendary",
+  },
+  twin_lanes: {
+    id: "twin_lanes",
+    name: "Twin Lanes",
+    blurb: "Send income +20%; artifact damage +15%.",
+    tag: "Command",
+    rarity: "legendary",
+  },
 };
 
 export const RELIC_LIST: RelicDef[] = Object.values(RELICS);
 
 /** Pick up to `count` relics the run does not already own. Soft-bias toward mid rarities. */
 export function draftRelicChoices(owned: RelicId[], count = 3): RelicId[] {
-  const pool = RELIC_LIST.map((r) => r.id).filter((id) => !owned.includes(id));
+  const pool = RELIC_LIST.map((r) => r.id).filter((id) => !owned.includes(id) && isRelicUnlocked(id));
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j]!, pool[i]!];

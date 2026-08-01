@@ -1,8 +1,10 @@
-import { HERO_LIST, HEROES, type HeroId } from "../data/heroes";
+import { HERO_LIST, type HeroId } from "../data/heroes";
 import { isHeroUnlocked } from "../meta/store";
 import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
+import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
+import { isCustomHeroId } from "../custom/types";
 import {
   bindHooks,
   canStartMatch,
@@ -47,11 +49,12 @@ export class MultiplayerUi {
   private privacy: MatchPrivacy = "private";
   private role: "host" | "join" = "host";
   private joinCode = "";
-  private mapChoice: MapId | "random" = "random";
+  private mapChoice: MapId | string | "random" = "random";
   private maxTurrets = DEFAULT_MAX_TURRETS;
   private startingGold = STARTING_GOLD;
   private wavesToWin = WIN_WAVES;
   private friendlyFire = false;
+  private utilityDraftLevel = 10;
   private preferredCode = randomMpCode();
   private busy = false;
 
@@ -78,11 +81,12 @@ export class MultiplayerUi {
     mode?: MatchMode;
     privacy?: MatchPrivacy;
     role?: "host" | "join";
-    mapChoice?: MapId | "random";
+    mapChoice?: MapId | string | "random";
     maxTurrets?: number;
     startingGold?: number;
     wavesToWin?: number;
     friendlyFire?: boolean;
+    utilityDraftLevel?: number;
     heroId?: HeroId;
     preferredCode?: string;
     joinCode?: string;
@@ -95,6 +99,7 @@ export class MultiplayerUi {
     if (opts?.startingGold != null) this.startingGold = opts.startingGold;
     if (opts?.wavesToWin != null) this.wavesToWin = opts.wavesToWin;
     if (opts?.friendlyFire != null) this.friendlyFire = opts.friendlyFire;
+    if (opts?.utilityDraftLevel != null) this.utilityDraftLevel = opts.utilityDraftLevel;
     if (opts?.heroId) this.heroId = opts.heroId;
     if (opts?.preferredCode) this.preferredCode = opts.preferredCode.toUpperCase();
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
@@ -129,6 +134,10 @@ export class MultiplayerUi {
     const dis = editable ? "" : "disabled";
     const mapOpts = [
       `<option value="random" ${this.mapChoice === "random" ? "selected" : ""}>Random</option>`,
+      ...listCustomMaps().map(
+        (m) =>
+          `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>Custom · ${escapeAttr(m.name)}</option>`,
+      ),
       ...MAP_LIST.map(
         (m) =>
           `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
@@ -165,7 +174,7 @@ export class MultiplayerUi {
             <select id="${prefix}-map" ${dis}>${mapOpts}</select>
           </label>
           <label class="run-field">
-            <span>Turrets</span>
+            <span>Artifacts</span>
             <select id="${prefix}-turrets" ${dis}>${turretOpts}</select>
           </label>
           <label class="run-field">
@@ -178,6 +187,10 @@ export class MultiplayerUi {
             <span>Waves to win</span>
             <select id="${prefix}-waves" ${dis}>${waveOpts}</select>
           </label>
+          <label class="run-field">
+            <span>Utility draft Lv</span>
+            <select id="${prefix}-utility" ${dis}>${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${this.utilityDraftLevel === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
+          </label>
           ${
             showFf
               ? `<label class="run-field">
@@ -189,7 +202,6 @@ export class MultiplayerUi {
           </label>`
               : `<div class="run-field"></div>`
           }
-          <div class="run-field"></div>
         </div>
       </section>
     `;
@@ -201,21 +213,33 @@ export class MultiplayerUi {
       const turrets = this.root.querySelector<HTMLSelectElement>(`#${prefix}-turrets`);
       const gold = this.root.querySelector<HTMLSelectElement>(`#${prefix}-gold`);
       const waves = this.root.querySelector<HTMLSelectElement>(`#${prefix}-waves`);
+      const util = this.root.querySelector<HTMLSelectElement>(`#${prefix}-utility`);
       const ff = this.root.querySelector<HTMLSelectElement>(`#${prefix}-ff`);
-      if (map) this.mapChoice = map.value as MapId | "random";
+      if (map) this.mapChoice = map.value as MapId | string | "random";
       if (turrets) this.maxTurrets = Number(turrets.value) || DEFAULT_MAX_TURRETS;
       if (gold) this.startingGold = Number(gold.value) || STARTING_GOLD;
       if (waves) this.wavesToWin = Number(waves.value);
+      if (util) this.utilityDraftLevel = Number(util.value);
       if (ff) this.friendlyFire = ff.value === "1";
       onChange?.();
     };
-    for (const id of ["map", "turrets", "gold", "waves", "ff"]) {
+    for (const id of ["map", "turrets", "gold", "waves", "utility", "ff"]) {
       this.root.querySelector(`#${prefix}-${id}`)?.addEventListener("change", read);
     }
   }
 
   private heroGridHtml(): string {
-    return HERO_LIST.map((h) => {
+    const custom = listCustomHeroes().map((h) => {
+      const selected = h.id === this.heroId;
+      return `
+        <button type="button" class="hero-card compact ${selected ? "selected" : ""}" data-hero="${h.id}">
+          <span class="hero-swatch" style="--hero:${h.color}"></span>
+          <strong>${escapeAttr(h.name)}</strong>
+          <span>Custom · ${escapeAttr(h.blurb)}</span>
+        </button>
+      `;
+    });
+    const builtins = HERO_LIST.map((h) => {
       const selected = h.id === this.heroId;
       const unlocked = isHeroUnlocked(h.id);
       return `
@@ -225,12 +249,14 @@ export class MultiplayerUi {
           <span>${unlocked ? escapeAttr(h.blurb) : "Locked"}</span>
         </button>
       `;
-    }).join("");
+    });
+    return [...custom, ...builtins].join("");
   }
 
   private heroDetailHtml(): string {
-    const h = HERO_LIST.find((x) => x.id === this.heroId) ?? HERO_LIST[0]!;
-    const unlocked = isHeroUnlocked(h.id);
+    const h = resolveHero(this.heroId);
+    const custom = isCustomHeroId(this.heroId);
+    const unlocked = custom || isHeroUnlocked(h.id as HeroId);
     if (!unlocked) {
       return `
         <div class="sp-hero-detail-inner locked">
@@ -244,7 +270,7 @@ export class MultiplayerUi {
     return `
       <div class="sp-hero-detail-inner">
         <span class="hero-swatch" style="--hero:${h.color}"></span>
-        <strong style="color:${h.color}">${escapeAttr(h.name)}</strong>
+        <strong style="color:${h.color}">${escapeAttr(h.name)}${custom ? " · Custom" : ""}</strong>
         <p class="sp-hero-blurb">${escapeAttr(h.blurb)}</p>
         <ul class="hero-abilities">
           <li><em>Passive</em> ${escapeAttr(h.passive.name)} — ${escapeAttr(h.passive.blurb)}</li>
@@ -260,7 +286,7 @@ export class MultiplayerUi {
     this.root.querySelectorAll<HTMLElement>("[data-hero]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.dataset.hero as HeroId;
-        if (!isHeroUnlocked(id)) return;
+        if (!isCustomHeroId(id) && !isHeroUnlocked(id)) return;
         this.heroId = id;
         onPick?.();
         this.root.querySelectorAll<HTMLElement>("[data-hero]").forEach((c) => {
@@ -424,7 +450,7 @@ export class MultiplayerUi {
 
   private async doHost(): Promise<void> {
     if (this.busy) return;
-    if (!isHeroUnlocked(this.heroId)) {
+    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
@@ -450,7 +476,7 @@ export class MultiplayerUi {
 
   private async doJoin(): Promise<void> {
     if (this.busy) return;
-    if (!isHeroUnlocked(this.heroId)) {
+    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
@@ -464,7 +490,7 @@ export class MultiplayerUi {
 
   private async doFindPublic(): Promise<void> {
     if (this.busy) return;
-    if (!isHeroUnlocked(this.heroId)) {
+    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
@@ -489,6 +515,7 @@ export class MultiplayerUi {
     this.startingGold = lobby.startingGold;
     this.wavesToWin = lobby.wavesToWin;
     this.friendlyFire = lobby.friendlyFire;
+    if (lobby.utilityDraftLevel != null) this.utilityDraftLevel = lobby.utilityDraftLevel;
   }
 
   private renderLobby(lobby: LobbyState, mySlot: number, mode: NetMode): void {
@@ -505,7 +532,7 @@ export class MultiplayerUi {
       const you = s.slot === mySlot ? " (you)" : "";
       const team = isPveMode(lobby.mode) ? "Co-op" : s.team === 0 ? "Team A" : "Team B";
       const ready = s.ready ? "✓ ready" : "…";
-      const hero = HEROES[s.heroId]?.name ?? s.heroId;
+      const hero = resolveHero(s.heroId).name;
       return `<li class="mp-seat ${s.slot === mySlot ? "you" : ""}"><strong>${escapeAttr(s.name)}${you}</strong> · ${team} · ${escapeAttr(hero)} · ${ready}</li>`;
     }).join("");
 
@@ -583,6 +610,7 @@ export class MultiplayerUi {
           this.startingGold,
           this.wavesToWin,
           this.friendlyFire,
+          this.utilityDraftLevel,
         );
       });
     }
@@ -605,6 +633,7 @@ export class MultiplayerUi {
         this.startingGold,
         this.wavesToWin,
         this.friendlyFire,
+        this.utilityDraftLevel,
       );
       const mapId = resolveMapChoice(this.mapChoice);
       const msg = hostStartMatch(
@@ -613,6 +642,7 @@ export class MultiplayerUi {
         this.startingGold,
         this.wavesToWin,
         this.friendlyFire,
+        this.utilityDraftLevel,
       );
       if (msg) this.cbs.onMatchStart(msg, mySlot, true);
     });

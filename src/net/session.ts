@@ -18,6 +18,8 @@ import {
 } from "./lobby";
 import type { CombatIntent, LobbyState, MatchMode, MatchPrivacy, NetMode, NetMsg } from "./types";
 import { isPveMode, modeCap } from "./types";
+import { collectCustomsForMatch, getCustomHero, getCustomMap } from "../custom/registry";
+import { isCustomHeroId, isCustomMapId, type CustomHeroDef, type CustomMapDef } from "../custom/types";
 
 export const CODE_ALPHA = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const PEER_PREFIX = "hlw-v1-";
@@ -48,6 +50,8 @@ type Session = {
   peers: PeerLink[];
   hooks: SessionHooks | null;
   matchHandlers: MatchNetHandlers | null;
+  /** Host stash of peer-shared custom defs for match start. */
+  peerCustoms: { maps: Map<string, CustomMapDef>; heroes: Map<string, CustomHeroDef> };
 };
 
 const S: Session = {
@@ -62,6 +66,7 @@ const S: Session = {
   peers: [],
   hooks: null,
   matchHandlers: null,
+  peerCustoms: { maps: new Map(), heroes: new Map() },
 };
 
 export function getSession() {
@@ -120,6 +125,34 @@ export function disconnectNet(): void {
   S.lobby = null;
   S.peers = [];
   S.mySlot = 0;
+  S.peerCustoms.maps.clear();
+  S.peerCustoms.heroes.clear();
+}
+
+function ingestPeerCustoms(maps?: CustomMapDef[], heroes?: CustomHeroDef[]): void {
+  for (const m of maps ?? []) {
+    if (m?.id) S.peerCustoms.maps.set(m.id, structuredClone(m));
+  }
+  for (const h of heroes ?? []) {
+    if (h?.id) S.peerCustoms.heroes.set(h.id, structuredClone(h));
+  }
+}
+
+/** Push local custom defs for current hero (+ optional map) to host / host stash. */
+export function pushLocalCustoms(mapChoice?: string | "random"): void {
+  const heroes: CustomHeroDef[] = [];
+  const maps: CustomMapDef[] = [];
+  if (isCustomHeroId(S.myHero)) {
+    const h = getCustomHero(S.myHero);
+    if (h) heroes.push(h);
+  }
+  if (mapChoice && mapChoice !== "random" && isCustomMapId(mapChoice)) {
+    const m = getCustomMap(mapChoice);
+    if (m) maps.push(m);
+  }
+  if (!heroes.length && !maps.length) return;
+  if (S.mode === "host") ingestPeerCustoms(maps, heroes);
+  else netSendToHost({ k: "customs", heroes, maps });
 }
 
 export function bindHooks(hooks: SessionHooks): void {
@@ -214,6 +247,10 @@ function onMsg(raw: unknown, fromSlot?: number): void {
     const seat = lobbySeat(S.lobby, fromSlot);
     if (seat) seat.ready = false;
     broadcastLobby();
+    return;
+  }
+  if (m.k === "customs") {
+    ingestPeerCustoms(m.maps, m.heroes);
   }
 }
 
@@ -275,7 +312,7 @@ export async function quickHost(
   name: string,
   heroId: HeroId,
   privacy: MatchPrivacy,
-  mapChoice: MapId | "random",
+  mapChoice: MapId | string | "random",
   maxTurrets: number,
   preferredCode?: string,
   startingGold?: number,
@@ -444,11 +481,12 @@ export function hostSetMode(mode: MatchMode): void {
 }
 
 export function hostSetOpts(
-  mapChoice: MapId | "random",
+  mapChoice: MapId | string | "random",
   maxTurrets: number,
   startingGold: number,
   wavesToWin: number,
   friendlyFire: boolean,
+  utilityDraftLevel = 10,
 ): void {
   if (S.mode !== "host" || !S.lobby) return;
   S.lobby.mapChoice = mapChoice;
@@ -456,19 +494,41 @@ export function hostSetOpts(
   S.lobby.startingGold = startingGold;
   S.lobby.wavesToWin = wavesToWin;
   S.lobby.friendlyFire = friendlyFire;
-  netBroadcast({ k: "opts", mapChoice, maxTurrets, startingGold, wavesToWin, friendlyFire });
+  S.lobby.utilityDraftLevel = utilityDraftLevel;
+  netBroadcast({
+    k: "opts",
+    mapChoice,
+    maxTurrets,
+    startingGold,
+    wavesToWin,
+    friendlyFire,
+    utilityDraftLevel,
+  });
   broadcastLobby();
 }
 
 export function hostStartMatch(
-  mapId: MapId,
+  mapId: MapId | string,
   maxTurrets: number,
   startingGold: number,
   wavesToWin: number,
   friendlyFire: boolean,
+  utilityDraftLevel = 10,
 ): Extract<NetMsg, { k: "start" }> | null {
   if (!canStartMatch() || !S.lobby) return null;
   const mid = `m${Date.now().toString(36)}`;
+  pushLocalCustoms(mapId);
+  const customs = collectCustomsForMatch({
+    mapId,
+    heroIds: S.lobby.slots.filter((s) => s.here).map((s) => s.heroId),
+  });
+  // Merge peer-shared defs (join clients' libraries)
+  for (const m of S.peerCustoms.maps.values()) {
+    if (!customs.maps.some((x) => x.id === m.id)) customs.maps.push(structuredClone(m));
+  }
+  for (const h of S.peerCustoms.heroes.values()) {
+    if (!customs.heroes.some((x) => x.id === h.id)) customs.heroes.push(structuredClone(h));
+  }
   const msg: Extract<NetMsg, { k: "start" }> = {
     k: "start",
     mid,
@@ -478,7 +538,10 @@ export function hostStartMatch(
     startingGold,
     wavesToWin,
     friendlyFire,
+    utilityDraftLevel,
     seed: (Math.random() * 1e9) | 0,
+    customMaps: customs.maps,
+    customHeroes: customs.heroes,
   };
   netBroadcast(msg);
   return msg;
@@ -502,6 +565,7 @@ export function localPickHero(heroId: HeroId): void {
   if (!seat) return;
   seat.heroId = heroId;
   seat.ready = false;
+  pushLocalCustoms(S.lobby.mapChoice);
   if (S.mode === "host") broadcastLobby();
   else netSendToHost({ k: "hero", heroId });
   emitLobby();
@@ -513,6 +577,7 @@ export function localReady(): void {
   if (!seat) return;
   seat.ready = true;
   seat.heroId = S.myHero;
+  pushLocalCustoms(S.lobby.mapChoice);
   if (S.mode === "client") netSendToHost({ k: "ready", nm: S.myName, heroId: S.myHero });
   else broadcastLobby();
   emitLobby();

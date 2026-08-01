@@ -1,6 +1,6 @@
 import { MAP_H, MAP_W } from "../data/constants";
 import { ENEMY_DEFS, isBossKind, isEliteKind } from "../data/enemies";
-import { HEROES } from "../data/heroes";
+import { resolveHero } from "../custom/registry";
 import { TURRET_DEFS } from "../data/turrets";
 import { type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
 import { inHighGround } from "../systems/combat";
@@ -169,14 +169,17 @@ function drawFeedbackOverlay(ctx: CanvasRenderingContext2D, state: GameState): v
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
-  if (state.damageFlash > 0) {
-    const a = Math.min(0.35, state.damageFlash * 1.2) * mul;
+  const flash = Number.isFinite(state.damageFlash) ? Math.min(0.5, Math.max(0, state.damageFlash)) : 0;
+  const vig = Number.isFinite(state.vignette) ? Math.min(0.8, Math.max(0, state.vignette)) : 0;
+
+  if (flash > 0) {
+    const a = Math.min(0.35, flash * 1.2) * mul;
     ctx.fillStyle = `rgba(180, 20, 30, ${a})`;
     ctx.fillRect(0, 0, w, h);
   }
 
-  if (state.vignette > 0) {
-    const a = Math.min(0.55, state.vignette * 1.1) * mul;
+  if (vig > 0) {
+    const a = Math.min(0.55, vig * 1.1) * mul;
     const g = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.72);
     g.addColorStop(0, "rgba(0,0,0,0)");
     g.addColorStop(1, `rgba(120, 0, 20, ${a})`);
@@ -202,8 +205,9 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   let shakeY = 0;
   const fx = settings.damageScreenFx ?? "full";
   const shakeOk = settings.screenShake && !settings.reduceMotion && fx !== "off";
-  if (state.shake > 0 && shakeOk && !state.viewOpponentLane) {
-    const amp = 7 * (state.shake / 0.22) * (fx === "reduced" ? 0.4 : 1);
+  const shakeAmt = Number.isFinite(state.shake) ? Math.min(0.45, Math.max(0, state.shake)) : 0;
+  if (shakeAmt > 0 && shakeOk && !state.viewOpponentLane) {
+    const amp = Math.min(10, 7 * (shakeAmt / 0.22) * (fx === "reduced" ? 0.4 : 1));
     shakeX = (Math.random() * 2 - 1) * amp;
     shakeY = (Math.random() * 2 - 1) * amp;
   }
@@ -255,6 +259,40 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.lineWidth = 2;
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
+  }
+
+  const paintZones = (
+    zones: { x: number; y: number; w: number; h: number }[] | undefined,
+    fill: string,
+    stroke: string,
+    label: string,
+  ) => {
+    if (!zones?.length) return;
+    for (const z of zones) {
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(z.x, z.y, z.w, z.h);
+      ctx.strokeRect(z.x, z.y, z.w, z.h);
+      ctx.fillStyle = stroke;
+      ctx.font = "10px Segoe UI, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(label, z.x + 4, z.y + 12);
+    }
+  };
+  paintZones(map.healSprings, "#40e08022", "#60f0a0aa", "HEAL");
+  paintZones(map.slowMires, "#8060c022", "#a080e0aa", "MIRE");
+  paintZones(map.hastePads, "#e0c04022", "#f0d060aa", "HASTE");
+  paintZones(map.goldVents, "#e0c02022", "#ffd040aa", "GOLD");
+  paintZones(map.windCurrents, "#60c0e022", "#80d0f0aa", "WIND");
+  for (const sp of map.spikePulses ?? []) {
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, sp.radius || 36, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff505028";
+    ctx.fill();
+    ctx.strokeStyle = "#ff7070aa";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
 
   // Moving hazard
@@ -380,6 +418,47 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.stroke();
   }
 
+  // Hex DoT zones
+  for (const z of state.hexZones) {
+    ctx.beginPath();
+    ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#a060c822";
+    ctx.fill();
+    ctx.strokeStyle = "#c080ff55";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Warp teleporter pads
+  const drawPad = (pad: { x: number; y: number } | null, label: string) => {
+    if (!pad) return;
+    ctx.beginPath();
+    ctx.arc(pad.x, pad.y, 22, 0, Math.PI * 2);
+    ctx.fillStyle = state.teleporters.linked ? "#48c8e833" : "#48c8e818";
+    ctx.fill();
+    ctx.strokeStyle = "#48c8e8cc";
+    ctx.lineWidth = 2;
+    ctx.setLineDash(state.teleporters.linked ? [] : [4, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#a8f0ff";
+    ctx.font = "10px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(label, pad.x, pad.y + 3);
+  };
+  drawPad(state.teleporters.a, "A");
+  drawPad(state.teleporters.b, "B");
+  if (state.teleporters.linked && state.teleporters.a && state.teleporters.b) {
+    ctx.beginPath();
+    ctx.moveTo(state.teleporters.a.x, state.teleporters.a.y);
+    ctx.lineTo(state.teleporters.b.x, state.teleporters.b.y);
+    ctx.strokeStyle = "#48c8e844";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // Turrets
   for (const t of state.turrets) {
     if (t.alive) drawTurret(ctx, t);
@@ -393,7 +472,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   // Heroes (primary + allies)
   const heroesToDraw = [state.hero, ...(state.allies ?? [])];
   for (const h of heroesToDraw) {
-    const def = HEROES[h.heroId];
+    const def = resolveHero(h.heroId);
     if (h.alive) {
       const heroGlow = inHighGround(state, h);
       ctx.beginPath();
@@ -420,6 +499,77 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
         ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
+      }
+
+      // Gyro blade orbit VFX — close spinny death-ball, not distant orbs
+      if (h.heroId === "gyro") {
+        const mode = h.bladeMode ?? "wrapped";
+        const spin = h.bladeSpin ?? 0;
+        const ang = h.bladeAngle ?? 0;
+        if (mode === "wrapped" || mode === "reforming") {
+          const orbit = h.radius + 6 + spin * 10;
+          const blades = 8;
+          const reforming = mode === "reforming";
+          for (let i = 0; i < blades; i++) {
+            const a = ang + (i / blades) * Math.PI * 2;
+            const bx = h.x + Math.cos(a) * orbit;
+            const by = h.y + Math.sin(a) * orbit;
+            // Blade-shaped wedge (tip outward)
+            const tx = Math.cos(a);
+            const ty = Math.sin(a);
+            const px = -ty;
+            const py = tx;
+            const len = 9 + spin * 5;
+            const half = 2.2;
+            ctx.beginPath();
+            ctx.moveTo(bx + tx * len * 0.55, by + ty * len * 0.55);
+            ctx.lineTo(bx - tx * len * 0.35 + px * half, by - ty * len * 0.35 + py * half);
+            ctx.lineTo(bx - tx * len * 0.35 - px * half, by - ty * len * 0.35 - py * half);
+            ctx.closePath();
+            ctx.fillStyle = reforming ? "#8899aa66" : `rgba(232,240,255,${0.75 + spin * 0.25})`;
+            ctx.fill();
+            ctx.strokeStyle = reforming ? "#66778855" : "#ffffffaa";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+          if (spin > 0.12) {
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, orbit + 4, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(200,210,230,${0.12 + spin * 0.28})`;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+          // Charge ring while holding Blade Hook
+          if (h.bladeHookCharging && (h.bladeHookCharge ?? 0) > 0.02) {
+            const ch = h.bladeHookCharge ?? 0;
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, h.radius + 14, -Math.PI / 2, -Math.PI / 2 + ch * Math.PI * 2);
+            ctx.strokeStyle = `rgba(200,220,255,${0.45 + ch * 0.4})`;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          }
+        } else {
+          const tipX = h.bladeTipX ?? h.x;
+          const tipY = h.bladeTipY ?? h.y;
+          ctx.beginPath();
+          ctx.moveTo(h.x, h.y);
+          ctx.lineTo(tipX, tipY);
+          ctx.strokeStyle = "#e8f0ffcc";
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+          // Cluster of blades at the tip
+          for (let i = 0; i < 5; i++) {
+            const a = ang + (i / 5) * Math.PI * 2;
+            const bx = tipX + Math.cos(a) * 7;
+            const by = tipY + Math.sin(a) * 7;
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(bx + Math.cos(a) * 6, by + Math.sin(a) * 6);
+            ctx.strokeStyle = "#ffffffdd";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
       }
 
       if (h === state.hero && def.aimMode !== "free") {

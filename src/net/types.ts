@@ -3,6 +3,7 @@ import type { MapId } from "../data/maps";
 import type { RelicId } from "../data/relics";
 import type { ShopItemId } from "../data/shop";
 import type { LevelPassiveId } from "../data/xp";
+import type { CustomHeroDef, CustomMapDef } from "../custom/types";
 
 export type MatchMode = "1v1" | "2v2" | "3v3" | "2p-pve" | "3p-pve";
 export type MatchPrivacy = "private" | "public";
@@ -22,11 +23,12 @@ export type LobbyState = {
   mode: MatchMode;
   slots: LobbySeat[];
   code?: string;
-  mapChoice: MapId | "random";
+  mapChoice: MapId | string | "random";
   maxTurrets: number;
   startingGold: number;
   wavesToWin: number;
   friendlyFire: boolean;
+  utilityDraftLevel?: number;
   privacy: "private" | "public";
 };
 
@@ -40,6 +42,7 @@ export type CombatIntent = {
   attackHeld: boolean;
   mobility: boolean;
   ultimate: boolean;
+  utility: boolean;
   toggleShop: boolean;
   upgradeBase: boolean;
   sendDigit: number | null;
@@ -47,7 +50,12 @@ export type CombatIntent = {
   chooseRelic: RelicId | null;
   skipRelic: boolean;
   chooseLevel: LevelPassiveId | null;
+  chooseUtility: import("../data/utilities").UtilityId | null;
+  chooseCurse: import("../data/curses").CurseId | null;
+  chooseChest: number | null;
   viewOpponent: boolean | null;
+  /** Gyro: hold mobility to charge hook (AI / net). */
+  mobilityHeld?: boolean;
 };
 
 export type NetMsg =
@@ -58,17 +66,23 @@ export type NetMsg =
   | { k: "hero"; heroId: HeroId }
   | { k: "ready"; nm: string; heroId: HeroId }
   | { k: "unready" }
-  | { k: "opts"; mapChoice: MapId | "random"; maxTurrets: number; startingGold: number; wavesToWin: number; friendlyFire: boolean }
+  /** Client → host: custom defs for the hero/map this peer is using. */
+  | { k: "customs"; heroes?: CustomHeroDef[]; maps?: CustomMapDef[] }
+  | { k: "opts"; mapChoice: MapId | string | "random"; maxTurrets: number; startingGold: number; wavesToWin: number; friendlyFire: boolean; utilityDraftLevel?: number }
   | {
       k: "start";
       mid: string;
       lobby: LobbyState;
-      mapId: MapId;
+      mapId: MapId | string;
       maxTurrets: number;
       startingGold: number;
       wavesToWin: number;
       friendlyFire: boolean;
+      utilityDraftLevel?: number;
       seed: number;
+      /** Custom defs referenced by mapId / seat heroIds — register before match build. */
+      customMaps?: CustomMapDef[];
+      customHeroes?: CustomHeroDef[];
     }
   | { k: "intent"; seat: number; intent: CombatIntent; seq: number }
   | { k: "state"; snap: MatchSnap; seq: number }
@@ -157,7 +171,7 @@ export type LaneSnap = {
   fx: { x: number; y: number; radius: number; color: string; life: number; maxLife: number }[];
   beam: { x1: number; y1: number; x2: number; y2: number; life: number } | null;
   pendingSends: { enemies: number; hpScale: number }[];
-  mapId: MapId;
+  mapId: MapId | string;
 };
 
 export type MatchSnap = {
@@ -197,6 +211,7 @@ export function emptyIntent(): CombatIntent {
     attackHeld: false,
     mobility: false,
     ultimate: false,
+    utility: false,
     toggleShop: false,
     upgradeBase: false,
     sendDigit: null,
@@ -204,6 +219,10 @@ export function emptyIntent(): CombatIntent {
     chooseRelic: null,
     skipRelic: false,
     chooseLevel: null,
+    chooseUtility: null,
+    chooseCurse: null,
+    chooseChest: null,
     viewOpponent: null,
+    mobilityHeld: false,
   };
 }

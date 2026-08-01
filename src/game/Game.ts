@@ -1,6 +1,7 @@
 import { MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { waveTierLabel } from "../data/enemies";
-import { HEROES, type HeroId } from "../data/heroes";
+import { type HeroId } from "../data/heroes";
+import { registerSessionCustoms, resolveHero } from "../custom/registry";
 import { RELICS } from "../data/relics";
 import { LEVEL_PASSIVES } from "../data/xp";
 import { getShopItem } from "../data/shop";
@@ -9,8 +10,10 @@ import { SEND_PACKS } from "../data/send";
 import { RARITY_LABEL, RARITY_COLOR } from "../data/rarity";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import {
+  chooseCurse,
   chooseLevelUp,
   chooseRelic,
+  chooseUtility,
   createState,
   laneEnemiesRemaining,
   skipRelic,
@@ -18,7 +21,10 @@ import {
   type GameState,
   type RunOptions,
 } from "./state";
+import { UTILITIES } from "../data/utilities";
+import { CURSES } from "../data/curses";
 import { buyShopItem, toggleShopFreeze, shopItemCost } from "../systems/shop";
+import { chooseChestReward } from "../systems/chests";
 import { availableSendPacks, buySendPack, sendPackCost } from "../systems/send";
 import { tryUpgradeBase, upgradeBaseCost } from "../systems/baseUpgrade";
 import { xpProgress } from "../systems/xp";
@@ -44,6 +50,12 @@ import { resolveSelectedOpponent } from "../ai/store";
 import { applyRunStartExtras } from "../meta/apply";
 import { composeRunModifiers } from "../meta/modifiers";
 import { applyRunPayout, loadMetaStore } from "../meta/store";
+import { careerDeltaFromState } from "../meta/runStats";
+import { evaluateChallenges, CHALLENGES } from "../meta/challenges";
+import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { chooseBaseBranch } from "../systems/baseUpgrade";
+import { BASE_BRANCHES } from "../data/baseBranches";
+import { rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
 import { ascensionLabel } from "../meta/ascension";
 import { buildMpMatch, buildSoloVsAiMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
 
@@ -129,6 +141,8 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.canvas.tabIndex = 0;
+    this.canvas.style.outline = "none";
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas 2D unavailable");
     this.ctx = ctx;
@@ -197,13 +211,23 @@ export class Game {
     });
 
     this.refreshHint();
+    const focusGame = () => {
+      this.canvas.focus({ preventScroll: true });
+    };
     this.upgradeBaseBtn.addEventListener("click", () => {
       if (!this.state || this.state.paused) return;
       tryUpgradeBase(this.state);
       this.refreshSendBar();
+      focusGame();
     });
-    this.pauseBtn.addEventListener("click", () => this.togglePause());
-    this.invBtn.addEventListener("click", () => this.toggleInventory());
+    this.pauseBtn.addEventListener("click", () => {
+      this.togglePause();
+      focusGame();
+    });
+    this.invBtn.addEventListener("click", () => {
+      this.toggleInventory();
+      focusGame();
+    });
     this.laneFlipBtn.addEventListener("click", () => {
       if (this.mpMatch) {
         this.mpMatch.viewTeam = (1 - this.mpMatch.viewTeam) as 0 | 1;
@@ -212,28 +236,33 @@ export class Game {
           this.mpMatch.viewTeam === this.mpMatch.myTeam ? "View lane" : "Your lane";
         this.laneFlipBtn.classList.toggle("active", this.mpMatch.viewTeam !== this.mpMatch.myTeam);
         playSfx("ui");
+        focusGame();
         return;
       }
-      if (!this.state || this.state.paused) return;
+      if (!this.state || this.state.paused || this.state.endless) return;
       this.state.viewOpponentLane = !this.state.viewOpponentLane;
       this.laneFlipBtn.textContent = this.state.viewOpponentLane ? "Your lane" : "View lane";
       this.laneFlipBtn.classList.toggle("active", this.state.viewOpponentLane);
       playSfx("ui");
+      focusGame();
     });
     document.querySelector("#inv-close")!.addEventListener("click", () => {
       this.closeInventory();
+      focusGame();
     });
     this.shopFreezeBtn.addEventListener("click", () => {
       if (!this.state) return;
       toggleShopFreeze(this.state);
       this.lastShopKey = "";
       this.refreshShopDom();
+      focusGame();
     });
     this.relicSkip.addEventListener("click", () => {
       if (!this.state) return;
       skipRelic(this.state);
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
+      focusGame();
     });
     for (const el of [
       this.shopPanel,
@@ -247,6 +276,7 @@ export class Game {
     ]) {
       el.addEventListener("mousedown", (e) => e.stopPropagation());
       el.addEventListener("mouseup", (e) => e.stopPropagation());
+      el.addEventListener("click", () => focusGame());
     }
 
     window.addEventListener("resize", () => this.resize());
@@ -312,7 +342,7 @@ export class Game {
   private refreshHint(): void {
     const kb = loadSettings().keybinds;
     this.hintEl.textContent =
-      `WASD move · ${formatBinding(kb.attack)} attack · ${formatBinding(kb.mobility)} mobility · ${formatBinding(kb.ultimate)} ult · 1–6 send · U upgrade · F shop · Esc pause`;
+      `Move · ${formatBinding(kb.attack)} attack · ${formatBinding(kb.mobility)} mobility · ${formatBinding(kb.ultimate)} ult · ${formatBinding(kb.utility)} utility · sends · U upgrade · shop · Esc pause · Pad supported`;
   }
 
   private showMainMenu(): void {
@@ -338,12 +368,15 @@ export class Game {
   private beginRun(heroId: HeroId, opts?: Partial<RunOptions>): void {
     unlockAudio();
     this.menus.hide();
+    this.input.reset();
     this.input.reloadBinds();
+    this.canvas.focus({ preventScroll: true });
     this.refreshHint();
     const ascension = opts?.ascension ?? this.runDefaults.ascension ?? 0;
     const meta = loadMetaStore();
     const playerMods = composeRunModifiers(ascension, meta.ranks, true);
     const merged: RunOptions = {
+      ...opts,
       mapId: opts?.mapId ?? this.runDefaults.mapId ?? "random",
       maxTurrets: opts?.maxTurrets ?? this.runDefaults.maxTurrets ?? DEFAULT_MAX_TURRETS,
       startingGold: opts?.startingGold ?? this.runDefaults.startingGold ?? STARTING_GOLD,
@@ -352,16 +385,24 @@ export class Game {
       ascension,
       modifiers: playerMods,
       teamSize: opts?.teamSize ?? 1,
+      endless: !!opts?.endless,
       chestOpenMul: opts?.chestOpenMul ?? 1,
       chestDespawnSec: opts?.chestDespawnSec ?? 28,
       chestSpawnChance: opts?.chestSpawnChance ?? 0.08,
+      utilityDraftLevel: opts?.utilityDraftLevel ?? 10,
     };
+
+    if (merged.endless) {
+      merged.teamSize = 1;
+      merged.wavesToWin = 0;
+      merged.friendlyFire = false;
+    }
 
     const opp = resolveSelectedOpponent();
     const teamSize = merged.teamSize ?? 1;
 
-    // Dual-lane when team size > 1 (AI allies) or neural opponent selected
-    if (teamSize > 1 || opp.kind === "neural") {
+    // Dual-lane when team size > 1 (AI allies) or neural opponent selected (not endless)
+    if (!merged.endless && (teamSize > 1 || opp.kind === "neural")) {
       this.beginSoloVsAi(heroId, merged, opp.kind === "neural" ? opp : null, teamSize);
       return;
     }
@@ -376,11 +417,12 @@ export class Game {
     this.invPanel.classList.add("hidden");
     this.laneChrome.classList.remove("hidden");
     this.baseHpRail.classList.remove("hidden");
-    this.opponentPanel.classList.remove("hidden");
+    this.opponentPanel.classList.toggle("hidden", !!this.state.endless);
     this.hud.classList.remove("hidden");
     this.waveBannerEl.classList.remove("hidden");
     this.laneFlipBtn.textContent = "View lane";
     this.laneFlipBtn.classList.remove("active");
+    this.laneFlipBtn.classList.toggle("hidden", !!this.state.endless);
     this.mapNameEl.textContent = this.state.map.name;
     this.lastDraftKey = "";
     this.lastShopKey = "";
@@ -423,6 +465,7 @@ export class Game {
       chestOpenMul: opts.chestOpenMul,
       chestDespawnSec: opts.chestDespawnSec,
       chestSpawnChance: opts.chestSpawnChance,
+      utilityDraftLevel: opts.utilityDraftLevel,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -436,6 +479,7 @@ export class Game {
     this.opponentPanel.classList.remove("hidden");
     this.hud.classList.remove("hidden");
     this.waveBannerEl.classList.remove("hidden");
+    this.laneFlipBtn.classList.remove("hidden");
     this.laneFlipBtn.textContent = "View lane";
     this.laneFlipBtn.classList.remove("active");
     this.mapNameEl.textContent = this.state.map.name;
@@ -653,11 +697,7 @@ export class Game {
       this.state.paused = false;
       this.pauseMode = "none";
     }
-    // Bag button keeps focus after toggle-close; Input ignores keys on UI targets.
-    // Close (display:none) blurs automatically — match that here.
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
+    this.canvas.focus({ preventScroll: true });
   }
 
   private refreshInventory(): void {
@@ -680,7 +720,7 @@ export class Game {
         `<article class="inv-row"><strong style="color:${RARITY_COLOR[def.rarity]}">${def.name} ×${n}</strong><span>${def.effect}</span><em>${RARITY_LABEL[def.rarity]}</em></article>`,
       );
     }
-    const hero = HEROES[this.state.hero.heroId];
+    const hero = resolveHero(this.state.hero.heroId);
     parts.unshift(
       `<article class="inv-row"><strong>Passive — ${hero.passive.name}</strong><span>${hero.passive.blurb}</span></article>`,
     );
@@ -691,7 +731,7 @@ export class Game {
     if (!this.state || !this.overlay.classList.contains("hidden")) return;
     if (this.pauseMode !== "none") return;
     const won = this.state.status === "won";
-    const heroName = HEROES[this.state.hero.heroId].name;
+    const heroName = resolveHero(this.state.hero.heroId).name;
     const relicNames = this.state.relics.map((id) => RELICS[id].name).join(", ") || "none";
     const mapName = this.state.map.name;
     const payout = applyRunPayout({
@@ -702,14 +742,45 @@ export class Game {
       deaths: this.state.deathCount,
       unlimited: this.state.wavesToWin <= 0,
       crestGainMul: this.state.modifiers.crestGainMul,
+      careerDelta: careerDeltaFromState(this.state, won),
     });
+    const newly = evaluateChallenges({
+      won,
+      wave: this.state.wave,
+      deaths: this.state.deathCount,
+      ascension: this.state.ascension,
+      sends: this.state.sendsThisRun,
+      shopBuys: this.state.shopBuys,
+      chestsOpened: this.state.chestsOpened,
+      bossesKilled: this.state.bossesKilled,
+      elitesKilled: this.state.elitesKilled,
+      artifactsPlaced: this.state.artifactsPlaced,
+      relicsOwned: this.state.relics.length,
+      baseLevel: this.state.baseLevel,
+      gold: this.state.gold,
+      levelDrafts: this.state.levelDraftsTaken,
+      mapId: this.state.mapId,
+      teamSize: this.state.teamSize,
+      heroId: this.state.hero.heroId,
+    });
+    const challengeLine =
+      newly.length > 0
+        ? ` Challenges unlocked: ${newly.map((id) => CHALLENGES.find((c) => c.id === id)?.name ?? id).join(", ")}.`
+        : "";
     const crestLine = `+${payout.crests} War Crests (${payout.store.crests} total)${
       payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""
-    }`;
-    this.overlayTitle.textContent = won ? "Lane held!" : "Base fallen";
+    }${challengeLine}`;
+    const endless = this.state.endless;
+    this.overlayTitle.textContent = won
+      ? "Lane held!"
+      : endless
+        ? "Endless run over"
+        : "Base fallen";
     this.overlayBody.textContent = won
       ? `${heroName} cleared ${this.state.wavesToWin <= 0 ? this.state.wave : this.state.wavesToWin} waves on ${mapName} (Lv ${this.state.level}, ${ascensionLabel(this.state.ascension)}). Relics: ${relicNames}. ${crestLine}`
-      : `${heroName} fell on wave ${this.state.wave} (${mapName}, ${ascensionLabel(this.state.ascension)}). Deaths ${this.state.deathCount}. ${crestLine}`;
+      : endless
+        ? `${heroName} survived ${this.state.wave} waves on ${mapName} (Lv ${this.state.level}, ${ascensionLabel(this.state.ascension)}). Sends ${this.state.sendsThisRun}. Deaths ${this.state.deathCount}. Relics: ${relicNames}. ${crestLine}`
+        : `${heroName} fell on wave ${this.state.wave} (${mapName}, ${ascensionLabel(this.state.ascension)}). Deaths ${this.state.deathCount}. ${crestLine}`;
     this.overlayActions.innerHTML = "";
 
     const again = document.createElement("button");
@@ -754,6 +825,12 @@ export class Game {
   private buildSendBar(): void {
     this.sendItemsEl.innerHTML = "";
     if (!this.state) return;
+    const label = document.querySelector(".send-bar-label");
+    if (label) {
+      label.textContent = this.state.endless
+        ? "Send into your next wave (raises income — you fight them)"
+        : "Send to enemy lane (raises your income)";
+    }
     for (const pack of availableSendPacks(this.state)) {
       const row = document.createElement("button");
       row.type = "button";
@@ -851,6 +928,7 @@ export class Game {
           buyShopItem(this.state, buyId);
           this.lastShopKey = "";
           this.refreshShopDom();
+          this.canvas.focus({ preventScroll: true });
         });
         this.shopItemsEl.appendChild(row);
       });
@@ -894,17 +972,118 @@ export class Game {
     } else {
       stock = "Between waves — stock frozen";
     }
-    this.shopMetaEl.textContent = `${stock} · Turrets ${turrets}/${cap}`;
+    this.shopMetaEl.textContent = `${stock} · Artifacts ${turrets}/${cap}`;
   }
 
   private syncDraft(): void {
     if (!this.state) return;
+    if (this.state.pausedForDraft && this.state.curseDraft) {
+      this.relicDraft.classList.remove("hidden");
+      this.relicSkip.classList.add("hidden");
+      this.draftTitle.textContent = "Hex Storm — Choose a Curse";
+      this.draftBlurb.textContent = "Send one soft-lock to the enemy lane.";
+      const key = `C:${this.state.curseDraft.join(",")}`;
+      if (key === this.lastDraftKey) return;
+      this.lastDraftKey = key;
+      this.relicChoices.innerHTML = "";
+      for (const id of this.state.curseDraft) {
+        const def = CURSES[id];
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "relic-card level-card";
+        btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
+        btn.addEventListener("click", () => {
+          if (!this.state) return;
+          chooseCurse(this.state, id);
+          this.lastDraftKey = "";
+          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          this.canvas.focus({ preventScroll: true });
+        });
+        this.relicChoices.appendChild(btn);
+      }
+      return;
+    }
+    if (this.state.pausedForDraft && this.state.chestDraft) {
+      this.relicDraft.classList.remove("hidden");
+      this.relicSkip.classList.add("hidden");
+      this.draftTitle.textContent = "Chest Reward";
+      this.draftBlurb.textContent = "Pick one of two rewards.";
+      const key = `H:${this.state.chestDraft.map((o) => o.label).join("|")}`;
+      if (key === this.lastDraftKey) return;
+      this.lastDraftKey = key;
+      this.relicChoices.innerHTML = "";
+      this.state.chestDraft.forEach((opt, index) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "relic-card level-card";
+        btn.innerHTML = `<span class="relic-tag">Chest</span><strong>${opt.label}</strong><span>${opt.blurb}</span>`;
+        btn.addEventListener("click", () => {
+          if (!this.state) return;
+          chooseChestReward(this.state, index);
+          this.lastDraftKey = "";
+          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          this.canvas.focus({ preventScroll: true });
+        });
+        this.relicChoices.appendChild(btn);
+      });
+      return;
+    }
+    if (this.state.pausedForDraft && this.state.utilityDraft) {
+      this.relicDraft.classList.remove("hidden");
+      this.relicSkip.classList.add("hidden");
+      this.draftTitle.textContent = `Utility Ability (Lv ${this.state.utilityDraftLevel})`;
+      this.draftBlurb.textContent = "Choose one global utility for the Spacebar slot.";
+      const key = `U:${this.state.utilityDraft.join(",")}`;
+      if (key === this.lastDraftKey) return;
+      this.lastDraftKey = key;
+      this.relicChoices.innerHTML = "";
+      for (const id of this.state.utilityDraft) {
+        const def = UTILITIES[id];
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "relic-card level-card";
+        btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}<br/>${def.hint}</span>`;
+        btn.addEventListener("click", () => {
+          if (!this.state) return;
+          chooseUtility(this.state, id);
+          this.lastDraftKey = "";
+          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+        });
+        this.relicChoices.appendChild(btn);
+      }
+      return;
+    }
+    if (this.state.pausedForDraft && this.state.baseBranchDraft) {
+      this.relicDraft.classList.remove("hidden");
+      this.relicSkip.classList.add("hidden");
+      this.draftTitle.textContent = `Base Branch (Lv ${this.state.baseLevel})`;
+      this.draftBlurb.textContent = "Choose one upgrade path to reinforce your build.";
+      const key = `B:${this.state.baseBranchDraft.join(",")}`;
+      if (key === this.lastDraftKey) return;
+      this.lastDraftKey = key;
+      this.relicChoices.innerHTML = "";
+      for (const id of this.state.baseBranchDraft) {
+        const def = BASE_BRANCHES[id];
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "relic-card level-card";
+        btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
+        btn.addEventListener("click", () => {
+          if (!this.state) return;
+          chooseBaseBranch(this.state, id);
+          this.lastDraftKey = "";
+          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+        });
+        this.relicChoices.appendChild(btn);
+      }
+      return;
+    }
     if (this.state.pausedForDraft && this.state.levelDraft) {
       this.relicDraft.classList.remove("hidden");
       this.relicSkip.classList.add("hidden");
-      this.draftTitle.textContent = `Level Up! (Lv ${this.state.level})`;
+      this.draftTitle.textContent = `Level Up! (Lv ${this.state.level}) · Rerolls ${this.state.rerollTokens}`;
       this.draftBlurb.textContent = "Choose one passive upgrade.";
-      const key = `L:${this.state.levelDraft.join(",")}`;
+      const key = `L:${this.state.levelDraft.join(",")}:r${this.state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
@@ -922,12 +1101,25 @@ export class Game {
         });
         this.relicChoices.appendChild(btn);
       }
+      const reroll = document.createElement("button");
+      reroll.type = "button";
+      reroll.className = "menu-btn ghost wide";
+      reroll.textContent =
+        this.state.rerollTokens > 0
+          ? `Reroll (−1 token, ${this.state.rerollTokens} left)`
+          : "No reroll tokens";
+      reroll.disabled = this.state.rerollTokens <= 0;
+      reroll.addEventListener("click", () => {
+        if (!this.state) return;
+        if (rerollLevelDraft(this.state)) this.lastDraftKey = "";
+      });
+      this.relicChoices.appendChild(reroll);
     } else if (this.state.pausedForDraft && this.state.relicDraft) {
       this.relicDraft.classList.remove("hidden");
       this.relicSkip.classList.remove("hidden");
-      this.draftTitle.textContent = "Choose a Relic";
+      this.draftTitle.textContent = `Choose a Relic · Rerolls ${this.state.rerollTokens}`;
       this.draftBlurb.textContent = "Pick one build-defining power — or skip if none fit.";
-      const key = `R:${this.state.relicDraft.join(",")}`;
+      const key = `R:${this.state.relicDraft.join(",")}:r${this.state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
@@ -945,6 +1137,19 @@ export class Game {
         });
         this.relicChoices.appendChild(btn);
       }
+      const reroll = document.createElement("button");
+      reroll.type = "button";
+      reroll.className = "menu-btn ghost wide";
+      reroll.textContent =
+        this.state.rerollTokens > 0
+          ? `Reroll (−1 token, ${this.state.rerollTokens} left)`
+          : "No reroll tokens";
+      reroll.disabled = this.state.rerollTokens <= 0;
+      reroll.addEventListener("click", () => {
+        if (!this.state) return;
+        if (rerollRelicDraft(this.state)) this.lastDraftKey = "";
+      });
+      this.relicChoices.appendChild(reroll);
     } else {
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
@@ -968,7 +1173,37 @@ export class Game {
     } else if (this.state) {
       // Don't sim while pause settings menu is open either
       const menusOpen = this.menus.isVisible() && this.state.paused;
+      this.input.pollGamepad();
       this.syncAimFromMouse();
+      // Gamepad right-stick aim overlay
+      const aim = this.input.gamepadAim();
+      if (this.input.isUsingGamepad() && (aim.x !== 0 || aim.y !== 0)) {
+        this.state.aimWorldX = this.state.hero.x + aim.x * 220;
+        this.state.aimWorldY = this.state.hero.y + aim.y * 220;
+      }
+      // Utility actions outside update()
+      if (!menusOpen && !this.state.pausedForDraft) {
+        if (this.input.consumeAction("pause")) this.togglePause();
+        if (this.input.consumeAction("inventory")) this.toggleInventory();
+        if (this.input.consumeAction("laneFlip") && !this.state.endless) {
+          this.state.viewOpponentLane = !this.state.viewOpponentLane;
+        }
+        const cheats = areCheatsEnabled() ? loadCheatOptions() : null;
+        if (cheats?.godMode && this.state.hero.alive) {
+          this.state.hero.hp = this.state.hero.maxHp;
+        }
+        if (cheats?.skipWaves && this.input.consumePress("KeyN")) {
+          this.state.enemies = [];
+          this.state.spawning = false;
+          this.state.waveTimer = 0.1;
+        }
+        if (cheats?.forceChest && this.input.consumePress("KeyC")) {
+          this.state.chestSpawnCd = 0;
+        }
+        if (cheats?.infiniteRerolls) {
+          this.state.rerollTokens = Math.max(this.state.rerollTokens, 9);
+        }
+      }
       if (!menusOpen) update(this.state, this.input, dt);
       else this.input.endFrame();
 
@@ -1019,6 +1254,7 @@ export class Game {
       startingGold: draft.startingGold,
       wavesToWin: draft.wavesToWin,
       friendlyFire: draft.friendlyFire,
+      utilityDraftLevel: draft.utilityDraftLevel,
       heroId,
       preferredCode: draft.hostCode,
       joinCode: draft.joinCode,
@@ -1049,10 +1285,13 @@ export class Game {
     this.mpHost = isHost;
     this.remoteIntents.clear();
     this.state = null;
+    registerSessionCustoms({ maps: start.customMaps, heroes: start.customHeroes });
     this.mpMatch = buildMpMatch(start.lobby, start.mapId, start.maxTurrets, start.seed, mySlot, {
       startingGold: start.startingGold ?? start.lobby.startingGold,
       wavesToWin: start.wavesToWin ?? start.lobby.wavesToWin,
       friendlyFire: start.friendlyFire ?? start.lobby.friendlyFire,
+      utilityDraftLevel:
+        start.utilityDraftLevel ?? start.lobby.utilityDraftLevel ?? 10,
     });
 
     // Attach trained AI to PvE enemy lane when a school is selected
@@ -1181,8 +1420,8 @@ export class Game {
     this.oppNameEl.textContent = this.mpMatch.opponentLabel
       ? this.mpMatch.opponentLabel
       : other.aiControlled
-        ? `AI · ${HEROES[other.hero.heroId].name}`
-        : `Enemy · ${HEROES[other.hero.heroId].name}`;
+        ? `AI · ${resolveHero(other.hero.heroId).name}`
+        : `Enemy · ${resolveHero(other.hero.heroId).name}`;
     const sendIn = other.pendingSends.reduce((n, p) => n + p.enemies, 0);
     const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
     const myLeft = laneEnemiesRemaining(myLane);
@@ -1217,6 +1456,7 @@ export class Game {
         deaths: myLane.deathCount,
         unlimited: myLane.wavesToWin <= 0,
         crestGainMul: myLane.modifiers.crestGainMul,
+        careerDelta: careerDeltaFromState(myLane, win),
       });
       crestLine = ` +${payout.crests} War Crests (${payout.store.crests} total)${
         payout.unlockedAscension != null ? ` · Unlocked ${ascensionLabel(payout.unlockedAscension)}` : ""
@@ -1258,21 +1498,27 @@ export class Game {
       this.shopPanel.classList.remove("hidden");
       this.refreshShopDom();
     } else {
+      const hadFocus = this.shopPanel.contains(document.activeElement);
       this.shopPanel.classList.add("hidden");
+      // Keep WASD/keybinds working after shop UI clicks or auto-close while focused in panel.
+      if (hadFocus) this.canvas.focus({ preventScroll: true });
     }
   }
 
   private syncHud(): void {
     const s = this.state;
     if (!s) return;
-    const hero = HEROES[s.hero.heroId];
+    const hero = resolveHero(s.hero.heroId);
     const kb = loadSettings().keybinds;
     const tier = waveTierLabel(s.waveTier);
     const incoming = s.opponent.incomingFromPlayer;
     const aiSend = s.pendingSends.reduce((n, p) => n + p.enemies, 0);
 
     this.goldAmountEl.textContent = `${Math.floor(s.gold)}`;
-    this.incomeEl.textContent = `+${s.incomePerSec.toFixed(1)}/s`;
+    this.incomeEl.textContent =
+      s.rerollTokens > 0
+        ? `+${s.incomePerSec.toFixed(1)}/s · ⟳${s.rerollTokens}`
+        : `+${s.incomePerSec.toFixed(1)}/s`;
 
     this.mapNameEl.textContent = s.map.name;
 
@@ -1314,17 +1560,29 @@ export class Game {
     // Dual-lane enemy counts (classic uses abstract opponent; MP overwrites in syncHudMp)
     if (!this.mpMatch) {
       const myLeft = laneEnemiesRemaining(s);
-      const theirLeft = opponentEnemiesRemaining(s.opponent);
-      this.laneEnemyCountsEl.innerHTML =
-        `<span class="yours">Your lane ${myLeft}</span>` +
-        `<span class="sep">·</span>` +
-        `<span class="theirs">Enemy lane ${theirLeft}</span>`;
+      if (s.endless) {
+        this.laneEnemyCountsEl.innerHTML =
+          `<span class="yours">Your lane ${myLeft}</span>` +
+          (aiSend > 0 ? `<span class="sep">·</span><span class="theirs">Queued ${aiSend}</span>` : "");
+      } else {
+        const theirLeft = opponentEnemiesRemaining(s.opponent);
+        this.laneEnemyCountsEl.innerHTML =
+          `<span class="yours">Your lane ${myLeft}</span>` +
+          `<span class="sep">·</span>` +
+          `<span class="theirs">Enemy lane ${theirLeft}</span>`;
+      }
     }
 
     // Simplified top-left panel (no map / wave / base·hero HP labels)
     this.statsEl.innerHTML = [
-      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}</div>`,
-      `<div class="hud-line">Base Lv ${s.baseLevel}${incoming ? ` · Sent ${incoming}` : ""}${aiSend ? ` · Incoming ${aiSend}` : ""}</div>`,
+      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}${s.endless ? " · Endless" : ""}</div>`,
+      `<div class="hud-line">Base Lv ${s.baseLevel}${
+        s.endless
+          ? aiSend
+            ? ` · Queued ${aiSend}`
+            : ""
+          : `${incoming ? ` · Sent ${incoming}` : ""}${aiSend ? ` · Incoming ${aiSend}` : ""}`
+      }</div>`,
     ].join("");
 
     // Vertical base HP
@@ -1335,8 +1593,9 @@ export class Game {
 
     // Opponent panel (always visible — no flip required)
     const opp = s.opponent;
-    this.oppNameEl.textContent = opp.name;
-    this.oppNameEl.style.color = opp.color;
+    const oppHero = resolveHero(opp.heroId);
+    this.oppNameEl.textContent = oppHero?.name ?? opp.name;
+    this.oppNameEl.style.color = oppHero?.color ?? opp.color;
     const sendLine =
       opp.sendFlash > 0 && opp.lastSendLabel
         ? `<div class="opp-alert">Sending ${opp.lastSendLabel}!</div>`
@@ -1344,7 +1603,8 @@ export class Game {
           ? `<div class="opp-alert">Queued ${aiSend} to your next wave</div>`
           : `<div class="opp-muted">No active send</div>`;
     this.oppStatsEl.innerHTML = [
-      `<div>HP ${Math.ceil(opp.heroHp)}/${Math.ceil(opp.heroMaxHp)} · Lv ${opp.level}</div>`,
+      `<div>${oppHero?.blurb?.split("—")[0]?.trim() ?? "Rival"} · Lv ${opp.level}</div>`,
+      `<div>HP ${Math.ceil(opp.heroHp)}/${Math.ceil(opp.heroMaxHp)}</div>`,
       `<div>Base ${Math.ceil(opp.baseHp)}/${opp.baseMaxHp} · BLv ${opp.baseLevel}</div>`,
       `<div>+${opp.incomePerSec.toFixed(1)}/s · ${Math.floor(opp.gold)}g</div>`,
       `<div>Enemies left: ${opponentEnemiesRemaining(opp)}</div>`,
@@ -1367,11 +1627,17 @@ export class Game {
       this.respawnEl.classList.add("hidden");
     }
 
-    const labels = [formatBinding(kb.mobility), formatBinding(kb.ultimate)];
-    const abilityKey = `${s.hero.abilityCds.map((c) => c.toFixed(1)).join(",")}:${s.hero.alive}`;
+    const labels = [
+      formatBinding(kb.mobility),
+      formatBinding(kb.ultimate),
+      formatBinding(kb.utility),
+    ];
+    const utilId = s.utilityId;
+    const utilCd = s.utilityCd;
+    const abilityKey = `${s.hero.abilityCds.map((c) => c.toFixed(1)).join(",")}:${utilId ?? "-"}:${utilCd.toFixed(1)}:${s.hero.alive}`;
     if (abilityKey !== this.lastAbilityKey) {
       this.lastAbilityKey = abilityKey;
-      this.abilityEl.innerHTML = hero.abilities
+      const heroSlots = hero.abilities
         .map((a, i) => {
           const cd = s.hero.abilityCds[i] ?? 0;
           const ready = cd <= 0 && s.hero.alive;
@@ -1380,6 +1646,18 @@ export class Game {
           return `<div class="ability ${ready ? "ready" : "cooling"}" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[i]}</kbd><span>${a.name}</span><em>${cdText}</em></div>`;
         })
         .join("");
+      let utilSlot = "";
+      if (utilId) {
+        const u = UTILITIES[utilId];
+        const ready = utilCd <= 0 && s.hero.alive;
+        const cdText = !s.hero.alive ? "—" : ready ? "ready" : utilCd.toFixed(1);
+        const tip = `<strong>${u.name}</strong><br/>${u.hint}<br/>CD ${u.cooldown}s`;
+        utilSlot = `<div class="ability ${ready ? "ready" : "cooling"}" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[2]}</kbd><span>${u.name}</span><em>${cdText}</em></div>`;
+      } else {
+        const tip = `<strong>Utility</strong><br/>Empty — draft at Lv ${s.utilityDraftLevel || "—"}${s.utilityDraftLevel === 0 ? " (off)" : ""}`;
+        utilSlot = `<div class="ability cooling" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[2]}</kbd><span>Utility</span><em>${s.utilityDraftLevel <= 0 ? "off" : `Lv ${s.utilityDraftLevel}`}</em></div>`;
+      }
+      this.abilityEl.innerHTML = heroSlots + utilSlot;
     }
 
     this.toastEl.textContent =

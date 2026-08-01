@@ -63,8 +63,12 @@ function nextTurretSlot(state: GameState): { x: number; y: number; index: number
 }
 
 export function updateTurrets(state: GameState, dt: number): void {
-  const dmgMul = hasRelic(state, "architects_favor") ? 1.25 : 1;
-  const cdMul = hasRelic(state, "turret_overclock") ? 0.7 : 1;
+  const dmgMul =
+    (hasRelic(state, "architects_favor") ? 1.25 : 1) *
+    (state.baseBranchMods?.artifactDamageMul ?? 1) *
+    (state.utilityTurretBoost > 0 ? 1.4 : 1);
+  const cdMul =
+    (hasRelic(state, "turret_overclock") ? 0.7 : 1) * (state.baseBranchMods?.artifactFireMul ?? 1);
   for (const t of state.turrets) {
     if (!t.alive) continue;
     t.fireCd = Math.max(0, t.fireCd - dt);

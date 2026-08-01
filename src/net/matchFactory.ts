@@ -1,12 +1,13 @@
 import type { NeuralLaneAi } from "../ai/runtime";
-import { HEROES, HERO_LIST, type HeroId } from "../data/heroes";
+import { HERO_LIST, type HeroId } from "../data/heroes";
 import { resolveMapChoice, type MapId } from "../data/maps";
+import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
 import { isPveMode, type LobbyState, type MatchMode, type MpTeam } from "./types";
 
 export type MpMatch = {
   mode: MatchMode;
-  mapId: MapId;
+  mapId: MapId | string;
   maxTurrets: number;
   seed: number;
   /** Team 0 / Team 1 lanes. PvE: team 1 is AI-controlled. */
@@ -31,7 +32,7 @@ function makeHeroRuntime(
   id: number,
   slot: number | null,
 ): HeroRuntime {
-  const def = HEROES[heroId];
+  const def = resolveHero(heroId);
   return {
     id,
     heroId,
@@ -84,11 +85,16 @@ function populateLane(
 
 export function buildMpMatch(
   lobby: LobbyState,
-  mapId: MapId,
+  mapId: MapId | string,
   maxTurrets: number,
   seed: number,
   mySlot: number,
-  runOpts?: { startingGold?: number; wavesToWin?: number; friendlyFire?: boolean },
+  runOpts?: {
+    startingGold?: number;
+    wavesToWin?: number;
+    friendlyFire?: boolean;
+    utilityDraftLevel?: number;
+  },
 ): MpMatch {
   const resolved = resolveMapChoice(mapId);
   const team0 = lobby.slots.filter((s) => s.team === 0).sort((a, b) => a.slot - b.slot);
@@ -100,6 +106,8 @@ export function buildMpMatch(
     startingGold: runOpts?.startingGold ?? lobby.startingGold,
     wavesToWin: runOpts?.wavesToWin ?? lobby.wavesToWin,
     friendlyFire: runOpts?.friendlyFire ?? lobby.friendlyFire,
+    utilityDraftLevel:
+      runOpts?.utilityDraftLevel ?? lobby.utilityDraftLevel ?? 10,
   };
 
   const lane0 = createState(team0[0]?.heroId ?? "ranger", sharedOpts);
@@ -153,7 +161,7 @@ export function buildMpMatch(
 export function buildSoloVsAiMatch(opts: {
   playerHeroId: HeroId;
   aiHeroId?: HeroId;
-  mapId: MapId | "random";
+  mapId: MapId | string | "random";
   maxTurrets: number;
   seed: number;
   startingGold: number;
@@ -167,6 +175,7 @@ export function buildSoloVsAiMatch(opts: {
   chestOpenMul?: number;
   chestDespawnSec?: number;
   chestSpawnChance?: number;
+  utilityDraftLevel?: number;
 }): MpMatch {
   const resolved = resolveMapChoice(opts.mapId);
   const teamSize = opts.teamSize ?? 1;
@@ -185,6 +194,7 @@ export function buildSoloVsAiMatch(opts: {
     chestOpenMul: opts.chestOpenMul,
     chestDespawnSec: opts.chestDespawnSec,
     chestSpawnChance: opts.chestSpawnChance,
+    utilityDraftLevel: opts.utilityDraftLevel ?? 10,
   };
 
   const lane0 = createState(opts.playerHeroId, {

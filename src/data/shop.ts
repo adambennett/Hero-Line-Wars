@@ -1,5 +1,6 @@
 import { TURRET_DEFS, type TurretKind } from "./turrets";
 import type { Rarity } from "./rarity";
+import { isItemUnlocked } from "../meta/contentLocks";
 
 export type ShopItemId =
   | "boots"
@@ -38,6 +39,30 @@ export type ShopItemId =
   | "dragon_scale"
   | "void_splinter"
   | "king_scepter"
+  | "reroll_token"
+  | "reroll_pouch"
+  | "shadow_greaves"
+  | "monk_beads"
+  | "rust_nail"
+  | "quiet_ledger"
+  | "beggar_cloak"
+  | "copper_spike"
+  | "boss_fang"
+  | "trophy_ring"
+  | "marrow_flask"
+  | "marathon_boots"
+  | "endurance_charm"
+  | "longwatch_scope"
+  | "architect_hammer"
+  | "scaffold_kit"
+  | "keystone_shard"
+  | "miser_coin"
+  | "thrift_seal"
+  | "empty_purse"
+  | "legend_quill"
+  | "ascent_crown"
+  | "void_thread"
+  | "starfall_lens"
   | TurretKind;
 
 export type ShopCategory = "gear" | "artifact";
@@ -380,6 +405,46 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     rarity: "legendary",
   },
   {
+    id: "reroll_token",
+    name: "Reroll Token",
+    cost: 45,
+    effect: "+1 draft reroll token (level or relic)",
+    maxStacks: 8,
+    category: "gear",
+    rarity: "uncommon",
+  },
+  {
+    id: "reroll_pouch",
+    name: "Reroll Pouch",
+    cost: 110,
+    effect: "+3 draft reroll tokens",
+    maxStacks: 3,
+    category: "gear",
+    rarity: "rare",
+  },
+  { id: "shadow_greaves", name: "Shadow Greaves", cost: 70, effect: "+40 speed, +8 damage", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "monk_beads", name: "Monk Beads", cost: 55, effect: "+0.5 income, +10 max HP", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "rust_nail", name: "Rust Nail", cost: 40, effect: "+6 damage", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "quiet_ledger", name: "Quiet Ledger", cost: 65, effect: "Shop prices −6%", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "beggar_cloak", name: "Beggar's Cloak", cost: 50, effect: "+35 speed", maxStacks: 2, category: "gear", rarity: "common" },
+  { id: "copper_spike", name: "Copper Spike", cost: 48, effect: "+5 damage, +2 kill gold", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "boss_fang", name: "Boss Fang", cost: 95, effect: "+12 damage vs elites/bosses feel (+10 dmg)", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "trophy_ring", name: "Trophy Ring", cost: 80, effect: "+0.8 income, +8 max HP", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "marrow_flask", name: "Marrow Flask", cost: 70, effect: "Heal 40, +15 max HP", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "marathon_boots", name: "Marathon Boots", cost: 75, effect: "+50 speed, +0.3 income", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "endurance_charm", name: "Endurance Charm", cost: 60, effect: "+35 max HP", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "longwatch_scope", name: "Longwatch Scope", cost: 85, effect: "+8 damage, attacks 6% faster", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "architect_hammer", name: "Architect's Hammer", cost: 90, effect: "Base +30 HP, upgrades −5% feel ( +0.2 income)", maxStacks: 1, category: "gear", rarity: "mythic" },
+  { id: "scaffold_kit", name: "Scaffold Kit", cost: 70, effect: "Base +20 HP", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "keystone_shard", name: "Keystone Shard", cost: 100, effect: "+10 damage, +0.5 income", maxStacks: 1, category: "gear", rarity: "mythic" },
+  { id: "miser_coin", name: "Miser Coin", cost: 55, effect: "+4 kill gold", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "thrift_seal", name: "Thrift Seal", cost: 80, effect: "Shop prices −10%", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "empty_purse", name: "Empty Purse", cost: 35, effect: "+0.45 income", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "legend_quill", name: "Legend Quill", cost: 140, effect: "+16 damage, +20 max HP", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "ascent_crown", name: "Ascent Crown", cost: 160, effect: "+1.2 income, +12 damage", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "void_thread", name: "Void Thread", cost: 130, effect: "Attack 15% faster, +8 damage", maxStacks: 1, category: "gear", rarity: "mythic" },
+  { id: "starfall_lens", name: "Starfall Lens", cost: 150, effect: "+0.15 crit, +10 damage", maxStacks: 1, category: "gear", rarity: "legendary" },
+  {
     id: "ballista",
     name: TURRET_DEFS.ballista.name,
     cost: TURRET_DEFS.ballista.cost,
@@ -424,7 +489,7 @@ export function isTurretArtifact(id: ShopItemId): id is TurretKind {
 
 /** Roll a fresh offer of distinct items. Prefer not repeating the previous offer. */
 export function rollShopOffer(previous: ShopItemId[] = []): ShopItemId[] {
-  const pool = SHOP_ITEMS.map((i) => i.id);
+  const pool = SHOP_ITEMS.map((i) => i.id).filter((id) => isItemUnlocked(id));
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j]!, pool[i]!];

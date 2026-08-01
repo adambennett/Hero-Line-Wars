@@ -16,10 +16,11 @@ import {
 } from "../data/constants";
 import { clamp, dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
-import { addFx, applyPlayerDamage, pushProjectile } from "./combat";
+import { addFx, applyPlayerDamage, killEnemy, pushProjectile } from "./combat";
 import { baseDamageTakenMul } from "./relics";
 import { damageTurret, livingTurrets } from "./turrets";
 import { playSfx } from "./audio";
+import { heroHasPassive } from "../custom/registry";
 
 function livingHeroes(state: GameState): HeroRuntime[] {
   const list = [state.hero, ...(state.allies ?? [])];
@@ -423,6 +424,32 @@ export function updateEnemies(state: GameState, dt: number): void {
         e.slowMul = 1;
       }
     }
+    // Hex poison / Ember burn DoTs
+    if ((e.dotTimer ?? 0) > 0) {
+      e.dotTimer = (e.dotTimer ?? 0) - dt;
+      const dps = e.dotDps ?? 0;
+      if (dps > 0) {
+        e.hp -= dps * dt;
+        if (e.hp <= 0) killEnemy(state, e);
+      }
+      if ((e.dotTimer ?? 0) <= 0) {
+        e.dotTimer = 0;
+        e.dotDps = 0;
+      }
+    }
+    if ((e.burnTimer ?? 0) > 0) {
+      e.burnTimer = (e.burnTimer ?? 0) - dt;
+      const dps = e.burnDps ?? 0;
+      if (dps > 0 && e.alive) {
+        e.hp -= dps * dt;
+        if (e.hp <= 0) killEnemy(state, e);
+      }
+      if ((e.burnTimer ?? 0) <= 0) {
+        e.burnTimer = 0;
+        e.burnDps = 0;
+      }
+    }
+    if (!e.alive) continue;
     const speedMul = (e.slowMul ?? 1) < 1 ? (e.slowMul ?? 1) : 1;
 
     if (e.telegraph > 0) {
@@ -512,8 +539,15 @@ export function updateEnemies(state: GameState, dt: number): void {
     }
 
     if (focusHero && dist(e, focusHero) <= e.radius + focusHero.radius) {
-      const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
-      damageHero(state, focusHero, e.contactDamage * contactMul * dt);
+      // Gyro Blade Guard: immune to contact while blades wrapped (not reforming)
+      const gyroImmune =
+        heroHasPassive(focusHero.heroId, "bladeguard") &&
+        (focusHero.bladeMode ?? "wrapped") === "wrapped" &&
+        (focusHero.bladeReformTimer ?? 0) <= 0;
+      if (!gyroImmune) {
+        const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
+        damageHero(state, focusHero, e.contactDamage * contactMul * dt);
+      }
     }
 
     if (target.kind === "turret" && target.turret?.alive) {
@@ -531,6 +565,7 @@ export function updateEnemies(state: GameState, dt: number): void {
     if (dist(e, base) <= base.radius) {
       const dmg = e.baseDamage * baseDamageTakenMul(state);
       state.baseHp -= dmg;
+      state.baseDamageTaken += dmg;
       e.alive = false;
       state.damageFlash = Math.max(state.damageFlash, 0.2);
       state.toast = "Base hit!";

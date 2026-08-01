@@ -15,7 +15,10 @@ export type HeroId =
   | "titan"
   | "mirage"
   | "medic"
-  | "tempest";
+  | "tempest"
+  | "curses"
+  | "warp"
+  | "gyro";
 
 export type AbilityKind =
   | "dash"
@@ -47,7 +50,13 @@ export type AbilityKind =
   | "fieldstep"
   | "sanctuary"
   | "gust"
-  | "cyclone";
+  | "cyclone"
+  | "hexstep"
+  | "hexstorm"
+  | "padlink"
+  | "echonova"
+  | "bladehook"
+  | "bladestorm";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -62,8 +71,15 @@ export type AttackStyle =
   | "frostbolt"
   | "chaos"
   | "chain"
-  | "vine";
-
+  | "vine"
+  | "hex"
+  | "spin"
+  | "wind"
+  | "syringe"
+  | "emberbolt"
+  | "needle"
+  | "echo"
+  | "warpbolt";
 /**
  * How basics / ults interact with attack range:
  * - free: fire along aim anywhere (no range circle / no engage gate)
@@ -340,7 +356,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
   },
   wizard: {
     id: "wizard",
-    name: "RNG Wizard",
+    name: "Chaos",
     blurb: "Chaos mage — basics and spells roll the dice every cast.",
     color: "#e070d0",
     glowColor: "#ffb0f0",
@@ -465,13 +481,13 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackDamage: 15,
     attackCooldown: 0.36,
     projectileSpeed: 520,
-    attackStyle: "bolt",
+    attackStyle: "emberbolt",
     aimMode: "free",
-    attackHint: "Free-aim firebolt",
+    attackHint: "Firebolt — burn DoT + splash",
     passive: {
       id: "scorch",
       name: "Scorch",
-      blurb: "Basics splash 20% damage to nearby enemies.",
+      blurb: "Basics splash 20% damage and leave a short burn.",
     },
     abilities: [
       {
@@ -479,7 +495,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "mobility",
         name: "Flare Dash",
         cooldown: 5,
-        hint: "Dash (~120) and scorch nearby foes.",
+        hint: "Blazing slide (~120) that scorches foes along the path.",
       },
       {
         id: "inferno",
@@ -502,10 +518,10 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackRange: 130,
     attackDamage: 18,
     attackCooldown: 0.34,
-    projectileSpeed: 600,
-    attackStyle: "bolt",
+    projectileSpeed: 680,
+    attackStyle: "needle",
     aimMode: "free",
-    attackHint: "Free-aim void needle",
+    attackHint: "Piercing void needle",
     passive: {
       id: "riftmark",
       name: "Riftmark",
@@ -517,7 +533,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "mobility",
         name: "Rift Step",
         cooldown: 4.5,
-        hint: "Long blink toward aim (~160).",
+        hint: "Phase blink toward aim (~160) — brief untouchable window.",
       },
       {
         id: "singularity",
@@ -579,9 +595,9 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackDamage: 14,
     attackCooldown: 0.33,
     projectileSpeed: 540,
-    attackStyle: "bolt",
+    attackStyle: "echo",
     aimMode: "free",
-    attackHint: "Free-aim prismatic bolt",
+    attackHint: "Twin echo bolts (slight spread)",
     passive: {
       id: "afterimage",
       name: "Afterimage",
@@ -616,10 +632,10 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackRange: 140,
     attackDamage: 12,
     attackCooldown: 0.38,
-    projectileSpeed: 480,
-    attackStyle: "bolt",
+    projectileSpeed: 420,
+    attackStyle: "syringe",
     aimMode: "free",
-    attackHint: "Free-aim syringe bolt",
+    attackHint: "Syringe dart — heals you on hit",
     passive: {
       id: "triage",
       name: "Triage",
@@ -631,7 +647,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "mobility",
         name: "Field Step",
         cooldown: 5,
-        hint: "Short reposition (~100) and heal 12 HP.",
+        hint: "Short field slide (~100) and heal 12 HP.",
       },
       {
         id: "sanctuary",
@@ -654,10 +670,10 @@ export const HEROES: Record<HeroId, HeroDef> = {
     attackRange: 175,
     attackDamage: 16,
     attackCooldown: 0.34,
-    projectileSpeed: 580,
-    attackStyle: "bolt",
+    projectileSpeed: 620,
+    attackStyle: "wind",
     aimMode: "free",
-    attackHint: "Free-aim wind arrow",
+    attackHint: "Piercing wind arrow (slows)",
     passive: {
       id: "gale",
       name: "Gale",
@@ -669,7 +685,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "mobility",
         name: "Gust Step",
         cooldown: 4.8,
-        hint: "Dash (~125) that knocks foes back slightly.",
+        hint: "Wind dash (~125) that knocks foes back slightly.",
       },
       {
         id: "cyclone",
@@ -677,6 +693,120 @@ export const HEROES: Record<HeroId, HeroDef> = {
         name: "Cyclone",
         cooldown: 9,
         hint: "Piercing wind spear through the lane.",
+      },
+    ],
+  },
+  curses: {
+    id: "curses",
+    name: "Hex",
+    blurb: "Dark hexer — soft-locks the enemy lane; weak personal damage, strong DoT zone.",
+    color: "#a060c8",
+    glowColor: "#e0a0ff",
+    radius: 15,
+    speed: 210,
+    maxHp: 100,
+    attackRange: 130,
+    attackDamage: 8,
+    attackCooldown: 0.42,
+    projectileSpeed: 420,
+    attackStyle: "hex",
+    aimMode: "free",
+    attackHint: "Hex bolt — poison DoT + slow",
+    passive: {
+      id: "hexmark",
+      name: "Hex Mark",
+      blurb: "Basics apply a poison DoT. Low personal DPS — clear with zones.",
+    },
+    abilities: [
+      {
+        id: "hexstep",
+        slot: "mobility",
+        name: "Hex Step",
+        cooldown: 5.5,
+        hint: "Blink (~100) and leave a DoT zone for 3s.",
+      },
+      {
+        id: "hexstorm",
+        slot: "ultimate",
+        name: "Hex Storm",
+        cooldown: 14,
+        hint: "Pause and choose 1 of 3 curses to soft-lock the enemy lane.",
+      },
+    ],
+  },
+  warp: {
+    id: "warp",
+    name: "Warp",
+    blurb: "Trickster — place linked pads, hop the lane, detonate the gate.",
+    color: "#48c8e8",
+    glowColor: "#a8f0ff",
+    radius: 15,
+    speed: 228,
+    maxHp: 88,
+    attackRange: 140,
+    attackDamage: 9,
+    attackCooldown: 0.4,
+    projectileSpeed: 500,
+    attackStyle: "warpbolt",
+    aimMode: "free",
+    attackHint: "Needle — pads also fire random bolts",
+    passive: {
+      id: "gatewalker",
+      name: "Gatewalker",
+      blurb: "After stepping a pad, gain +30% move speed for 1.2s. Leaving a pad pulses a shockwave.",
+    },
+    abilities: [
+      {
+        id: "padlink",
+        slot: "mobility",
+        name: "Pad Link",
+        cooldown: 6,
+        hint: "Place pad A, then B to link. Further casts alternate replacing A/B.",
+      },
+      {
+        id: "echonova",
+        slot: "ultimate",
+        name: "Echo Nova",
+        cooldown: 11,
+        hint: "Detonate both pads (or yourself) for AoE damage and brief chill.",
+      },
+    ],
+  },
+  gyro: {
+    id: "gyro",
+    name: "Gyro",
+    blurb: "Blade tank — spin for AoE, hook walls, shrug off contact.",
+    color: "#c0c8d8",
+    glowColor: "#e8f0ff",
+    radius: 19,
+    speed: 195,
+    maxHp: 155,
+    attackRange: 68,
+    attackDamage: 11,
+    attackCooldown: 0.1,
+    projectileSpeed: 0,
+    attackStyle: "spin",
+    aimMode: "free",
+    attackHint: "Hold attack to spin blades — AoE contact damage",
+    passive: {
+      id: "bladeguard",
+      name: "Blade Guard",
+      blurb: "Immune to enemy collision/contact damage while blades are wrapped. Projectiles still hurt.",
+    },
+    abilities: [
+      {
+        id: "bladehook",
+        slot: "mobility",
+        name: "Blade Hook",
+        cooldown: 7,
+        hint: "Hold to charge range, release to fire. Wall hit slings you; miss pulls you in.",
+      },
+      {
+        id: "bladestorm",
+        slot: "ultimate",
+        name: "Blade Storm",
+        cooldown: 14,
+        hint: "Fire blades outward for huge hits, then reform slowly — vulnerable window.",
       },
     ],
   },
@@ -698,6 +828,9 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.mirage,
   HEROES.medic,
   HEROES.tempest,
+  HEROES.curses,
+  HEROES.warp,
+  HEROES.gyro,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

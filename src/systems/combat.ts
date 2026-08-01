@@ -1,8 +1,9 @@
-import { HEROES, type AttackStyle, type HeroId } from "../data/heroes";
+import { type AttackStyle } from "../data/heroes";
 import type { RelicId } from "../data/relics";
 import type { HighGroundZone } from "../data/maps";
 import { hasLineOfSight, rayObstacleHitT } from "../data/maps";
 import { dist, normalize, type Vec2 } from "../game/math";
+import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
 import type { EnemyUnit, GameState, Projectile } from "../game/state";
 import {
   hasRelic,
@@ -12,6 +13,7 @@ import {
 import { isBossKind, isEliteKind } from "../data/enemies";
 import { grantKillXp } from "./xp";
 import { playSfx } from "./audio";
+import { heroHasPassive, heroUsesGyroKit, resolveHero } from "../custom/registry";
 
 export function highGroundAt(state: GameState, p: Vec2): HighGroundZone | null {
   for (const z of state.map.highGrounds) {
@@ -46,8 +48,8 @@ export function applySlow(e: EnemyUnit, mul: number, duration: number): void {
 }
 
 export function attackDamage(state: GameState): number {
-  const hero = HEROES[state.hero.heroId];
-  let base = hero.attackDamage + state.hero.damageBonus;
+  const hero = resolveHero(state.hero.heroId);
+  let base = hero.attackDamage + state.hero.damageBonus + (state.baseBranchMods?.damageFlat ?? 0);
   if (hasRelic(state, "blood_price")) base *= 1.35;
   if (hasRelic(state, "overcharge")) base *= 0.85;
   if (hasRelic(state, "glass_cannon")) base *= 1.15;
@@ -58,8 +60,8 @@ export function attackDamage(state: GameState): number {
     : 1;
   let dmg = base * hg * relicDamageMul(state);
 
-  // Scatter Close Quarters
-  if (state.hero.heroId === "scatter") {
+  // Close Quarters passive
+  if (heroHasPassive(state.hero.heroId, "close_quarters")) {
     const near = state.enemies.some(
       (e) => e.alive && dist(state.hero, e) <= 90 + e.radius,
     );
@@ -67,6 +69,7 @@ export function attackDamage(state: GameState): number {
   }
 
   if ((state.hero.overchargeTimer ?? 0) > 0) dmg *= 1.2;
+  if (state.utilityDamageBoost > 0) dmg *= 1.25;
 
   if (state.hero.luck > 0 && Math.random() < state.hero.luck) {
     dmg *= 1.75;
@@ -75,8 +78,8 @@ export function attackDamage(state: GameState): number {
 }
 
 export function attackCooldown(state: GameState): number {
-  const hero = HEROES[state.hero.heroId];
-  let cd = hero.attackCooldown * state.hero.attackSpeedMul;
+  const hero = resolveHero(state.hero.heroId);
+  let cd = hero.attackCooldown * state.hero.attackSpeedMul * (state.baseBranchMods?.attackSpeedMul ?? 1);
   if (hasRelic(state, "overcharge")) cd *= 0.7;
   if ((state.hero.marksmanTimer ?? 0) > 0) cd *= 0.75;
   return cd;
@@ -103,23 +106,29 @@ export function addFx(
 export function killEnemy(state: GameState, e: EnemyUnit): void {
   if (!e.alive) return;
   e.alive = false;
+  state.kills += 1;
+  if (isBossKind(e.kind)) state.bossesKilled += 1;
+  if (isEliteKind(e.kind)) state.elitesKilled += 1;
   let gold = e.goldReward * killGoldRelicMul(state);
-  gold += state.hero.killGoldBonus;
+  gold += state.hero.killGoldBonus + (state.baseBranchMods?.killGoldFlat ?? 0);
+  if (state.utilityBountyKills > 0) {
+    gold += 8;
+    state.utilityBountyKills -= 1;
+  }
   state.gold += gold;
+  state.goldFromKills += gold;
+  state.peakGold = Math.max(state.peakGold, state.gold);
   grantKillXp(state, e);
   if (hasRelic(state, "blood_tithe")) {
     state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 4);
   }
-  // Ranger Marksman
-  if (state.hero.heroId === "ranger") {
+  if (heroHasPassive(state.hero.heroId, "marksman")) {
     state.hero.marksmanTimer = 2.5;
   }
-  // Coil Overcharge
-  if (state.hero.heroId === "coil") {
+  if (heroHasPassive(state.hero.heroId, "overcharge")) {
     state.hero.overchargeTimer = 2;
   }
-  // Void Riftmark
-  if (state.hero.heroId === "void" && state.hero.abilityCds[0] != null) {
+  if (heroHasPassive(state.hero.heroId, "riftmark") && state.hero.abilityCds[0] != null) {
     state.hero.abilityCds[0] = Math.max(0, state.hero.abilityCds[0]! * 0.85);
   }
 }
@@ -133,7 +142,8 @@ export function damageEnemy(
   if (!e.alive || damage <= 0) return;
 
   let dmg = damage;
-  if (opts?.fromBasic && state.hero.heroId === "arbalest") {
+  const pid = resolveHero(state.hero.heroId).passive.id;
+  if (opts?.fromBasic && pid === "siege_focus") {
     if (e.kind === "brute" || isEliteKind(e.kind) || isBossKind(e.kind)) dmg *= 1.4;
   }
   if (hasRelic(state, "line_tyrant") && (isEliteKind(e.kind) || isBossKind(e.kind))) {
@@ -143,51 +153,46 @@ export function damageEnemy(
     dmg *= 1.4;
     state.hero.mirageEmpowered = false;
   }
-  if (opts?.fromBasic && state.hero.heroId === "ember" && e.alive) {
-    // Scorch splash handled below like splinter
-  }
 
   e.hp -= dmg;
+  state.damageDealt += dmg;
   if (opts?.fromBasic || dmg >= 3) playSfx("hit");
 
   if (
     opts?.lifesteal ||
     (opts?.fromBasic && hasRelic(state, "hungry_blade")) ||
-    (opts?.fromBasic && state.hero.heroId === "thorn") ||
+    (opts?.fromBasic && pid === "sap") ||
     hasRelic(state, "vampiric_edge")
   ) {
     let steal = 0;
     if (hasRelic(state, "vampiric_edge")) steal = Math.max(steal, 0.1);
     if (opts?.fromBasic && hasRelic(state, "hungry_blade")) steal = Math.max(steal, 0.18);
-    if (opts?.fromBasic && state.hero.heroId === "thorn") steal = Math.max(steal, 0.12);
+    if (opts?.fromBasic && pid === "sap") steal = Math.max(steal, 0.12);
     if (opts?.lifesteal) steal = Math.max(steal, 0.18);
     if (steal > 0) {
-      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + dmg * steal);
+      const heal = dmg * steal;
+      const before = state.hero.hp;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + heal);
+      state.healingDone += Math.max(0, state.hero.hp - before);
     }
   }
+  const heroDef = resolveHero(state.hero.heroId);
   if (
     opts?.slow ||
     (opts?.fromBasic &&
-      (state.hero.heroId === "frost" ||
-        state.hero.heroId === "thorn" ||
-        state.hero.heroId === "tempest" ||
+      (pid === "sap" ||
+        pid === "gale" ||
+        heroDef.attackStyle === "frostbolt" ||
         hasRelic(state, "frost_sigil")))
   ) {
     const mul =
-      state.hero.heroId === "thorn"
-        ? 0.35
-        : state.hero.heroId === "frost"
-          ? 0.6
-          : state.hero.heroId === "tempest"
-            ? 0.8
-            : 0.75;
-    const dur =
-      state.hero.heroId === "thorn" ? 0.85 : state.hero.heroId === "frost" ? 1.5 : 1.0;
+      pid === "sap" ? 0.35 : heroDef.attackStyle === "frostbolt" ? 0.6 : pid === "gale" ? 0.8 : 0.75;
+    const dur = pid === "sap" ? 0.85 : heroDef.attackStyle === "frostbolt" ? 1.5 : 1.0;
     applySlow(e, mul, dur);
   }
   const splashRelic =
     opts?.fromBasic && (hasRelic(state, "splinter_tip") || hasRelic(state, "shockwave_core"));
-  const emberSplash = opts?.fromBasic && state.hero.heroId === "ember";
+  const emberSplash = opts?.fromBasic && pid === "scorch";
   if ((opts?.splash || splashRelic || emberSplash) && e.alive) {
     const splash =
       dmg *
@@ -196,15 +201,17 @@ export function damageEnemy(
       if (!other.alive || other.id === e.id) continue;
       if (dist(e, other) <= 55 + other.radius) {
         other.hp -= splash;
+        state.damageDealt += splash;
         if (other.hp <= 0) killEnemy(state, other);
       }
     }
   }
-  // Prism Refraction
-  if (opts?.fromBasic && state.hero.heroId === "prism" && e.alive) {
+  if (opts?.fromBasic && pid === "refraction" && e.alive) {
     const other = nearestEnemy(state, e, e.id);
     if (other && dist(e, other) <= 80) {
-      other.hp -= dmg * 0.25;
+      const splashR = dmg * 0.25;
+      other.hp -= splashR;
+      state.damageDealt += splashR;
       if (other.hp <= 0) killEnemy(state, other);
     }
   }
@@ -248,7 +255,7 @@ function fireStyle(
   dmg: number,
   bounce: number,
 ): void {
-  const heroDef = HEROES[state.hero.heroId as HeroId];
+  const heroDef = resolveHero(state.hero.heroId);
   switch (style) {
     case "bolt":
     case "frostbolt": {
@@ -384,13 +391,152 @@ function fireStyle(
       });
       break;
     }
+    case "hex": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 420),
+        vy: facing.y * (heroDef.projectileSpeed || 420),
+        damage: dmg,
+        radius: 4.5,
+        kind: "bolt",
+        color: "#c080ff",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        appliesSlow: true,
+        hexDot: true,
+      });
+      break;
+    }
+    case "wind": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 620),
+        vy: facing.y * (heroDef.projectileSpeed || 620),
+        damage: dmg,
+        radius: 3.5,
+        kind: "bolt",
+        color: "#a8d8ff",
+        pierceLeft: 3,
+        bouncesLeft: bounce,
+        fromBasic: true,
+        appliesSlow: true,
+      });
+      break;
+    }
+    case "syringe": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 420),
+        vy: facing.y * (heroDef.projectileSpeed || 420),
+        damage: dmg,
+        radius: 3.5,
+        kind: "bolt",
+        color: "#90f0b0",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        healOnHit: 5,
+        life: 0.55,
+      });
+      break;
+    }
+    case "emberbolt": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 520),
+        vy: facing.y * (heroDef.projectileSpeed || 520),
+        damage: dmg,
+        radius: 5,
+        kind: "bolt",
+        color: "#ff8040",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        burnDot: true,
+      });
+      break;
+    }
+    case "needle": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 680),
+        vy: facing.y * (heroDef.projectileSpeed || 680),
+        damage: dmg,
+        radius: 3,
+        kind: "heavy",
+        color: "#9a70ff",
+        pierceLeft: 4,
+        bouncesLeft: bounce,
+        fromBasic: true,
+      });
+      break;
+    }
+    case "echo": {
+      const spread = 0.12;
+      for (const s of [-1, 1]) {
+        const a = angle + s * spread;
+        pushProjectile(state, {
+          x: state.hero.x,
+          y: state.hero.y,
+          vx: Math.cos(a) * (heroDef.projectileSpeed || 540),
+          vy: Math.sin(a) * (heroDef.projectileSpeed || 540),
+          damage: dmg * 0.72,
+          radius: 3.5,
+          kind: "bolt",
+          color: "#50d0d8",
+          bouncesLeft: bounce,
+          fromBasic: true,
+        });
+      }
+      break;
+    }
+    case "warpbolt": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 500),
+        vy: facing.y * (heroDef.projectileSpeed || 500),
+        damage: dmg,
+        radius: 3.5,
+        kind: "bolt",
+        color: "#48c8e8",
+        bouncesLeft: bounce,
+        fromBasic: true,
+      });
+      // Pads act as mini-turrets — each fires a random-direction bolt
+      const tp = state.teleporters;
+      const padBolt = (px: number, py: number) => {
+        const a = Math.random() * Math.PI * 2;
+        pushProjectile(state, {
+          x: px,
+          y: py,
+          vx: Math.cos(a) * 420,
+          vy: Math.sin(a) * 420,
+          damage: dmg * 0.7,
+          radius: 3,
+          kind: "bolt",
+          color: "#78e0f8",
+          fromBasic: true,
+          life: 0.7,
+        });
+      };
+      if (tp.a) padBolt(tp.a.x, tp.a.y);
+      if (tp.b) padBolt(tp.b.x, tp.b.y);
+      break;
+    }
+    case "spin":
+      // Gyro spin damage is handled in tickHeroKits while attack is held.
+      break;
     case "chaos":
       break;
   }
 }
 
 export function enemyInAttackRange(state: GameState): boolean {
-  const heroDef = HEROES[state.hero.heroId as HeroId];
+  const heroDef = resolveHero(state.hero.heroId);
   const range = heroDef.attackRange;
   for (const e of state.enemies) {
     if (!e.alive) continue;
@@ -406,8 +552,15 @@ export function enemyInAttackRange(state: GameState): boolean {
  * - engage: must have an enemy inside attackRange
  */
 export function tryBasicAttack(state: GameState): boolean {
-  const heroDef = HEROES[state.hero.heroId as HeroId];
-
+  const heroDef = resolveHero(state.hero.heroId);
+  if (heroDef.attackStyle === "spin") return false;
+  // Gyro kit can't attack while blades are detached
+  if (
+    heroUsesGyroKit(state.hero.heroId) &&
+    (state.hero.bladeMode ?? "wrapped") !== "wrapped"
+  ) {
+    return false;
+  }
   let facing: Vec2;
   if (heroDef.aimMode === "auto") {
     const target = nearestEnemy(state);
@@ -422,7 +575,7 @@ export function tryBasicAttack(state: GameState): boolean {
   const dmg = attackDamage(state);
   const bounce = hasRelic(state, "chain_spark") ? 1 : 0;
 
-  let style = heroDef.attackStyle;
+  let style: AttackStyle = heroDef.attackStyle;
   if (style === "chaos") {
     const idx = state.hero.chaosIndex ?? 0;
     style = CHAOS_STYLES[idx % CHAOS_STYLES.length]!;
@@ -431,6 +584,7 @@ export function tryBasicAttack(state: GameState): boolean {
 
   fireStyle(state, style, facing, angle, dmg, bounce);
   state.hero.attackCd = attackCooldown(state);
+  state.basicsFired += 1;
   return true;
 }
 
@@ -450,10 +604,12 @@ export function bounceProjectile(state: GameState, p: Projectile, hitId: number)
 
 export function applyPlayerDamage(state: GameState, amount: number): void {
   if (amount <= 0 || !state.hero.alive) return;
+  if (areCheatsEnabled() && loadCheatOptions().godMode) return;
   let dmg = amount;
   if (hasRelic(state, "blood_price")) dmg *= 1.25;
-  if (state.hero.heroId === "titan" && state.hero.barrierTimer > 0) dmg *= 0.85;
+  if (heroHasPassive(state.hero.heroId, "bedrock") && state.hero.barrierTimer > 0) dmg *= 0.85;
   state.hero.hp -= dmg;
+  state.damageTaken += dmg;
   state.damageFlash = Math.max(state.damageFlash, 0.28);
   state.vignette = Math.max(state.vignette, 0.45);
   state.hitFlash = Math.max(state.hitFlash, 0.18);

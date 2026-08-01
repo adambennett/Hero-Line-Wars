@@ -1,6 +1,7 @@
 /** Lane layouts — same world size, different geometry. */
 
 import { MAP_H, MAP_W } from "./constants";
+import { isMapUnlocked } from "../meta/contentLocks";
 
 export type MapId =
   | "classic"
@@ -17,7 +18,11 @@ export type MapId =
   | "mirror_trench"
   | "bastion_run"
   | "crushing_corridor"
-  | "eclipse_gauntlet";
+  | "eclipse_gauntlet"
+  | "hex_warrens"
+  | "ascendant_spine"
+  | "treasure_vein"
+  | "tourist_loop";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -43,8 +48,12 @@ export type TurretSlot = {
   y: number;
 };
 
+export type EffectRect = Rect & { label?: string };
+export type WindCurrentZone = EffectRect & { vx: number; vy: number };
+export type SpikePulsePoint = { x: number; y: number; radius: number; damage?: number };
+
 export type MapDef = {
-  id: MapId;
+  id: MapId | string;
   name: string;
   blurb: string;
   laneTop: number;
@@ -71,6 +80,20 @@ export type MapDef = {
   eclipseFog?: boolean;
   /** Alternate between two spawn Y bands. */
   dualSpawners?: boolean;
+  /** Boost chest spawn rolls. */
+  chestMagnet?: boolean;
+  /** Standing heals heroes. */
+  healSprings?: EffectRect[];
+  /** Slows units inside. */
+  slowMires?: EffectRect[];
+  /** Brief move-speed buff pads. */
+  hastePads?: EffectRect[];
+  /** Gold/sec while standing. */
+  goldVents?: EffectRect[];
+  /** Push vector zones. */
+  windCurrents?: WindCurrentZone[];
+  /** Periodic point AoE damage. */
+  spikePulses?: SpikePulsePoint[];
 };
 
 /** Scale Y coords authored against the old 560-tall map. */
@@ -470,20 +493,120 @@ export const MAPS: Record<MapId, MapDef> = {
     eclipseFog: true,
     dualSpawners: true,
   },
+  hex_warrens: {
+    id: "hex_warrens",
+    name: "Hex Warrens",
+    blurb: "Challenge map — twisted cover and a tight killbox mid.",
+    laneTop: sy(100),
+    laneBottom: MAP_H - sy(100),
+    base: { x: 50, y: MID_Y, radius: 44, maxHp: 110 },
+    shop: { x: 140, y: MID_Y + sy(90), radius: 34, interactRange: 52 },
+    spawner: { x: MAP_W - 50, y: MID_Y, radius: 26 },
+    highGrounds: [HG(420, 200, 140, 120), HG(900, 170, 120, 180)],
+    obstacles: [
+      { x: 300, y: sy(120), w: 36, h: sh(90) },
+      { x: 300, y: sy(340), w: 36, h: sh(90) },
+      { x: 560, y: MID_Y - sh(50), w: 70, h: sh(100) },
+      { x: 820, y: sy(140), w: 40, h: sh(60) },
+      { x: 820, y: sy(350), w: 40, h: sh(60) },
+      { x: 1150, y: MID_Y - sh(40), w: 48, h: sh(80) },
+    ],
+    turretSlots: [
+      { x: 110, y: sy(200) },
+      { x: 110, y: sy(360) },
+      { x: 190, y: MID_Y },
+    ],
+  },
+  ascendant_spine: {
+    id: "ascendant_spine",
+    name: "Ascendant Spine",
+    blurb: "Challenge map — long spine high-grounds and sparse cover.",
+    laneTop: sy(80),
+    laneBottom: MAP_H - sy(80),
+    base: { x: 55, y: MID_Y, radius: 46, maxHp: 125 },
+    shop: { x: 155, y: MID_Y - sy(100), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 55, y: MID_Y, radius: 28 },
+    highGrounds: [HG(280, 160, 900, 200)],
+    obstacles: [
+      { x: 400, y: sy(100), w: 30, h: sh(50) },
+      { x: 400, y: sy(400), w: 30, h: sh(50) },
+      { x: 750, y: sy(110), w: 30, h: sh(50) },
+      { x: 750, y: sy(390), w: 30, h: sh(50) },
+      { x: 1100, y: MID_Y - sh(30), w: 40, h: sh(60) },
+    ],
+    turretSlots: [
+      { x: 115, y: sy(190) },
+      { x: 115, y: sy(370) },
+      { x: 200, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+  },
+  treasure_vein: {
+    id: "treasure_vein",
+    name: "Treasure Vein",
+    blurb: "Challenge map — open flanks favor chest hunting and skirmishes.",
+    laneTop: sy(70),
+    laneBottom: MAP_H - sy(70),
+    base: { x: 52, y: MID_Y, radius: 45, maxHp: 115 },
+    shop: { x: 150, y: MID_Y + sy(110), radius: 38, interactRange: 58 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 28 },
+    highGrounds: [HG(600, 140, 160, 240)],
+    obstacles: [
+      { x: 350, y: MID_Y - sh(25), w: 50, h: sh(50) },
+      { x: 700, y: sy(120), w: 40, h: sh(40) },
+      { x: 700, y: sy(400), w: 40, h: sh(40) },
+      { x: 1050, y: MID_Y - sh(35), w: 55, h: sh(70) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(185) },
+      { x: 120, y: sy(375) },
+      { x: 205, y: MID_Y },
+    ],
+  },
+  tourist_loop: {
+    id: "tourist_loop",
+    name: "Tourist Loop",
+    blurb: "Challenge map — shifting rocks and dual spawners for veterans.",
+    laneTop: sy(95),
+    laneBottom: MAP_H - sy(95),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 120 },
+    shop: { x: 148, y: MID_Y - sy(90), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y - sy(50), radius: 26 },
+    spawnerAlt: { x: MAP_W - 52, y: MID_Y + sy(50), radius: 26 },
+    highGrounds: [HG(480, 190, 200, 140)],
+    obstacles: [
+      { x: 320, y: sy(150), w: 42, h: sh(55) },
+      { x: 320, y: sy(350), w: 42, h: sh(55) },
+      { x: 640, y: MID_Y - sh(45), w: 50, h: sh(90) },
+      { x: 980, y: sy(160), w: 38, h: sh(50) },
+      { x: 980, y: sy(350), w: 38, h: sh(50) },
+    ],
+    turretSlots: [
+      { x: 118, y: sy(195) },
+      { x: 118, y: sy(365) },
+      { x: 198, y: MID_Y },
+    ],
+    shiftingObstacles: true,
+    dualSpawners: true,
+  },
 };
 
 export const MAP_LIST: MapDef[] = Object.values(MAPS);
 
-export function getMap(id: MapId): MapDef {
-  return MAPS[id];
+export function getMap(id: MapId | string): MapDef {
+  const builtin = MAPS[id as MapId];
+  if (builtin) return builtin;
+  // Custom maps are resolved via custom/registry.resolveMap — fallback classic.
+  return MAPS.classic;
 }
 
 export function pickRandomMap(): MapId {
-  const list = MAP_LIST;
-  return list[Math.floor(Math.random() * list.length)]!.id;
+  const list = MAP_LIST.filter((m) => isMapUnlocked(m.id as MapId));
+  const pool = list.length ? list : MAP_LIST;
+  return pool[Math.floor(Math.random() * pool.length)]!.id as MapId;
 }
 
-export function resolveMapChoice(choice: MapId | "random"): MapId {
+export function resolveMapChoice(choice: MapId | string | "random"): MapId | string {
   return choice === "random" ? pickRandomMap() : choice;
 }
 

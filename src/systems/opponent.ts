@@ -35,6 +35,12 @@ export type OpponentState = {
   vizHeroY: number;
   vizEnemies: { x: number; y: number; r: number; color: string; sent: boolean }[];
   thinkCd: number;
+  /** Soft curses from player Curses hero. */
+  curseShopBlock?: number;
+  curseSendBlock?: number;
+  curseUpgradeBlock?: number;
+  curseIncomeTaxTimer?: number;
+  curseIncomeTaxMul?: number;
 };
 
 function pickOpponentHero(playerId: HeroId): HeroId {
@@ -89,6 +95,7 @@ export function queueSendToOpponent(state: GameState, pending: PendingSend, pack
 
 function tryAiSend(state: GameState): void {
   const opp = state.opponent;
+  if ((opp.curseSendBlock ?? 0) > 0) return;
   const unlocked = SEND_PACKS.filter((p) => p.minBaseLevel <= opp.baseLevel);
   if (unlocked.length === 0) return;
 
@@ -121,7 +128,15 @@ function tryAiSend(state: GameState): void {
 
 export function updateOpponent(state: GameState, dt: number): void {
   const opp = state.opponent;
-  opp.gold += opp.incomePerSec * dt;
+  let income = opp.incomePerSec;
+  if ((opp.curseIncomeTaxTimer ?? 0) > 0) {
+    income *= opp.curseIncomeTaxMul ?? 1;
+    opp.curseIncomeTaxTimer = Math.max(0, (opp.curseIncomeTaxTimer ?? 0) - dt);
+  }
+  opp.curseShopBlock = Math.max(0, (opp.curseShopBlock ?? 0) - dt);
+  opp.curseSendBlock = Math.max(0, (opp.curseSendBlock ?? 0) - dt);
+  opp.curseUpgradeBlock = Math.max(0, (opp.curseUpgradeBlock ?? 0) - dt);
+  opp.gold += income * dt;
   opp.sendFlash = Math.max(0, opp.sendFlash - dt);
   opp.thinkCd -= dt;
 
@@ -167,7 +182,7 @@ export function updateOpponent(state: GameState, dt: number): void {
     opp.pressure = Math.max(0, opp.pressure * 0.92);
     // Heal a bit between waves
     opp.heroHp = Math.min(opp.heroMaxHp, opp.heroHp + 8 * dt);
-    if (opp.baseLevel < state.baseLevel && Math.random() < 0.2 * dt) {
+    if (opp.baseLevel < state.baseLevel && (opp.curseUpgradeBlock ?? 0) <= 0 && Math.random() < 0.2 * dt) {
       opp.baseLevel += 1;
     }
   }

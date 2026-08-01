@@ -69,7 +69,7 @@ function pickHero(seed: number): HeroId {
 }
 
 function pickMap(seed: number): MapId {
-  return MAP_LIST[Math.abs(seed) % MAP_LIST.length]!.id;
+  return MAP_LIST[Math.abs(seed) % MAP_LIST.length]!.id as MapId;
 }
 
 /** Headless unlimited-wave duel: trainee on lane 0 vs scripted (or rival genome) on lane 1. */

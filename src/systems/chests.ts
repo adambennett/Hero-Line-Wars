@@ -4,7 +4,7 @@ import { draftRelicChoices, type RelicId } from "../data/relics";
 import { RELICS } from "../data/relics";
 import { SHOP_ITEMS, type ShopItemId } from "../data/shop";
 import { dist } from "../game/math";
-import type { ChestRarity, ChestUnit, GameState } from "../game/state";
+import type { ChestRarity, ChestRewardOption, ChestUnit, GameState } from "../game/state";
 import { buyShopItem } from "./shop";
 import { pickRelic } from "./relics";
 import { playSfx } from "./audio";
@@ -28,79 +28,143 @@ function rollChestRarity(): { rarity: ChestRarity; openSec: number } {
   return { rarity: "common", openSec: 1.4 };
 }
 
-function grantChestReward(state: GameState, rarity: ChestRarity): void {
+function rollRewardOption(rarity: ChestRarity): ChestRewardOption {
   const roll = Math.random();
   if (rarity === "common") {
     const gold = 18 + Math.floor(Math.random() * 16);
-    state.gold += gold;
-    state.toast = `Chest: +${gold} gold`;
-  } else if (rarity === "uncommon") {
+    return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "Quick pocket change." };
+  }
+  if (rarity === "uncommon") {
     if (roll < 0.55) {
       const gold = 35 + Math.floor(Math.random() * 25);
-      state.gold += gold;
-      state.toast = `Chest: +${gold} gold`;
-    } else {
-      const pool = SHOP_ITEMS.filter((i) => i.category === "gear" && i.rarity === "common");
-      const item = pool[Math.floor(Math.random() * pool.length)];
-      if (item) {
-        state.shopOffer = [item.id, ...state.shopOffer.filter((x) => x !== item.id)].slice(0, 3);
-        const err = buyShopItem(state, item.id);
-        state.toast = err ? `Chest: ${item.name} (couldn't buy)` : `Chest: ${item.name}`;
-        if (err) state.gold += 40;
-      }
+      return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "A solid haul." };
     }
-  } else if (rarity === "rare") {
+    const pool = SHOP_ITEMS.filter((i) => i.category === "gear" && i.rarity === "common");
+    const item = pool[Math.floor(Math.random() * pool.length)];
+    if (item) {
+      return {
+        kind: "item",
+        itemId: item.id,
+        label: item.name,
+        blurb: item.effect,
+      };
+    }
+    return { kind: "gold", amount: 40, label: "+40 Gold", blurb: "Fallback purse." };
+  }
+  if (rarity === "rare") {
     if (roll < 0.4) {
       const gold = 70 + Math.floor(Math.random() * 40);
-      state.gold += gold;
-      state.toast = `Chest: +${gold} gold`;
-    } else {
-      const pool = SHOP_ITEMS.filter(
-        (i) => i.category === "gear" && (i.rarity === "uncommon" || i.rarity === "rare"),
-      );
-      const item = pool[Math.floor(Math.random() * pool.length)];
-      if (item) {
-        // Force-apply as free grant
-        const prevOffer = state.shopOffer;
-        state.shopOffer = [item.id];
-        const costGold = state.gold;
-        state.gold += 9999;
-        buyShopItem(state, item.id as ShopItemId);
-        state.gold = costGold;
-        state.shopOffer = prevOffer;
-        state.toast = `Chest: ${item.name}`;
-      }
+      return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "Heavy purse." };
     }
-  } else {
-    // mythic — small relic or big gold
-    if (roll < 0.55) {
+    const pool = SHOP_ITEMS.filter(
+      (i) => i.category === "gear" && (i.rarity === "uncommon" || i.rarity === "rare"),
+    );
+    const item = pool[Math.floor(Math.random() * pool.length)];
+    if (item) {
+      return {
+        kind: "item",
+        itemId: item.id,
+        label: item.name,
+        blurb: item.effect,
+      };
+    }
+    return { kind: "gold", amount: 80, label: "+80 Gold", blurb: "Fallback purse." };
+  }
+  // mythic
+  if (roll < 0.55) {
+    const choices = draftRelicChoices([], 1).filter((id) => {
+      const r = RELICS[id].rarity;
+      return r === "common" || r === "uncommon";
+    });
+    const id = (choices[0] ?? draftRelicChoices([], 1)[0]) as RelicId | undefined;
+    if (id) {
+      return {
+        kind: "relic",
+        relicId: id,
+        label: RELICS[id].name,
+        blurb: RELICS[id].blurb,
+      };
+    }
+  }
+  const g = 100 + Math.floor(Math.random() * 60);
+  return { kind: "gold", amount: g, label: `+${g} Gold`, blurb: "Mythic haul." };
+}
+
+function buildChestDraft(state: GameState, rarity: ChestRarity): ChestRewardOption[] {
+  const rollFor = (): ChestRewardOption => {
+    if (rarity === "mythic" && Math.random() < 0.55) {
       const choices = draftRelicChoices(state.relics, 1).filter((id) => {
         const r = RELICS[id].rarity;
         return r === "common" || r === "uncommon";
       });
       const id = (choices[0] ?? draftRelicChoices(state.relics, 1)[0]) as RelicId | undefined;
       if (id) {
-        pickRelic(state, id);
-        state.toast = `Chest relic: ${RELICS[id].name}`;
-      } else {
-        state.gold += 120;
-        state.toast = "Chest: +120 gold";
+        return {
+          kind: "relic",
+          relicId: id,
+          label: RELICS[id].name,
+          blurb: RELICS[id].blurb,
+        };
       }
-    } else {
-      const g = 100 + Math.floor(Math.random() * 60);
-      state.gold += g;
-      state.toast = `Chest: mythic haul +${g} gold`;
     }
+    return rollRewardOption(rarity);
+  };
+  const a = rollFor();
+  let b = rollFor();
+  for (let i = 0; i < 6 && a.label === b.label; i++) b = rollFor();
+  return [a, b];
+}
+
+export function applyChestReward(state: GameState, opt: ChestRewardOption): void {
+  if (opt.kind === "gold") {
+    state.gold += opt.amount;
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "item") {
+    const prevOffer = state.shopOffer;
+    state.shopOffer = [opt.itemId];
+    const costGold = state.gold;
+    state.gold += 9999;
+    buyShopItem(state, opt.itemId as ShopItemId);
+    state.gold = costGold;
+    state.shopOffer = prevOffer;
+    state.toast = `Chest: ${opt.label}`;
+  } else {
+    pickRelic(state, opt.relicId);
+    state.toast = `Chest relic: ${opt.label}`;
   }
-  state.toastTimer = 2;
+  state.toastTimer = 2.2;
   playSfx("buy");
+}
+
+export function chooseChestReward(state: GameState, index: number): void {
+  if (!state.chestDraft || index < 0 || index >= state.chestDraft.length) return;
+  const opt = state.chestDraft[index]!;
+  applyChestReward(state, opt);
+  state.chestDraft = null;
+  state.draftKind = null;
+  state.pausedForDraft = !!(
+    state.relicDraft ||
+    state.levelDraft ||
+    state.baseBranchDraft ||
+    state.utilityDraft ||
+    state.curseDraft
+  );
+}
+
+function pointInRect(
+  x: number,
+  y: number,
+  r: { x: number; y: number; w: number; h: number },
+): boolean {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
 export function trySpawnChest(state: GameState): void {
   if (state.chests.length >= 1) return;
   const living = state.enemies.some((e) => e.alive);
   if (!living) return;
-  if (Math.random() > state.chestSpawnChance) return;
+  const chance = state.chestSpawnChance * (state.map.chestMagnet ? 2.25 : 1);
+  if (Math.random() > chance) return;
 
   const { rarity, openSec } = rollChestRarity();
   const map = state.map;
@@ -142,9 +206,16 @@ export function tickChests(state: GameState, dt: number): void {
     if (standing) {
       c.openProgress += dt;
       if (c.openProgress >= c.openDuration) {
-        grantChestReward(state, c.rarity);
+        // Pick-1-of-2 draft (pauses SP / local lane)
+        state.chestDraft = buildChestDraft(state, c.rarity);
+        state.pausedForDraft = true;
+        state.draftKind = "chest";
+        state.toast = "Chest open — pick a reward!";
+        state.toastTimer = 2;
         addFx(state, c.x, c.y, 36, "#ffe080aa", 0.45);
+        state.chestsOpened += 1;
         c.life = -1;
+        playSfx("ui");
       }
     } else {
       c.openProgress = Math.max(0, c.openProgress - dt * 0.6);
@@ -200,5 +271,84 @@ export function tickMapSpecials(state: GameState, dt: number, waveActive: boolea
   if (map.dualSpawners && waveActive) {
     // Alternate which Y band spawns prefer — flip every 4s
     state.mapActiveSpawner = Math.floor(state.mapSpecialTimer / 4) % 2 === 0 ? 0 : 1;
+  }
+
+  const heroes = [state.hero, ...state.allies];
+
+  for (const zone of map.healSprings ?? []) {
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (pointInRect(h.x, h.y, zone)) {
+        const before = h.hp;
+        h.hp = Math.min(h.maxHp, h.hp + 14 * dt);
+        if (h === state.hero) state.healingDone += Math.max(0, h.hp - before);
+      }
+    }
+  }
+
+  for (const zone of map.slowMires ?? []) {
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (pointInRect(h.x, h.y, zone)) {
+        h.slowMul = Math.min(h.slowMul ?? 1, 0.55);
+        h.slowTimer = Math.max(h.slowTimer ?? 0, 0.2);
+      }
+    }
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (pointInRect(e.x, e.y, zone)) {
+        e.slowMul = Math.min(e.slowMul ?? 1, 0.6);
+        e.slowTimer = Math.max(e.slowTimer ?? 0, 0.25);
+      }
+    }
+  }
+
+  for (const zone of map.hastePads ?? []) {
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (pointInRect(h.x, h.y, zone)) {
+        h.zipSpeedTimer = Math.max(h.zipSpeedTimer ?? 0, 0.35);
+      }
+    }
+  }
+
+  for (const zone of map.goldVents ?? []) {
+    if (state.hero.alive && pointInRect(state.hero.x, state.hero.y, zone)) {
+      state.gold += 2.5 * dt;
+    }
+  }
+
+  for (const zone of map.windCurrents ?? []) {
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (!pointInRect(h.x, h.y, zone)) continue;
+      h.x += zone.vx * dt;
+      h.y += zone.vy * dt;
+      h.y = Math.max(map.laneTop + h.radius, Math.min(map.laneBottom - h.radius, h.y));
+      h.x = Math.max(h.radius, Math.min(MAP_W - h.radius, h.x));
+    }
+  }
+
+  for (const spike of map.spikePulses ?? []) {
+    // Pulse every ~2.2s
+    const phase = Math.floor(state.mapSpecialTimer / 2.2);
+    const prev = Math.floor((state.mapSpecialTimer - dt) / 2.2);
+    if (phase === prev) continue;
+    const r = spike.radius || 36;
+    const dmg = spike.damage ?? 22;
+    addFx(state, spike.x, spike.y, r, "#ff706055", 0.35);
+    for (const h of heroes) {
+      if (!h.alive) continue;
+      if (dist(h, spike) <= r + h.radius) {
+        h.hp -= dmg;
+        if (h.hp < 0.01 && h === state.hero) h.hp = 0.01;
+      }
+    }
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(e, spike) <= r + e.radius) {
+        e.hp -= dmg * 0.65;
+      }
+    }
   }
 }
