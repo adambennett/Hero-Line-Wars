@@ -3,6 +3,7 @@
  */
 
 import { MAP_H, MAP_W } from "../data/constants";
+import { MAP_LIST, type MapDef } from "../data/maps";
 import {
   defaultCustomMap,
   deleteCustomMap,
@@ -43,22 +44,42 @@ type SelKind =
   | { k: "wind"; i: number }
   | { k: "spike"; i: number };
 
+type PendingConfirm = "reset" | "reset-lane" | "load-template";
+
+const SPECIAL_TOOLTIPS: Record<string, string> = {
+  shiftingObstacles: "Between waves, obstacles reshuffle within the lane.",
+  shrinkingLane: "During waves, lane edges slowly close in.",
+  movingHazards: "A moving damage hazard drifts mid-lane during waves.",
+  eclipseFog: "Periodic fog that dims vision across the lane.",
+  dualSpawners: "Waves alternate between primary and alt spawner pads.",
+  chestMagnet: "Boosts the chance for chests to spawn.",
+  riftSurges: "Periodic horizontal rifts yank units toward lane mid-X during waves.",
+  volatileOrbs: "Spawns delayed explosive orbs in the lane during waves.",
+};
+
 export class MapEditorPanel {
   draft: CustomMapDef = defaultCustomMap({ id: newCustomMapId() });
   tool: MapEditorTool = "select";
   selected: SelKind | null = null;
   private drag: { ox: number; oy: number; sx: number; sy: number } | null = null;
+  private pendingConfirm: PendingConfirm | null = null;
+  /** `builtin:<id>` or `custom:<id>` awaiting confirm. */
+  private pendingTemplateKey: string | null = null;
   status = "";
 
   load(id: string | null): void {
+    this.pendingConfirm = null;
+    this.pendingTemplateKey = null;
     if (!id) {
       this.draft = defaultCustomMap({ id: newCustomMapId() });
       this.selected = null;
+      this.ensureDualSpawnerMarker();
       return;
     }
     const found = listCustomMaps().find((m) => m.id === id);
     this.draft = found ? structuredClone(found) : defaultCustomMap({ id: newCustomMapId() });
     this.selected = null;
+    this.ensureDualSpawnerMarker();
   }
 
   libraryHtml(): string {
@@ -70,6 +91,37 @@ export class MapEditorPanel {
           `<button type="button" class="menu-btn small ${m.id === this.draft.id ? "primary" : ""}" data-action="me-load" data-id="${m.id}">${escape(m.name)}</button>`,
       )
       .join("");
+  }
+
+  private templatePickerHtml(): string {
+    const customs = listCustomMaps();
+    const builtinOpts = MAP_LIST.map(
+      (m) => `<option value="builtin:${escapeAttr(m.id)}">${escape(m.name)}</option>`,
+    ).join("");
+    const customOpts = customs.length
+      ? customs
+          .map((m) => `<option value="custom:${escapeAttr(m.id)}">${escape(m.name)}</option>`)
+          .join("")
+      : `<option value="" disabled>(none saved yet)</option>`;
+    return `
+      <label class="run-field"><span>Load template…</span>
+        <select data-me-template>
+          <option value="">Choose a map…</option>
+          <optgroup label="Built-in">${builtinOpts}</optgroup>
+          <optgroup label="Custom library">${customOpts}</optgroup>
+        </select>
+      </label>
+      <button type="button" class="menu-btn tiny ghost" data-action="me-load-template">Load as new draft</button>
+    `;
+  }
+
+  private specialFlagHtml(
+    flag: keyof CustomMapDef["specials"],
+    label: string,
+    checked: boolean | undefined,
+  ): string {
+    const tip = SPECIAL_TOOLTIPS[flag] ?? "";
+    return `<label class="chk" title="${escapeAttr(tip)}"><input type="checkbox" data-me-flag="${flag}" ${checked ? "checked" : ""}/> ${label}</label>`;
   }
 
   render(): string {
@@ -110,6 +162,8 @@ export class MapEditorPanel {
               <input type="number" data-me="laneBottom" value="${this.draft.laneBottom}" />
             </div>
           </label>
+          <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane">Reset lane bounds</button>
+          <h3 class="workshop-section-label">Tools</h3>
           <div class="workshop-tools">
             ${tools
               .map(
@@ -120,27 +174,72 @@ export class MapEditorPanel {
           </div>
           <details open class="muted-box" style="margin-top:8px">
             <summary>Specials</summary>
-            <label class="chk"><input type="checkbox" data-me-flag="shiftingObstacles" ${s.shiftingObstacles ? "checked" : ""}/> Shifting obstacles</label>
-            <label class="chk"><input type="checkbox" data-me-flag="shrinkingLane" ${s.shrinkingLane ? "checked" : ""}/> Shrinking lane</label>
-            <label class="chk"><input type="checkbox" data-me-flag="movingHazards" ${s.movingHazards ? "checked" : ""}/> Moving hazards</label>
-            <label class="chk"><input type="checkbox" data-me-flag="eclipseFog" ${s.eclipseFog ? "checked" : ""}/> Eclipse fog</label>
-            <label class="chk"><input type="checkbox" data-me-flag="dualSpawners" ${s.dualSpawners ? "checked" : ""}/> Dual spawners</label>
-            <label class="chk"><input type="checkbox" data-me-flag="chestMagnet" ${s.chestMagnet ? "checked" : ""}/> Chest magnet</label>
+            ${this.specialFlagHtml("shiftingObstacles", "Shifting obstacles", s.shiftingObstacles)}
+            ${this.specialFlagHtml("shrinkingLane", "Shrinking lane", s.shrinkingLane)}
+            ${this.specialFlagHtml("movingHazards", "Moving hazards", s.movingHazards)}
+            ${this.specialFlagHtml("eclipseFog", "Eclipse fog", s.eclipseFog)}
+            ${this.specialFlagHtml("dualSpawners", "Dual spawners", s.dualSpawners)}
+            ${this.specialFlagHtml("chestMagnet", "Chest magnet", s.chestMagnet)}
+            ${this.specialFlagHtml("riftSurges", "Rift surges", s.riftSurges)}
+            ${this.specialFlagHtml("volatileOrbs", "Volatile orbs", s.volatileOrbs)}
           </details>
+          ${this.templatePickerHtml()}
           <div class="workshop-actions">
-            <button type="button" class="menu-btn primary" data-action="me-save">Save</button>
-            <button type="button" class="menu-btn" data-action="me-new">New</button>
-            <button type="button" class="menu-btn" data-action="me-export">Export JSON</button>
-            <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="me-import" hidden /></label>
-            <button type="button" class="menu-btn ghost" data-action="me-delete">Delete</button>
-            <button type="button" class="menu-btn ghost" data-action="me-del-sel">Delete selected</button>
+            <div class="workshop-actions-row primary">
+              <button type="button" class="menu-btn primary" data-action="me-save">Save</button>
+              <button type="button" class="menu-btn" data-action="me-new">New</button>
+            </div>
+            <div class="workshop-actions-row io">
+              <button type="button" class="menu-btn" data-action="me-export">Export JSON</button>
+              <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="me-import" hidden /></label>
+            </div>
+            <div class="workshop-actions-row danger">
+              <button type="button" class="menu-btn ghost" data-action="me-reset">Reset</button>
+              <button type="button" class="menu-btn ghost" data-action="me-delete">Delete</button>
+              <button type="button" class="menu-btn ghost" data-action="me-del-sel">Delete selected</button>
+            </div>
           </div>
           <p class="panel-note">${escape(this.status)}</p>
-          <h3>Library</h3>
+          <h3 class="workshop-section-label" style="margin-top:0.5rem">Library</h3>
           <div class="workshop-lib">${this.libraryHtml()}</div>
         </aside>
         <div class="workshop-canvas-wrap">
           <canvas id="map-editor-canvas" width="${MAP_W}" height="${MAP_H}"></canvas>
+        </div>
+      </div>
+      ${this.confirmOverlayHtml()}
+    `;
+  }
+
+  private confirmOverlayHtml(): string {
+    if (!this.pendingConfirm) return "";
+    const copy =
+      this.pendingConfirm === "reset"
+        ? {
+            title: "Reset map editor?",
+            body: "All unsaved geometry, specials, and settings on this draft will be lost.",
+            confirm: "Reset",
+          }
+        : this.pendingConfirm === "reset-lane"
+          ? {
+              title: "Reset lane bounds?",
+              body: "Lane top and bottom will return to the default values.",
+              confirm: "Reset",
+            }
+          : {
+              title: "Load map as template?",
+              body: "Your current draft will be replaced with a copy of the selected map. The new draft gets a fresh id — the original is unchanged.",
+              confirm: "Load template",
+            };
+    return `
+      <div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="me-confirm-title" aria-describedby="me-confirm-body">
+        <div class="menu-confirm-card">
+          <h1 id="me-confirm-title">${copy.title}</h1>
+          <p id="me-confirm-body">${copy.body}</p>
+          <div class="menu-confirm-actions">
+            <button type="button" data-action="me-confirm-yes">${copy.confirm}</button>
+            <button type="button" data-action="me-confirm-no">Cancel</button>
+          </div>
         </div>
       </div>
     `;
@@ -161,6 +260,8 @@ export class MapEditorPanel {
       el.addEventListener("change", () => {
         const f = el.dataset.meFlag as keyof CustomMapDef["specials"];
         this.draft.specials[f] = el.checked;
+        if (f === "dualSpawners") this.applyDualSpawnersFlag(el.checked);
+        this.paintCanvas();
       });
     });
     const canvas = root.querySelector<HTMLCanvasElement>("#map-editor-canvas");
@@ -181,6 +282,51 @@ export class MapEditorPanel {
     if (action === "me-new") {
       this.load(null);
       this.status = "New map draft.";
+      return true;
+    }
+    if (action === "me-load-template") {
+      const select = document.querySelector<HTMLSelectElement>("[data-me-template]");
+      const key = select?.value?.trim() ?? "";
+      if (!key) {
+        this.status = "Pick a map to load as template.";
+        return true;
+      }
+      this.pendingTemplateKey = key;
+      this.pendingConfirm = "load-template";
+      return true;
+    }
+    if (action === "me-reset") {
+      this.pendingConfirm = "reset";
+      return true;
+    }
+    if (action === "me-reset-lane") {
+      this.pendingConfirm = "reset-lane";
+      return true;
+    }
+    if (action === "me-confirm-no") {
+      this.pendingConfirm = null;
+      this.pendingTemplateKey = null;
+      return true;
+    }
+    if (action === "me-confirm-yes") {
+      const kind = this.pendingConfirm;
+      const templateKey = this.pendingTemplateKey;
+      this.pendingConfirm = null;
+      this.pendingTemplateKey = null;
+      if (kind === "reset") {
+        const id = this.draft.id || newCustomMapId();
+        this.draft = defaultCustomMap({ id });
+        this.selected = null;
+        this.tool = "select";
+        this.status = "Reset to defaults.";
+      } else if (kind === "reset-lane") {
+        const defaults = defaultCustomMap();
+        this.draft.laneTop = defaults.laneTop;
+        this.draft.laneBottom = defaults.laneBottom;
+        this.status = "Lane bounds reset.";
+      } else if (kind === "load-template") {
+        this.applyTemplate(templateKey);
+      }
       return true;
     }
     if (action === "me-save") {
@@ -235,9 +381,63 @@ export class MapEditorPanel {
     else if (s.k === "gold") this.draft.goldVents!.splice(s.i, 1);
     else if (s.k === "wind") this.draft.windCurrents!.splice(s.i, 1);
     else if (s.k === "spike") this.draft.spikePulses!.splice(s.i, 1);
-    else if (s.k === "spawnerAlt") this.draft.spawnerAlt = undefined;
+    else if (s.k === "spawnerAlt") {
+      this.draft.spawnerAlt = undefined;
+      this.draft.specials.dualSpawners = false;
+    }
     this.selected = null;
     this.paintCanvas();
+  }
+
+  /** Keep `spawnerAlt` marker in sync with the Dual spawners special. */
+  private applyDualSpawnersFlag(enabled: boolean): void {
+    if (enabled) {
+      if (!this.draft.spawnerAlt) {
+        this.draft.spawnerAlt = defaultSpawnerAlt(this.draft);
+      }
+      return;
+    }
+    if (this.selected?.k === "spawnerAlt") this.selected = null;
+    this.draft.spawnerAlt = undefined;
+  }
+
+  /** Repair drafts that have the flag but no alt pad (e.g. older saves). */
+  private ensureDualSpawnerMarker(): void {
+    if (this.draft.specials.dualSpawners && !this.draft.spawnerAlt) {
+      this.draft.spawnerAlt = defaultSpawnerAlt(this.draft);
+    }
+  }
+
+  /** Copy a built-in or library map into the editor as a brand-new draft id. */
+  private applyTemplate(key: string | null): void {
+    if (!key) {
+      this.status = "No template selected.";
+      return;
+    }
+    const colon = key.indexOf(":");
+    const kind = colon >= 0 ? key.slice(0, colon) : "";
+    const id = colon >= 0 ? key.slice(colon + 1) : "";
+    let draft: CustomMapDef | null = null;
+    if (kind === "builtin" && id) {
+      const m = MAP_LIST.find((x) => x.id === id);
+      if (m) draft = mapDefToCustomDraft(m);
+    } else if (kind === "custom" && id) {
+      const found = listCustomMaps().find((m) => m.id === id);
+      if (found) {
+        draft = structuredClone(found);
+        draft.id = newCustomMapId();
+        if (!/\(copy\)$/i.test(draft.name)) draft.name = `${draft.name} (copy)`;
+      }
+    }
+    if (!draft) {
+      this.status = "Template not found.";
+      return;
+    }
+    this.draft = draft;
+    this.selected = null;
+    this.tool = "select";
+    this.ensureDualSpawnerMarker();
+    this.status = `Loaded “${draft.name}” as a new draft.`;
   }
 
   private wireCanvas(canvas: HTMLCanvasElement): void {
@@ -290,7 +490,8 @@ export class MapEditorPanel {
         this.draft.spawner.y = y;
         break;
       case "spawnerAlt":
-        this.draft.spawnerAlt = { x, y, radius: 28 };
+        this.draft.spawnerAlt = { x, y, radius: this.draft.spawner.radius || 28 };
+        this.draft.specials.dualSpawners = true;
         break;
       case "obstacle":
         this.draft.obstacles.push({ x: x - 24, y: y - 30, w: 48, h: 60 });
@@ -409,7 +610,54 @@ function validateMap(m: CustomMapDef): string | null {
   if (!m.name.trim()) return "Name required";
   if (m.laneTop >= m.laneBottom - 40) return "Lane bounds invalid";
   if (!m.base || !m.shop || !m.spawner) return "Base, shop, and spawner required";
+  if (m.specials.dualSpawners && !m.spawnerAlt) return "Dual spawners needs an alt spawner";
   return null;
+}
+
+/** Built-in MapDef → editable CustomMapDef with a fresh custom id. */
+function mapDefToCustomDraft(m: MapDef): CustomMapDef {
+  return {
+    id: newCustomMapId(),
+    name: `${m.name} (copy)`,
+    blurb: m.blurb,
+    laneTop: m.laneTop,
+    laneBottom: m.laneBottom,
+    base: structuredClone(m.base),
+    shop: structuredClone(m.shop),
+    spawner: structuredClone(m.spawner),
+    spawnerAlt: m.spawnerAlt ? structuredClone(m.spawnerAlt) : undefined,
+    highGrounds: structuredClone(m.highGrounds ?? []),
+    obstacles: structuredClone(m.obstacles ?? []),
+    turretSlots: structuredClone(m.turretSlots ?? []),
+    specials: {
+      shiftingObstacles: !!m.shiftingObstacles,
+      shrinkingLane: !!m.shrinkingLane,
+      movingHazards: !!m.movingHazards,
+      eclipseFog: !!m.eclipseFog,
+      dualSpawners: !!m.dualSpawners,
+      chestMagnet: !!m.chestMagnet,
+      riftSurges: !!m.riftSurges,
+      volatileOrbs: !!m.volatileOrbs,
+    },
+    healSprings: structuredClone(m.healSprings ?? []),
+    slowMires: structuredClone(m.slowMires ?? []),
+    hastePads: structuredClone(m.hastePads ?? []),
+    goldVents: structuredClone(m.goldVents ?? []),
+    windCurrents: structuredClone(m.windCurrents ?? []),
+    spikePulses: structuredClone(m.spikePulses ?? []),
+  };
+}
+
+/** Second spawner default: same X as primary, offset below (or above if clamped). */
+function defaultSpawnerAlt(m: CustomMapDef): { x: number; y: number; radius: number } {
+  const radius = m.spawner.radius || 28;
+  const yOff = 80;
+  const minY = m.laneTop + radius;
+  const maxY = m.laneBottom - radius;
+  let y = m.spawner.y + yOff;
+  if (y > maxY) y = m.spawner.y - yOff;
+  y = Math.max(minY, Math.min(maxY, y));
+  return { x: m.spawner.x, y, radius };
 }
 
 function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
@@ -513,4 +761,8 @@ function escape(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/"/g, "&quot;");
+}
+
+function escapeAttr(s: string): string {
+  return escape(s).replace(/'/g, "&#39;");
 }

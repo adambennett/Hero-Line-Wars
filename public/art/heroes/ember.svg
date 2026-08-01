@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 64 64" role="img" aria-label="Ember">
+  <defs>
+    <radialGradient id="bg-ember" cx="40%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#243048"/>
+      <stop offset="100%" stop-color="#0a1018"/>
+    </radialGradient>
+    <linearGradient id="rim-ember" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffc090"/>
+      <stop offset="100%" stop-color="#ff6a3a"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg-ember)" stroke="url(#rim-ember)" stroke-width="2.5"/>
+  <circle cx="32" cy="34" r="22" fill="#ff6a3a" opacity="0.08"/>
+  
+    <ellipse cx="32" cy="48" rx="14" ry="8" fill="#ff6a3a" opacity="0.35"/>
+    <path d="M22 46c2-14 6-22 10-26 4 4 8 12 10 26" fill="#ff6a3a" opacity="0.9"/>
+    <circle cx="32" cy="18" r="9" fill="#ff6a3a"/>
+    <circle cx="32" cy="18" r="9" fill="none" stroke="#ffc090" stroke-width="1.5" opacity="0.7"/>
+  <path d="M32 10c8 10 10 16 10 22a10 10 0 1 1-20 0c0-6 4-12 10-22z" fill="#ffc090" opacity="0.8"/>
+      <path d="M32 22c4 6 4 10 4 12a4 4 0 1 1-8 0c0-2 2-6 4-12z" fill="#ff6a3a"/>
+</svg>

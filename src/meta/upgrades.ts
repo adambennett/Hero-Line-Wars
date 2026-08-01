@@ -20,6 +20,10 @@ export type MetaUpgradeId =
   | "unlock_curses"
   | "unlock_warp"
   | "unlock_gyro"
+  | "unlock_chaos"
+  | "unlock_lodestone"
+  | "unlock_chrona"
+  | "unlock_hive"
   | "crest_forge"
   | "bounty_board"
   | "veteran_pay"
@@ -247,6 +251,14 @@ export const META_UPGRADES: MetaUpgradeDef[] = [
     kind: "unlock",
   },
   {
+    id: "unlock_chaos",
+    name: "Commission: Chaos",
+    blurb: "Unlock the chaos mage Chaos for all modes.",
+    maxRank: 1,
+    costs: [50],
+    kind: "unlock",
+  },
+  {
     id: "unlock_ember",
     name: "Commission: Ember",
     blurb: "Unlock the pyromancer Ember.",
@@ -318,6 +330,33 @@ export const META_UPGRADES: MetaUpgradeDef[] = [
     maxRank: 1,
     costs: [75],
     kind: "unlock",
+  },
+  {
+    id: "unlock_lodestone",
+    name: "Commission: Lodestone",
+    blurb: "Unlock the magnet controller Lodestone.",
+    maxRank: 1,
+    costs: [80],
+    kind: "unlock",
+    requiresChallenge: "polarity_prodigy",
+  },
+  {
+    id: "unlock_chrona",
+    name: "Commission: Chrona",
+    blurb: "Unlock the timeweaver Chrona.",
+    maxRank: 1,
+    costs: [80],
+    kind: "unlock",
+    requiresChallenge: "time_keeper",
+  },
+  {
+    id: "unlock_hive",
+    name: "Commission: Hive",
+    blurb: "Unlock the swarmcaller Hive.",
+    maxRank: 1,
+    costs: [80],
+    kind: "unlock",
+    requiresChallenge: "swarm_lord",
   },
   {
     id: "unlock_challenge_items_a",

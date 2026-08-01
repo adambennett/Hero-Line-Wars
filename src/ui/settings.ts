@@ -30,11 +30,20 @@ export type Keybinds = Record<BindableAction, Binding>;
 export type DamageScreenFx = "off" | "reduced" | "full";
 
 export type ClientSettings = {
+  /** Overall gain — multiplies music and SFX. */
   masterVolume: number;
+  /** Menu / battle music submix (0–1), after master. */
+  musicVolume: number;
+  /** Procedural SFX submix (0–1), after master. */
+  sfxVolume: number;
+  /** When false, main-menu playlist stays silent. */
+  menuMusicEnabled: boolean;
   showDamageNumbers: boolean;
   screenShake: boolean;
   reduceMotion: boolean;
   damageScreenFx: DamageScreenFx;
+  /** Open shop once when walking onto the shop pad (default off — press shop bind). */
+  autoOpenShop: boolean;
   keybinds: Keybinds;
   /** Prefer gamepad when a pad is connected and recently used. */
   gamepadEnabled: boolean;
@@ -91,14 +100,23 @@ export type ClientSettingsFull = ClientSettings & {
 
 const DEFAULTS: ClientSettingsFull = {
   masterVolume: 0.7,
+  musicVolume: 0.7,
+  sfxVolume: 0.8,
+  menuMusicEnabled: true,
   showDamageNumbers: true,
   screenShake: true,
   reduceMotion: false,
   damageScreenFx: "full",
+  autoOpenShop: false,
   keybinds: { ...DEFAULT_KEYBINDS },
   gamepadEnabled: true,
   gamepadBinds: { ...DEFAULT_GAMEPAD },
 };
+
+function clamp01(n: unknown, fallback: number): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1, n));
+}
 
 export function loadSettings(): ClientSettingsFull {
   try {
@@ -114,7 +132,13 @@ export function loadSettings(): ClientSettingsFull {
     return {
       ...DEFAULTS,
       ...parsed,
+      masterVolume: clamp01(parsed.masterVolume, DEFAULTS.masterVolume),
+      musicVolume: clamp01(parsed.musicVolume, DEFAULTS.musicVolume),
+      sfxVolume: clamp01(parsed.sfxVolume, DEFAULTS.sfxVolume),
+      menuMusicEnabled:
+        typeof parsed.menuMusicEnabled === "boolean" ? parsed.menuMusicEnabled : DEFAULTS.menuMusicEnabled,
       damageScreenFx: fx === "off" || fx === "reduced" || fx === "full" ? fx : DEFAULTS.damageScreenFx,
+      autoOpenShop: typeof parsed.autoOpenShop === "boolean" ? parsed.autoOpenShop : DEFAULTS.autoOpenShop,
       keybinds: {
         ...DEFAULT_KEYBINDS,
         ...(parsed.keybinds ?? {}),

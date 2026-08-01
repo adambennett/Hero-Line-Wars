@@ -351,4 +351,63 @@ export function tickMapSpecials(state: GameState, dt: number, waveActive: boolea
       }
     }
   }
+
+  if (map.riftSurges && waveActive) {
+    const phase = Math.floor(state.mapSpecialTimer / 5);
+    const prev = Math.floor((state.mapSpecialTimer - dt) / 5);
+    if (phase !== prev) {
+      const midX = (map.base.x + map.spawner.x) / 2;
+      const yank = 40 + Math.random() * 20;
+      addFx(state, midX, (map.laneTop + map.laneBottom) / 2, 80, "#a090ff55", 0.4);
+      for (const h of heroes) {
+        if (!h.alive) continue;
+        const dir = Math.sign(midX - h.x) || 1;
+        h.x += dir * yank;
+        h.x = Math.max(h.radius, Math.min(MAP_W - h.radius, h.x));
+      }
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        const dir = Math.sign(midX - e.x) || 1;
+        e.x += dir * yank;
+        e.x = Math.max(e.radius, Math.min(MAP_W - e.radius, e.x));
+      }
+    }
+  }
+
+  if (map.volatileOrbs) {
+    if (!state.mapOrbs) state.mapOrbs = [];
+    if (waveActive) {
+      const phase = Math.floor(state.mapSpecialTimer / 4);
+      const prev = Math.floor((state.mapSpecialTimer - dt) / 4);
+      if (phase !== prev) {
+        const midY = (map.laneTop + map.laneBottom) / 2;
+        state.mapOrbs.push({
+          x: map.base.x + 180 + Math.random() * (MAP_W - map.base.x - 280),
+          y: midY + (Math.random() - 0.5) * (map.laneBottom - map.laneTop - 60),
+          radius: 38,
+          fuse: 2.2,
+          damage: 28,
+        });
+      }
+    }
+    for (const orb of state.mapOrbs) {
+      orb.fuse -= dt;
+      if (orb.fuse > 0) continue;
+      addFx(state, orb.x, orb.y, orb.radius, "#ff906055", 0.45);
+      for (const h of heroes) {
+        if (!h.alive) continue;
+        if (dist(h, orb) <= orb.radius + h.radius) {
+          h.hp -= orb.damage;
+          if (h.hp < 0.01 && h === state.hero) h.hp = 0.01;
+        }
+      }
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        if (dist(e, orb) <= orb.radius + e.radius) {
+          e.hp -= orb.damage * 0.7;
+        }
+      }
+    }
+    state.mapOrbs = state.mapOrbs.filter((o) => o.fuse > 0);
+  }
 }

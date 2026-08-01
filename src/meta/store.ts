@@ -90,6 +90,7 @@ export function getRank(store: MetaStore, id: MetaUpgradeId): number {
 const HERO_UNLOCK: Partial<Record<HeroId, MetaUpgradeId>> = {
   coil: "unlock_coil",
   thorn: "unlock_thorn",
+  wizard: "unlock_chaos",
   ember: "unlock_ember",
   void: "unlock_void",
   titan: "unlock_titan",
@@ -99,6 +100,9 @@ const HERO_UNLOCK: Partial<Record<HeroId, MetaUpgradeId>> = {
   curses: "unlock_curses",
   warp: "unlock_warp",
   gyro: "unlock_gyro",
+  lodestone: "unlock_lodestone",
+  chrona: "unlock_chrona",
+  hive: "unlock_hive",
 };
 
 export function isHeroUnlocked(heroId: HeroId, store: MetaStore = loadMetaStore()): boolean {

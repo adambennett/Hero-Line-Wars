@@ -28,8 +28,64 @@ export type LobbyState = {
   startingGold: number;
   wavesToWin: number;
   friendlyFire: boolean;
+  /** −1 = Run Start, 0 = Never. */
   utilityDraftLevel?: number;
+  /** 0 = unlimited. */
+  livesPerWave?: number;
+  /** 0 = unlimited. */
+  livesPerRun?: number;
   privacy: "private" | "public";
+  ascension?: number;
+  chestOpenMul?: number;
+  chestDespawnSec?: number;
+  chestSpawnChance?: number;
+  enemyDensityMul?: number;
+  enemyHpMul?: number;
+  enemySpeedMul?: number;
+  incomeMul?: number;
+  respawnMul?: number;
+  startingBaseLevel?: number;
+  levelDraftSize?: number;
+  relicDraftSize?: number;
+  disableArtifacts?: boolean;
+  disableChests?: boolean;
+  disableElites?: boolean;
+  disableBosses?: boolean;
+  disableShop?: boolean;
+  disableSends?: boolean;
+  disableRelics?: boolean;
+  fogAlways?: boolean;
+  doubleElites?: boolean;
+  suddenDeathBaseHp?: number;
+};
+
+/** Host-synced creative / run extras carried on lobby + start. */
+export type MpRunExtras = {
+  utilityDraftLevel?: number;
+  ascension?: number;
+  livesPerWave?: number;
+  livesPerRun?: number;
+  chestOpenMul?: number;
+  chestDespawnSec?: number;
+  chestSpawnChance?: number;
+  enemyDensityMul?: number;
+  enemyHpMul?: number;
+  enemySpeedMul?: number;
+  incomeMul?: number;
+  respawnMul?: number;
+  startingBaseLevel?: number;
+  levelDraftSize?: number;
+  relicDraftSize?: number;
+  disableArtifacts?: boolean;
+  disableChests?: boolean;
+  disableElites?: boolean;
+  disableBosses?: boolean;
+  disableShop?: boolean;
+  disableSends?: boolean;
+  disableRelics?: boolean;
+  fogAlways?: boolean;
+  doubleElites?: boolean;
+  suddenDeathBaseHp?: number;
 };
 
 export type NetMode = "host" | "client" | null;
@@ -68,7 +124,16 @@ export type NetMsg =
   | { k: "unready" }
   /** Client → host: custom defs for the hero/map this peer is using. */
   | { k: "customs"; heroes?: CustomHeroDef[]; maps?: CustomMapDef[] }
-  | { k: "opts"; mapChoice: MapId | string | "random"; maxTurrets: number; startingGold: number; wavesToWin: number; friendlyFire: boolean; utilityDraftLevel?: number }
+  | {
+      k: "opts";
+      mapChoice: MapId | string | "random";
+      maxTurrets: number;
+      startingGold: number;
+      wavesToWin: number;
+      friendlyFire: boolean;
+      utilityDraftLevel?: number;
+      extras?: MpRunExtras;
+    }
   | {
       k: "start";
       mid: string;
@@ -147,6 +212,11 @@ export type LaneSnap = {
   draftKind: string | null;
   pausedForDraft: boolean;
   respawnTimer: number;
+  livesPerWave: number;
+  livesPerRun: number;
+  waveLivesLeft: number;
+  runLivesLeft: number;
+  waveRespawnBlocked: boolean;
   heroes: HeroSnap[];
   enemies: EnemySnap[];
   turrets: {

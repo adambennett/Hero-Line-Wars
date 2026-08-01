@@ -231,6 +231,69 @@ function applyGear(state: GameState, itemId: ShopItemId): void {
       state.hero.luck += 0.15;
       state.hero.damageBonus += 10;
       break;
+    case "jade_anklet":
+      state.hero.speedBonus += 18;
+      break;
+    case "sparring_gloves":
+      state.hero.damageBonus += 3;
+      state.hero.attackSpeedMul *= 0.96;
+      break;
+    case "field_rations":
+      state.hero.maxHp += 18;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 18);
+      break;
+    case "courier_badge":
+      state.incomePerSec += 0.4;
+      break;
+    case "lane_chalk":
+      state.hero.damageBonus += 5;
+      break;
+    case "pulse_bracer":
+      state.hero.damageBonus += 6;
+      state.hero.maxHp += 8;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
+      break;
+    case "mirror_shard":
+      state.hero.luck += 0.1;
+      break;
+    case "harvest_sickle":
+      state.hero.killGoldBonus += 3;
+      break;
+    case "arc_capacitor":
+      state.hero.attackSpeedMul *= 0.9;
+      break;
+    case "grove_charm":
+      state.hero.maxHp += 28;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 14);
+      break;
+    case "siege_grease":
+      state.map.base.maxHp += 25;
+      state.baseHp = Math.min(state.map.base.maxHp, state.baseHp + 25);
+      break;
+    case "whisper_cloak":
+      state.hero.speedBonus += 40;
+      state.hero.luck += 0.06;
+      break;
+    case "xp_primer":
+    case "mentor_tome":
+      break;
+    case "scholar_lens":
+      state.hero.luck += 0.05;
+      break;
+    case "blood_engine":
+      state.hero.bloodEngineStacks = state.hero.bloodEngineStacks ?? 0;
+      break;
+    case "forge_heart":
+      state.maxTurrets += 1;
+      break;
+    case "eclipse_crown":
+      state.incomePerSec += 0.8;
+      break;
+    case "nest_core":
+      state.hero.nestCoreKills = state.hero.nestCoreKills ?? 0;
+      break;
+    case "temporal_coil":
+      break;
     default:
       break;
   }

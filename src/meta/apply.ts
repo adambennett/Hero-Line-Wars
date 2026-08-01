@@ -4,7 +4,7 @@ import { RELIC_LIST, type RelicId } from "../data/relics";
 import type { Rarity } from "../data/rarity";
 import type { GameState } from "../game/state";
 import { pickRelic } from "../systems/relics";
-import { openLevelDraft } from "../systems/xp";
+import { openLevelDraft, openRunStartUtilityDraft } from "../systems/xp";
 import type { RunModifiers, StartingRelicTier } from "./modifiers";
 
 const RARITY_MIN: Record<Exclude<StartingRelicTier, "none">, Rarity[]> = {
@@ -29,6 +29,9 @@ function pickStartingRelicId(tier: StartingRelicTier, owned: RelicId[]): RelicId
 
 /** Call after createState for the player lane. */
 export function applyRunStartExtras(state: GameState, mods: RunModifiers): void {
+  // Creative option: utility draft immediately at run start (before waves).
+  openRunStartUtilityDraft(state);
+
   if (!mods.applyPlayerMeta) return;
 
   if (mods.startingRelic !== "none") {
@@ -38,6 +41,6 @@ export function applyRunStartExtras(state: GameState, mods: RunModifiers): void 
 
   if (mods.startingLevelDrafts > 0) {
     state.pendingLevelUps += mods.startingLevelDrafts;
-    openLevelDraft(state);
+    if (!state.pausedForDraft) openLevelDraft(state);
   }
 }

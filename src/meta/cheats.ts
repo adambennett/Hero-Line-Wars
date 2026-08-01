@@ -37,8 +37,8 @@ function emptyCheatMeta(): MetaStore {
   return {
     crests: 9999,
     ranks: {},
-    ascensionUnlocked: 12,
-    highestAscensionCleared: 12,
+    ascensionUnlocked: 15,
+    highestAscensionCleared: 15,
     totalWins: 0,
     totalRuns: 0,
     bestWave: 0,

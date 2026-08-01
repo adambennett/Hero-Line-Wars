@@ -1,10 +1,13 @@
 import { normalize } from "../game/math";
 import {
+  applyDeathLives,
   chooseCurse,
   chooseLevelUp,
   chooseRelic,
   chooseUtility,
   heroMoveSpeed,
+  laneOutOfRunLives,
+  resetWaveLives,
   skipRelic,
   waveVictoryReached,
   type GameState,
@@ -30,7 +33,6 @@ import { pickBossKind, pickEliteKind, pickEnemyKind, waveTier } from "../data/en
 import {
   ENEMIES_PER_WAVE_BASE,
   MAP_W,
-  RESPAWN,
   WAVE_BREAK_SEC,
   WAVE_SCALE,
 } from "../data/constants";
@@ -56,7 +58,7 @@ function applyOutgoingCurseTo(from: GameState, to: GameState): void {
 import { draftRelicChoices } from "../data/relics";
 import { applySecondWind } from "../systems/relics";
 import { openLevelDraft } from "../systems/xp";
-import { bounceProjectile, applyPlayerDamage, applySlow, damageEnemy, resolveHostileProjectile } from "../systems/combat";
+import { bounceProjectile, applyPlayerDamage, applySlow, damageEnemy, resolveHostileProjectile, steerSeekingProjectile, applyMagnetPull } from "../systems/combat";
 import { setLaneSfxEnabled } from "../systems/audio";
 import type { CombatIntent } from "./types";
 import { emptyIntent } from "./types";
@@ -233,6 +235,7 @@ function startWave(state: GameState): void {
     state.toastTimer = 2.4;
   }
   applyWaveRider(state);
+  resetWaveLives(state);
 }
 
 function popNextSpawn(state: GameState): { hpScale: number; sent: boolean } | null {
@@ -259,22 +262,11 @@ function remainingSpawns(state: GameState): number {
   return state.toSpawn + sentLeft;
 }
 
-function respawnDelay(state: GameState): number {
-  const t =
-    RESPAWN.baseSec + state.wave * RESPAWN.waveFactor + state.deathCount * RESPAWN.deathFactor;
-  return Math.min(RESPAWN.maxSec, t) * state.modifiers.respawnMul;
-}
-
 function killHeroObj(state: GameState, hero: HeroRuntime): void {
   if (!hero.alive) return;
   hero.alive = false;
   hero.hp = 0;
   state.deathCount += 1;
-  if (hero === state.hero || hero.controllerSlot === state.hero.controllerSlot) {
-    state.respawnTimer = respawnDelay(state);
-  } else {
-    hero.attackCd = respawnDelay(state); // reuse as respawn timer for allies
-  }
   if (heroUsesWarpKit(hero.heroId) && hero === state.hero) clearTeleporters(state);
   if (heroUsesGyroKit(hero.heroId)) {
     hero.bladeMode = "wrapped";
@@ -284,8 +276,10 @@ function killHeroObj(state: GameState, hero: HeroRuntime): void {
     hero.bladeHookCharge = 0;
     hero.bladeSpawnGrace = 0.35;
   }
-  state.toast = "Ally downed!";
-  state.toastTimer = 1.4;
+  applyDeathLives(state, hero);
+  if (laneOutOfRunLives(state)) {
+    state.status = "lost";
+  }
 }
 
 function respawnHeroObj(state: GameState, hero: HeroRuntime): void {
@@ -304,6 +298,7 @@ function updateProjectilesMp(state: GameState, dt: number): void {
   const heroes = allLaneHeroes(state);
   for (const p of state.projectiles) {
     if (!p.alive) continue;
+    steerSeekingProjectile(state, p, dt);
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     if (p.life !== undefined) {
@@ -367,6 +362,7 @@ function updateProjectilesMp(state: GameState, dt: number): void {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
         });
+        if (p.magnetPull) applyMagnetPull(state, e, p.magnetPull);
         if (p.appliesSlow) applySlow(e, 0.6, 1.5);
         if ((p.pierceLeft ?? 0) > 0) {
           p.pierceLeft = (p.pierceLeft ?? 0) - 1;
@@ -463,9 +459,11 @@ function updateLaneMp(
   for (const h of allLaneHeroes(state)) {
     if (!h.alive) {
       if (h === state.hero) {
-        state.respawnTimer -= dt;
-        if (state.respawnTimer <= 0) respawnHeroObj(state, h);
-      } else {
+        if (Number.isFinite(state.respawnTimer)) {
+          state.respawnTimer -= dt;
+          if (state.respawnTimer <= 0) respawnHeroObj(state, h);
+        }
+      } else if (Number.isFinite(h.attackCd)) {
         h.attackCd -= dt;
         if (h.attackCd <= 0) respawnHeroObj(state, h);
       }
@@ -479,12 +477,13 @@ function updateLaneMp(
   }
 
   const shop = state.map.shop;
-  state.nearShop =
-    state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
+  const nearNow = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
   // Auto-close when leaving interact range (also covers death via nearShop=false).
-  if (state.shopOpen && !state.nearShop) {
+  if (state.shopOpen && !nearNow) {
     state.shopOpen = false;
   }
+  state.nearShop = nearNow;
+  state.wasNearShop = nearNow;
 
   const beforeSends = state.pendingSends.length;
 

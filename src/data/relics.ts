@@ -67,7 +67,10 @@ export type RelicId =
   | "cleaver_crown"
   | "storm_sovereign"
   | "curse_mirror"
-  | "twin_lanes";
+  | "twin_lanes"
+  | "mentor_sigil"
+  | "scholar_band"
+  | "ascent_primer";
 
 export type RelicDef = {
   id: RelicId;
@@ -526,6 +529,27 @@ export const RELICS: Record<RelicId, RelicDef> = {
     blurb: "Send income +20%; artifact damage +15%.",
     tag: "Command",
     rarity: "legendary",
+  },
+  mentor_sigil: {
+    id: "mentor_sigil",
+    name: "Mentor Sigil",
+    blurb: "+12% XP from kills.",
+    tag: "Growth",
+    rarity: "uncommon",
+  },
+  scholar_band: {
+    id: "scholar_band",
+    name: "Scholar Band",
+    blurb: "+8% XP from kills and +5% crit chance.",
+    tag: "Growth",
+    rarity: "rare",
+  },
+  ascent_primer: {
+    id: "ascent_primer",
+    name: "Ascent Primer",
+    blurb: "+22% XP from kills, but deal 8% less damage.",
+    tag: "Growth",
+    rarity: "rare",
   },
 };
 

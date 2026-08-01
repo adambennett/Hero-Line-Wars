@@ -149,6 +149,8 @@ export function customMapToMapDef(c: CustomMapDef): MapDef {
     eclipseFog: !!s.eclipseFog,
     dualSpawners: !!s.dualSpawners,
     chestMagnet: !!s.chestMagnet,
+    riftSurges: !!s.riftSurges,
+    volatileOrbs: !!s.volatileOrbs,
     healSprings: structuredClone(c.healSprings ?? []),
     slowMires: structuredClone(c.slowMires ?? []),
     hastePads: structuredClone(c.hastePads ?? []),

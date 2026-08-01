@@ -1,0 +1,69 @@
+---
+description: Hero Line Wars — architecture, stack, UI, and content conventions
+alwaysApply: true
+---
+
+# Hero Line Wars
+
+WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends, shop, relics, Artifacts (turrets). Prefer modular files; ship playable loops before new systems.
+
+## Stack & deploy
+
+- **Vite + TypeScript**, Canvas 2D world, light DOM for menus/HUD. No React.
+- Targets: `build:pages` → `dist/`; `build:release` → single-file HTML; `desktop:dist` → Electron (`DESKTOP.md`). Thin Electron shell over the same Vite build.
+- Art generators: `tools/generate-*-art.mjs` → `public/art/{relics,items,heroes}/`.
+
+## Where to change what
+
+| Concern | Prefer |
+|---|---|
+| Heroes / abilities / passives | `src/data/heroes.ts` (+ combat in `systems/abilities.ts`, `systems/combat.ts`) |
+| Shop gear & Artifacts | `src/data/shop.ts`, `src/data/turrets.ts`; apply in `systems/shop.ts`, `systems/turrets.ts` |
+| Relics | `src/data/relics.ts` + `systems/relics.ts` |
+| Sends / wave economy | `src/data/send.ts` + `systems/send.ts` |
+| Maps / geometry / specials | `src/data/maps.ts` (flags + zone arrays on `MapDef`); runtime in `Game` / `render` / enemy pathing |
+| Enemies | `src/data/enemies.ts` + `systems/enemies.ts` |
+| XP / level drafts | `src/data/xp.ts` + `systems/xp.ts` |
+| Base upgrades / branches | `src/data/baseUpgrades.ts`, `baseBranches.ts` + `systems/baseUpgrade.ts` |
+| Meta (crests, barracks, challenges, ascension, locks) | `src/meta/*` especially `contentLocks.ts`, `challenges.ts`, `upgrades.ts` |
+| Menus / settings / HUD chrome | `src/ui/*` (`MenuController.ts`, `mainMenuFx.ts`, …) |
+| Net / lobby / MP | `src/net/*` (`types.ts`, `lobby.ts`, `MultiplayerUi.ts`, `session.ts`) |
+| Custom / editor content | `src/custom/*` |
+| AI Lab | `src/ai/*` |
+
+Match existing patterns; don't invent parallel systems or one-off globals.
+
+## Content authoring
+
+- Stable **snake_case ids**; add to the typed union + def table in the same change.
+- Unlocks: challenges → barracks / War Crests via `meta/contentLocks.ts` + `challenges.ts` — don't hard-gate only in UI.
+- New maps: fill `MapDef` geometry **and** any specials (`shiftingObstacles`, `shrinkingLane`, `healSprings`, `windCurrents`, …). Wire flags must already be handled in game/render or extend those call sites — data alone is not enough.
+- Player-facing name **Artifact**; internal code may still say turret.
+- After new relics/items/heroes, regenerate SVG art scripts when icons are expected.
+
+## SP / MP run-option parity
+
+Creative and run extras must stay in sync across:
+
+- `LobbyState` / `MpRunExtras` in `src/net/types.ts`
+- Solo run options UI in `MenuController`
+- Host lobby sync in `MultiplayerUi` (+ match start / `matchFactory`)
+
+Adding a toggle in SP only (or MP only) is a bug. Mirror fields, defaults, and apply paths.
+
+## UI preferences
+
+- Prefer **panels / grids**, not giant single-column scroll menus.
+- Dark styled inputs (match `style.css`); never bare native light controls in new chrome.
+- Motion: **hover shine / enter accents** — avoid idle particle spam on every submenu.
+- Vary submenu FX lightly (`mainMenuFx`); don't clone one effect everywhere.
+- Confirm with **in-game modals**, not `window.confirm`.
+- Use space; avoid cramped stacks of pills/chips.
+- When inventing menus: **no purple-on-white AI-slop**; stay in the existing dark steel / amber-teal lane-wars palette.
+
+## Do / don't
+
+- **Do** extend data + the system that already applies that kind of effect.
+- **Do** keep Artifact shop entries separate from gear icon pipelines.
+- **Don't** casually add new combat resources, currencies, or net message kinds without matching SP/MP and existing sync patterns.
+- **Don't** fork a second game loop for desktop or single-file builds.

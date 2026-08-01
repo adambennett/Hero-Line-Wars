@@ -71,6 +71,17 @@ export function attackDamage(state: GameState): number {
   if ((state.hero.overchargeTimer ?? 0) > 0) dmg *= 1.2;
   if (state.utilityDamageBoost > 0) dmg *= 1.25;
 
+  const stacks = state.hero.bloodEngineStacks ?? 0;
+  if (stacks > 0 && (state.shopOwned.blood_engine ?? 0) > 0) {
+    dmg *= 1 + stacks * 0.02;
+  }
+  if (
+    (state.shopOwned.eclipse_crown ?? 0) > 0 &&
+    state.hero.hp / Math.max(1, state.hero.maxHp) < 0.5
+  ) {
+    dmg *= 1.25;
+  }
+
   if (state.hero.luck > 0 && Math.random() < state.hero.luck) {
     dmg *= 1.75;
   }
@@ -130,6 +141,22 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
   }
   if (heroHasPassive(state.hero.heroId, "riftmark") && state.hero.abilityCds[0] != null) {
     state.hero.abilityCds[0] = Math.max(0, state.hero.abilityCds[0]! * 0.85);
+  }
+  if (heroHasPassive(state.hero.heroId, "nest_memory")) {
+    state.hero.hiveDrones = Math.min(5, (state.hero.hiveDrones ?? 0) + 1);
+  }
+  if ((state.shopOwned.blood_engine ?? 0) > 0) {
+    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
+    state.hero.bloodEngineStacks = Math.min(10, (state.hero.bloodEngineStacks ?? 0) + 1);
+  }
+  if ((state.shopOwned.nest_core ?? 0) > 0) {
+    state.hero.nestCoreKills = (state.hero.nestCoreKills ?? 0) + 1;
+    if ((state.hero.nestCoreKills ?? 0) >= 8) {
+      state.hero.nestCoreKills = 0;
+      state.pendingSends.push({ enemies: 1, hpScale: 1 });
+      state.toast = "Nest Core — queued 1 into next wave";
+      state.toastTimer = 1.2;
+    }
   }
 }
 
@@ -530,9 +557,89 @@ function fireStyle(
     case "spin":
       // Gyro spin damage is handled in tickHeroKits while attack is held.
       break;
+    case "magnet": {
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 480),
+        vy: facing.y * (heroDef.projectileSpeed || 480),
+        damage: dmg,
+        radius: 4.5,
+        kind: "bolt",
+        color: "#8aa0ff",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        magnetPull: 28,
+      });
+      break;
+    }
+    case "chrono": {
+      // Slower bolt, delayed feel, higher damage on connect.
+      const spd = (heroDef.projectileSpeed || 400) * 0.55;
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * spd,
+        vy: facing.y * spd,
+        damage: dmg * 1.45,
+        radius: 5,
+        kind: "bolt",
+        color: "#d0a0ff",
+        bouncesLeft: bounce,
+        fromBasic: true,
+        life: 0.85,
+      });
+      break;
+    }
+    case "drone": {
+      const target = nearestEnemy(state);
+      let ax = facing.x;
+      let ay = facing.y;
+      if (target) {
+        const n = normalize(target.x - state.hero.x, target.y - state.hero.y);
+        ax = n.x;
+        ay = n.y;
+      }
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: ax * (heroDef.projectileSpeed || 380),
+        vy: ay * (heroDef.projectileSpeed || 380),
+        damage: dmg,
+        radius: 4,
+        kind: "bolt",
+        color: "#e8c060",
+        fromBasic: true,
+        seek: true,
+        life: 1.1,
+      });
+      break;
+    }
     case "chaos":
       break;
   }
+}
+
+/** Gently steer seeking projectiles toward the nearest living enemy. */
+export function steerSeekingProjectile(state: GameState, p: Projectile, dt: number): void {
+  if (!p.seek || !p.alive) return;
+  const t = nearestEnemy(state, p);
+  if (!t) return;
+  const spd = Math.hypot(p.vx, p.vy) || 380;
+  const n = normalize(t.x - p.x, t.y - p.y);
+  const mix = Math.min(1, 5.5 * dt);
+  let vx = p.vx * (1 - mix) + n.x * spd * mix;
+  let vy = p.vy * (1 - mix) + n.y * spd * mix;
+  const s = Math.hypot(vx, vy) || 1;
+  p.vx = (vx / s) * spd;
+  p.vy = (vy / s) * spd;
+}
+
+export function applyMagnetPull(state: GameState, e: EnemyUnit, pull: number): void {
+  if (pull <= 0) return;
+  const n = normalize(state.hero.x - e.x, state.hero.y - e.y);
+  e.x += n.x * pull;
+  e.y += n.y * pull;
 }
 
 export function enemyInAttackRange(state: GameState): boolean {
@@ -608,8 +715,13 @@ export function applyPlayerDamage(state: GameState, amount: number): void {
   let dmg = amount;
   if (hasRelic(state, "blood_price")) dmg *= 1.25;
   if (heroHasPassive(state.hero.heroId, "bedrock") && state.hero.barrierTimer > 0) dmg *= 0.85;
+  if ((state.wardBeaconTimer ?? 0) > 0) dmg *= 0.88;
   state.hero.hp -= dmg;
   state.damageTaken += dmg;
+  if (heroHasPassive(state.hero.heroId, "rewind_ward")) {
+    state.hero.chronaBank = (state.hero.chronaBank ?? 0) + dmg;
+    state.hero.chronaCleanTimer = 2;
+  }
   state.damageFlash = Math.max(state.damageFlash, 0.28);
   state.vignette = Math.max(state.vignette, 0.45);
   state.hitFlash = Math.max(state.hitFlash, 0.18);

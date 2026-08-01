@@ -50,6 +50,8 @@ import {
   damageEnemy,
   inHighGround,
   resolveHostileProjectile,
+  steerSeekingProjectile,
+  applyMagnetPull,
   tryBasicAttack,
 } from "../systems/combat";
 import { createEnemy, updateEnemies } from "../systems/enemies";
@@ -66,6 +68,7 @@ import { pickEliteKind, pickBossKind } from "../data/enemies";
 import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
 import { emptyBranchMods } from "../data/baseBranches";
 import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { loadSettings } from "../ui/settings";
 
 export type Unit = {
   id: number;
@@ -176,6 +179,19 @@ export type Projectile = {
   burnDot?: boolean;
   /** Medic syringe: heal hero on hit. */
   healOnHit?: number;
+  /** Lodestone magnet bolt: pull enemy toward hero on hit. */
+  magnetPull?: number;
+  /** Hive drone: gently seek nearest enemy each frame. */
+  seek?: boolean;
+};
+
+export type MapOrb = {
+  x: number;
+  y: number;
+  radius: number;
+  /** Seconds until detonation. */
+  fuse: number;
+  damage: number;
 };
 
 export type FxRing = {
@@ -297,6 +313,18 @@ export type HeroRuntime = Unit & {
   chargeVy?: number;
   phaseTimer?: number;
   burrowTimer?: number;
+  /** Chrona Stasis Field duration. */
+  stasisTimer?: number;
+  /** Hive Nest Memory orbiting drones (0–5). */
+  hiveDrones?: number;
+  /** Chrona Rewind Ward: banked damage awaiting clean heal. */
+  chronaBank?: number;
+  /** Chrona: seconds of clean (no hits) before bank heals. */
+  chronaCleanTimer?: number;
+  /** Blood Engine kill stacks (0–10). */
+  bloodEngineStacks?: number;
+  /** Nest Core kill counter toward free send. */
+  nestCoreKills?: number;
   /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
   controllerSlot?: number | null;
 };
@@ -308,9 +336,19 @@ export type RunOptions = {
   startingGold: number;
   /** Waves required to win. `0` = unlimited (base destruction only). */
   wavesToWin: number;
+  /**
+   * Hero lives per wave. `0` = unlimited (current default).
+   * Finite choices typically 1, 2, 3, 5, 10.
+   */
+  livesPerWave?: number;
+  /**
+   * Hero lives for the whole run. `0` = unlimited (current default).
+   * Finite choices typically 1, 2, 3, 5. Takes priority over wave lives.
+   */
+  livesPerRun?: number;
   /** Team modes: player projectiles can hurt allies. */
   friendlyFire: boolean;
-  /** Ascension difficulty 0..12. */
+  /** Ascension difficulty 0..15. */
   ascension: number;
   /** Precomposed modifiers; if omitted, defaults (no meta) are used. */
   modifiers?: RunModifiers;
@@ -333,7 +371,7 @@ export type RunOptions = {
   startingBaseLevel?: number;
   levelDraftSize?: number;
   relicDraftSize?: number;
-  /** Level when global utility draft appears; 0 = Never. */
+  /** Level when global utility draft appears; −1 = Run Start, 0 = Never. */
   utilityDraftLevel?: number;
   disableArtifacts?: boolean;
   disableChests?: boolean;
@@ -357,6 +395,16 @@ export type GameState = {
   startingGold: number;
   /** 0 = unlimited. */
   wavesToWin: number;
+  /** Config: 0 = unlimited wave lives. */
+  livesPerWave: number;
+  /** Config: 0 = unlimited run lives. */
+  livesPerRun: number;
+  /** Remaining lives this wave (ignored when livesPerWave === 0). */
+  waveLivesLeft: number;
+  /** Remaining lives this run (ignored when livesPerRun === 0). */
+  runLivesLeft: number;
+  /** True when wave lives exhausted — no respawn until next wave. */
+  waveRespawnBlocked: boolean;
   friendlyFire: boolean;
   ascension: number;
   modifiers: RunModifiers;
@@ -381,6 +429,8 @@ export type GameState = {
   elapsed: number;
   shopOpen: boolean;
   nearShop: boolean;
+  /** Prior-frame nearShop for auto-open edge trigger. */
+  wasNearShop: boolean;
   shopOwned: Partial<Record<ShopItemId, number>>;
   shopOffer: ShopItemId[];
   shopRefreshesLeft: number;
@@ -420,6 +470,10 @@ export type GameState = {
   mapHazardX: number;
   mapFogActive: boolean;
   mapActiveSpawner: 0 | 1;
+  /** Volatile orb map hazards. */
+  mapOrbs: MapOrb[];
+  /** Ward Beacon: remaining DR window for heroes (seconds). */
+  wardBeaconTimer: number;
   /** Mouse aim in world space (updated each frame from Input). */
   aimWorldX: number;
   aimWorldY: number;
@@ -530,6 +584,8 @@ export function createState(
   );
   const endless = !!opts?.endless;
   const wavesToWin = endless ? 0 : (opts?.wavesToWin ?? WIN_WAVES);
+  const livesPerWave = Math.max(0, opts?.livesPerWave ?? 0);
+  const livesPerRun = Math.max(0, opts?.livesPerRun ?? 0);
   const friendlyFire = opts?.friendlyFire ?? false;
   const baseMax = Math.round(map.base.maxHp * mods.baseHpMul);
   map.base.maxHp = baseMax;
@@ -558,6 +614,11 @@ export function createState(
     maxTurrets: opts?.disableArtifacts ? 0 : maxTurrets,
     startingGold,
     wavesToWin,
+    livesPerWave,
+    livesPerRun,
+    waveLivesLeft: livesPerWave > 0 ? livesPerWave : 0,
+    runLivesLeft: livesPerRun > 0 ? livesPerRun : 0,
+    waveRespawnBlocked: false,
     friendlyFire: friendlyFire || !!opts?.sharedFriendlyFire,
     ascension: mods.ascension,
     modifiers: mods,
@@ -592,6 +653,12 @@ export function createState(
       chargeTimer: 0,
       phaseTimer: 0,
       burrowTimer: 0,
+      stasisTimer: 0,
+      hiveDrones: heroId === "hive" ? 0 : undefined,
+      chronaBank: 0,
+      chronaCleanTimer: 0,
+      bloodEngineStacks: 0,
+      nestCoreKills: 0,
     },
     enemies: [],
     turrets: [],
@@ -613,6 +680,7 @@ export function createState(
     elapsed: 0,
     shopOpen: false,
     nearShop: false,
+    wasNearShop: false,
     shopOwned: {},
     shopOffer: rollShopOffer(),
     shopRefreshesLeft: 0,
@@ -647,6 +715,8 @@ export function createState(
     mapHazardX: MAP_W * 0.55,
     mapFogActive: !!opts?.fogAlways,
     mapActiveSpawner: 0,
+    mapOrbs: [],
+    wardBeaconTimer: 0,
     aimWorldX: map.base.x + 200,
     aimWorldY: map.base.y,
     opponent: createOpponent(heroId, baseHp, map.base.y),
@@ -656,7 +726,9 @@ export function createState(
     endless,
     chestOpenMul: opts?.chestOpenMul ?? 1,
     chestDespawnSec: opts?.chestDespawnSec ?? 28,
-    chestSpawnChance: opts?.disableChests ? 0 : (opts?.chestSpawnChance ?? 0.08),
+    chestSpawnChance: opts?.disableChests
+      ? 0
+      : (opts?.chestSpawnChance ?? 0.08) * (mods.chestSpawnMul ?? 1),
     rerollTokens: cheats?.infiniteRerolls ? 99 : 0,
     shopBuys: 0,
     chestsOpened: 0,
@@ -784,6 +856,27 @@ function startWave(state: GameState): void {
     state.toastTimer = 2.4;
   }
   applyWaveRider(state);
+  resetWaveLives(state);
+}
+
+export function resetWaveLives(state: GameState): void {
+  if (state.livesPerWave <= 0) {
+    state.waveRespawnBlocked = false;
+    return;
+  }
+  state.waveLivesLeft = state.livesPerWave;
+  if (!state.waveRespawnBlocked) return;
+  state.waveRespawnBlocked = false;
+  const canRespawn = state.livesPerRun <= 0 || state.runLivesLeft > 0;
+  if (!canRespawn) return;
+  if (!state.hero.alive && !Number.isFinite(state.respawnTimer)) {
+    state.respawnTimer = respawnDelay(state);
+  }
+  for (const ally of state.allies) {
+    if (!ally.alive && !Number.isFinite(ally.attackCd)) {
+      ally.attackCd = respawnDelay(state);
+    }
+  }
 }
 
 function popNextSpawn(state: GameState): { hpScale: number; sent: boolean } | null {
@@ -851,7 +944,6 @@ function killHero(state: GameState): void {
   state.hero.alive = false;
   state.hero.hp = 0;
   state.deathCount += 1;
-  state.respawnTimer = respawnDelay(state);
   state.shopOpen = false;
   if (heroUsesWarpKit(state.hero.heroId)) clearTeleporters(state);
   // Reset gyro blades on death
@@ -862,11 +954,69 @@ function killHero(state: GameState): void {
     state.hero.bladeHookCharging = false;
     state.hero.bladeHookCharge = 0;
   }
-  state.toast = `Downed — respawn ${state.respawnTimer.toFixed(1)}s`;
-  state.toastTimer = 2;
+  applyDeathLives(state, state.hero);
   state.damageFlash = Math.min(0.45, Math.max(state.damageFlash, 0.4));
   state.vignette = Math.min(0.75, Math.max(state.vignette, 0.7));
   state.shake = Math.min(0.35, Math.max(state.shake, 0.3));
+  if (laneOutOfRunLives(state)) {
+    state.status = "lost";
+  }
+}
+
+/** Shared lives / respawn rules for primary hero (and MP allies via mpSim). */
+export function applyDeathLives(state: GameState, hero: HeroRuntime): void {
+  const delay = respawnDelay(state);
+  if (state.livesPerRun > 0) {
+    state.runLivesLeft = Math.max(0, state.runLivesLeft - 1);
+    if (state.runLivesLeft <= 0) {
+      blockHeroRespawn(state, hero);
+      cancelPendingRespawns(state);
+      state.toast = "Out of lives";
+      state.toastTimer = 2;
+      return;
+    }
+  } else if (state.livesPerWave > 0) {
+    state.waveLivesLeft = Math.max(0, state.waveLivesLeft - 1);
+    if (state.waveLivesLeft <= 0) {
+      state.waveRespawnBlocked = true;
+      blockHeroRespawn(state, hero);
+      state.toast = "No respawn until next wave";
+      state.toastTimer = 2;
+      return;
+    }
+  }
+  if (hero === state.hero || hero.controllerSlot === state.hero.controllerSlot) {
+    state.respawnTimer = delay;
+  } else {
+    hero.attackCd = delay;
+  }
+  state.toast =
+    hero === state.hero
+      ? `Downed — respawn ${delay.toFixed(1)}s`
+      : "Ally downed!";
+  state.toastTimer = 2;
+}
+
+function blockHeroRespawn(state: GameState, hero: HeroRuntime): void {
+  if (hero === state.hero || hero.controllerSlot === state.hero.controllerSlot) {
+    state.respawnTimer = Number.POSITIVE_INFINITY;
+  } else {
+    hero.attackCd = Number.POSITIVE_INFINITY;
+  }
+}
+
+function cancelPendingRespawns(state: GameState): void {
+  if (!state.hero.alive) state.respawnTimer = Number.POSITIVE_INFINITY;
+  for (const ally of state.allies) {
+    if (!ally.alive) ally.attackCd = Number.POSITIVE_INFINITY;
+  }
+}
+
+export function laneOutOfRunLives(state: GameState): boolean {
+  if (state.livesPerRun <= 0) return false;
+  if (state.runLivesLeft > 0) return false;
+  if (state.hero.alive) return false;
+  return state.allies.every((a) => !a.alive);
 }
 
 function respawnHero(state: GameState): void {
@@ -905,6 +1055,7 @@ function moveHero(state: GameState, nx: number, ny: number): void {
 function updateProjectiles(state: GameState, dt: number): void {
   for (const p of state.projectiles) {
     if (!p.alive) continue;
+    steerSeekingProjectile(state, p, dt);
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     if (p.life !== undefined) {
@@ -968,6 +1119,7 @@ function updateProjectiles(state: GameState, dt: number): void {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
         });
+        if (p.magnetPull) applyMagnetPull(state, e, p.magnetPull);
         if (p.appliesSlow) applySlow(e, 0.6, 1.5);
         if (p.hexDot) {
           e.dotTimer = Math.max(e.dotTimer ?? 0, 2.4);
@@ -1111,8 +1263,10 @@ export function update(state: GameState, input: Input, dt: number): void {
   }
 
   if (!state.hero.alive) {
-    state.respawnTimer -= dt;
-    if (state.respawnTimer <= 0) respawnHero(state);
+    if (Number.isFinite(state.respawnTimer)) {
+      state.respawnTimer -= dt;
+      if (state.respawnTimer <= 0) respawnHero(state);
+    }
   } else if ((state.hero.slowTimer ?? 0) > 0) {
     state.hero.slowTimer = (state.hero.slowTimer ?? 0) - dt;
     if ((state.hero.slowTimer ?? 0) <= 0) {
@@ -1122,11 +1276,24 @@ export function update(state: GameState, input: Input, dt: number): void {
   }
 
   const shop = state.map.shop;
-  state.nearShop = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
+  const nearNow = state.hero.alive && dist(state.hero, shop) <= shop.interactRange;
   // Auto-close when leaving interact range (also covers death via nearShop=false).
-  if (state.shopOpen && !state.nearShop) {
+  if (state.shopOpen && !nearNow) {
     state.shopOpen = false;
   }
+  // Edge-trigger auto-open (settings); shop keybind still toggles.
+  if (
+    nearNow &&
+    !state.wasNearShop &&
+    !state.shopOpen &&
+    !state.disableShop &&
+    state.curseShopBlock <= 0 &&
+    loadSettings().autoOpenShop
+  ) {
+    state.shopOpen = true;
+  }
+  state.nearShop = nearNow;
+  state.wasNearShop = nearNow;
 
   if (
     state.hero.alive &&

@@ -27,6 +27,9 @@ export const LOCKED_ITEM_PACK: Partial<Record<string, MetaUpgradeId>> = {
   ascent_crown: "unlock_challenge_items_g",
   void_thread: "unlock_challenge_items_h",
   starfall_lens: "unlock_challenge_items_h",
+  mentor_tome: "unlock_challenge_items_g",
+  forge_heart: "unlock_challenge_items_e",
+  nest_core: "unlock_challenge_items_c",
   reroll_token: undefined, // always available
   reroll_pouch: undefined,
 };
@@ -52,6 +55,9 @@ export const LOCKED_RELIC_PACK: Partial<Record<string, MetaUpgradeId>> = {
   storm_sovereign: "unlock_challenge_relics_i",
   curse_mirror: "unlock_challenge_relics_i",
   twin_lanes: "unlock_challenge_relics_i",
+  mentor_sigil: undefined,
+  scholar_band: undefined,
+  ascent_primer: "unlock_challenge_relics_g",
 };
 
 export const LOCKED_MAP_PACK: Partial<Record<string, MetaUpgradeId>> = {

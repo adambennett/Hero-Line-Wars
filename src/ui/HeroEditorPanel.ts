@@ -73,47 +73,51 @@ export class HeroEditorPanel {
         <p class="menu-lead">Remix existing abilities &amp; passives. Export JSON to share — MP syncs kits at match start.</p>
       </header>
       <div class="workshop-layout hero-editor">
-        <aside class="workshop-side">
-          <div class="hero-preview-swatch" style="--c:${d.color};--g:${d.glowColor}">
-            <strong>${escape(d.name)}</strong>
-            <span>${escape(d.blurb)}</span>
-          </div>
-          <label class="run-field"><span>Name</span><input data-he="name" value="${escape(d.name)}" /></label>
-          <label class="run-field"><span>Blurb</span><input data-he="blurb" value="${escape(d.blurb)}" /></label>
-          <label class="run-field"><span>Color / Glow</span>
-            <div class="run-inline">
-              <input type="color" data-he="color" value="${toHex(d.color)}" />
-              <input type="color" data-he="glowColor" value="${toHex(d.glowColor)}" />
+        <div class="workshop-form-cols">
+          <section class="workshop-form-col">
+            <h3>Identity &amp; stats</h3>
+            <div class="hero-preview-swatch" style="--c:${d.color};--g:${d.glowColor}">
+              <strong>${escape(d.name)}</strong>
+              <span>${escape(d.blurb)}</span>
             </div>
-          </label>
-          <div class="run-grid cols-2">
-            <label class="run-field"><span>Max HP</span><input type="number" data-he="maxHp" value="${d.maxHp}" /></label>
-            <label class="run-field"><span>Speed</span><input type="number" data-he="speed" value="${d.speed}" /></label>
-            <label class="run-field"><span>Damage</span><input type="number" data-he="attackDamage" value="${d.attackDamage}" /></label>
-            <label class="run-field"><span>Attack CD</span><input type="number" step="0.01" data-he="attackCooldown" value="${d.attackCooldown}" /></label>
-            <label class="run-field"><span>Range</span><input type="number" data-he="attackRange" value="${d.attackRange}" /></label>
-            <label class="run-field"><span>Proj speed</span><input type="number" data-he="projectileSpeed" value="${d.projectileSpeed}" /></label>
-            <label class="run-field"><span>Radius</span><input type="number" data-he="radius" value="${d.radius}" /></label>
-          </div>
-          <label class="run-field"><span>Attack style</span><select data-he="attackStyle">${styleOpts}</select></label>
-          <label class="run-field"><span>Aim mode</span><select data-he="aimMode">${aimOpts}</select></label>
-          <label class="run-field"><span>Passive</span><select data-he="passive">${passOpts}</select></label>
-          <p class="panel-note">${escape(d.passive.blurb)}</p>
-          <label class="run-field"><span>Mobility</span><select data-he="mobility">${mobOpts}</select></label>
-          <label class="run-field"><span>Mobility CD</span><input type="number" step="0.1" data-he="mobCd" value="${d.abilities[0].cooldown}" /></label>
-          <label class="run-field"><span>Ultimate</span><select data-he="ultimate">${ultOpts}</select></label>
-          <label class="run-field"><span>Ultimate CD</span><input type="number" step="0.1" data-he="ultCd" value="${d.abilities[1].cooldown}" /></label>
-          <div class="workshop-actions">
-            <button type="button" class="menu-btn primary" data-action="he-save">Save</button>
-            <button type="button" class="menu-btn" data-action="he-new">New</button>
-            <button type="button" class="menu-btn" data-action="he-export">Export JSON</button>
-            <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="he-import" hidden /></label>
-            <button type="button" class="menu-btn ghost" data-action="he-delete">Delete</button>
-          </div>
-          <p class="panel-note">${escape(this.status)}</p>
-          <h3>Library</h3>
-          <div class="workshop-lib">${this.libraryHtml()}</div>
-        </aside>
+            <label class="run-field"><span>Name</span><input data-he="name" value="${escape(d.name)}" /></label>
+            <label class="run-field"><span>Blurb</span><input data-he="blurb" value="${escape(d.blurb)}" /></label>
+            <label class="run-field"><span>Color / Glow</span>
+              <div class="run-inline">
+                <input type="color" data-he="color" value="${toHex(d.color)}" />
+                <input type="color" data-he="glowColor" value="${toHex(d.glowColor)}" />
+              </div>
+            </label>
+            <div class="run-grid cols-2">
+              <label class="run-field"><span>Max HP</span><input type="number" data-he="maxHp" value="${d.maxHp}" /></label>
+              <label class="run-field"><span>Speed</span><input type="number" data-he="speed" value="${d.speed}" /></label>
+              <label class="run-field"><span>Damage</span><input type="number" data-he="attackDamage" value="${d.attackDamage}" /></label>
+              <label class="run-field"><span>Attack CD</span><input type="number" step="0.01" data-he="attackCooldown" value="${d.attackCooldown}" /></label>
+              <label class="run-field"><span>Range</span><input type="number" data-he="attackRange" value="${d.attackRange}" /></label>
+              <label class="run-field"><span>Proj speed</span><input type="number" data-he="projectileSpeed" value="${d.projectileSpeed}" /></label>
+              <label class="run-field"><span>Radius</span><input type="number" data-he="radius" value="${d.radius}" /></label>
+            </div>
+          </section>
+          <section class="workshop-form-col">
+            <h3>Kit pickers</h3>
+            <label class="run-field"><span>Attack style</span><select data-he="attackStyle">${styleOpts}</select></label>
+            <label class="run-field"><span>Aim mode</span><select data-he="aimMode">${aimOpts}</select></label>
+            <label class="run-field"><span>Passive</span><select data-he="passive">${passOpts}</select></label>
+            <p class="panel-note">${escape(d.passive.blurb)}</p>
+            <label class="run-field"><span>Mobility</span><select data-he="mobility">${mobOpts}</select></label>
+            <label class="run-field"><span>Mobility CD</span><input type="number" step="0.1" data-he="mobCd" value="${d.abilities[0].cooldown}" /></label>
+            <label class="run-field"><span>Ultimate</span><select data-he="ultimate">${ultOpts}</select></label>
+            <label class="run-field"><span>Ultimate CD</span><input type="number" step="0.1" data-he="ultCd" value="${d.abilities[1].cooldown}" /></label>
+            <div class="workshop-actions">
+              <button type="button" class="menu-btn primary" data-action="he-save">Save</button>
+              <button type="button" class="menu-btn" data-action="he-new">New</button>
+              <button type="button" class="menu-btn" data-action="he-export">Export JSON</button>
+              <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="he-import" hidden /></label>
+              <button type="button" class="menu-btn ghost" data-action="he-delete">Delete</button>
+            </div>
+            <p class="panel-note">${escape(this.status)}</p>
+          </section>
+        </div>
         <section class="workshop-kit-preview">
           <h2>Kit summary</h2>
           <article class="inv-row"><strong style="color:${d.color}">${escape(d.name)}</strong><span>${escape(d.blurb)}</span></article>
@@ -122,6 +126,10 @@ export class HeroEditorPanel {
           <article class="inv-row"><strong>${escape(d.abilities[1].name)}</strong><span>${escape(d.abilities[1].hint)} · ${d.abilities[1].cooldown}s</span><em>Ultimate</em></article>
           <article class="inv-row"><strong>Attack</strong><span>${d.attackStyle} · ${d.aimMode} · ${escape(d.attackHint)}</span></article>
         </section>
+        <div class="workshop-footer-bar">
+          <h3>Library</h3>
+          <div class="workshop-lib horizontal">${this.libraryHtml()}</div>
+        </div>
       </div>
     `;
   }

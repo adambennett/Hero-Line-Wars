@@ -1,6 +1,6 @@
 /** Ascension difficulty — cumulative modifiers (StS-style). */
 
-export const MAX_ASCENSION = 12;
+export const MAX_ASCENSION = 15;
 
 export type AscensionDef = {
   level: number;
@@ -23,6 +23,9 @@ export const ASCENSIONS: AscensionDef[] = [
   { level: 10, name: "Long Road Back", blurb: "Respawn times +20%." },
   { level: 11, name: "Scant Spoils", blurb: "Kill gold −15%." },
   { level: 12, name: "March of Iron", blurb: "Enemies move +8% faster." },
+  { level: 13, name: "Thin Chests", blurb: "Chest spawn chance −30%." },
+  { level: 14, name: "Cracked Keep", blurb: "Base max HP −15%." },
+  { level: 15, name: "Ascendant Fury", blurb: "Enemy damage +10%; elites/bosses +10% more." },
 ];
 
 export function ascensionLabel(level: number): string {

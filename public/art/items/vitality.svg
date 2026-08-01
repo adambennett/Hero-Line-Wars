@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="Vitality Charm">
+  <rect x="3" y="3" width="58" height="58" rx="10" fill="#141c28" stroke="#6a7a90" stroke-width="2"/>
+  <rect x="3" y="3" width="58" height="22" rx="10" fill="#1a2434" opacity="0.55"/>
+  <path d="M32 44 C20 34 18 24 24 20c4-2 8 0 8 4 0-4 4-6 8-4 6 4 4 14-8 24z" fill="none" stroke="#48c878" stroke-width="2.2"/>
+</svg>

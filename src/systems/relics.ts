@@ -83,6 +83,9 @@ export function pickRelic(state: GameState, id: RelicId): void {
   if (id === "phoenix_down") {
     state.phoenixCharges = (state.phoenixCharges ?? 0) + 1;
   }
+  if (id === "scholar_band") {
+    state.hero.luck += 0.05;
+  }
 
   if (state.pendingLevelUps > 0 || state.levelDraft) {
     state.draftKind = "level";
@@ -144,11 +147,17 @@ export function sendHpMulFromRelics(state: GameState): number {
 }
 
 export function mobilityCdMul(state: GameState): number {
-  return hasRelic(state, "phantom_step") ? 0.65 : 1;
+  let mul = 1;
+  if (hasRelic(state, "phantom_step")) mul *= 0.65;
+  if ((state.shopOwned.temporal_coil ?? 0) > 0) mul *= 0.82;
+  return mul;
 }
 
 export function ultimateCdMul(state: GameState): number {
-  return hasRelic(state, "echo_chamber") ? 0.8 : 1;
+  let mul = 1;
+  if (hasRelic(state, "echo_chamber")) mul *= 0.8;
+  if ((state.shopOwned.temporal_coil ?? 0) > 0) mul *= 0.82;
+  return mul;
 }
 
 export function baseDamageTakenMul(state: GameState): number {
@@ -172,6 +181,7 @@ export function relicDamageMul(state: GameState): number {
   if (hasRelic(state, "last_stand") && state.hero.hp / Math.max(1, state.hero.maxHp) < 0.35) {
     mul *= 1.4;
   }
+  if (hasRelic(state, "ascent_primer")) mul *= 0.92;
   return mul;
 }
 

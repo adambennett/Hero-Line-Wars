@@ -3,6 +3,7 @@ import { waveTierLabel } from "../data/enemies";
 import { type HeroId } from "../data/heroes";
 import { registerSessionCustoms, resolveHero } from "../custom/registry";
 import { RELICS } from "../data/relics";
+import { relicArtImg } from "../data/relicArt";
 import { LEVEL_PASSIVES } from "../data/xp";
 import { getShopItem } from "../data/shop";
 import type { ShopItemId } from "../data/shop";
@@ -21,19 +22,21 @@ import {
   type GameState,
   type RunOptions,
 } from "./state";
+import { dist } from "./math";
 import { UTILITIES } from "../data/utilities";
 import { CURSES } from "../data/curses";
 import { buyShopItem, toggleShopFreeze, shopItemCost } from "../systems/shop";
 import { chooseChestReward } from "../systems/chests";
 import { availableSendPacks, buySendPack, sendPackCost } from "../systems/send";
 import { tryUpgradeBase, upgradeBaseCost } from "../systems/baseUpgrade";
-import { xpProgress } from "../systems/xp";
+import { xpProgress, openRunStartUtilityDraft, rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
 import { effectiveMaxTurrets, livingTurrets } from "../systems/turrets";
 import { Input } from "../systems/input";
 import { computeView, draw } from "../render/draw";
 import { MenuController, type LobbyDraft } from "../ui/MenuController";
 import { formatBinding, loadSettings } from "../ui/settings";
 import { playSfx, unlockAudio } from "../systems/audio";
+import { stopMenuMusic } from "../systems/music";
 import { opponentStatusLabel, opponentEnemiesRemaining } from "../systems/opponent";
 import { MultiplayerUi } from "../net/MultiplayerUi";
 import {
@@ -55,7 +58,6 @@ import { evaluateChallenges, CHALLENGES } from "../meta/challenges";
 import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
 import { chooseBaseBranch } from "../systems/baseUpgrade";
 import { BASE_BRANCHES } from "../data/baseBranches";
-import { rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
 import { ascensionLabel } from "../meta/ascension";
 import { buildMpMatch, buildSoloVsAiMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
 
@@ -73,6 +75,8 @@ export class Game {
     wavesToWin: WIN_WAVES,
     friendlyFire: false,
     ascension: 0,
+    livesPerWave: 0,
+    livesPerRun: 0,
   };
 
   private readonly statsEl: HTMLElement;
@@ -138,6 +142,8 @@ export class Game {
   private lastDraftKey = "";
   private lastAbilityKey = "";
   private pauseMode: "none" | "paused" | "confirm" | "settings" | "inventory" = "none";
+  /** Edge tracker for auto-open shop in MP / dual-lane. */
+  private wasNearShopAuto = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -204,7 +210,9 @@ export class Game {
     this.menus = new MenuController(menusRoot, {
       onStartSingleplayer: (heroId, opts) => this.beginRun(heroId, opts),
       onOpenMultiplayer: (draft, heroId) => this.openMultiplayer(draft, heroId),
-      onSettingsChanged: () => this.input.reloadBinds(),
+      onSettingsChanged: () => {
+        this.input.reloadBinds();
+      },
       onRunOptionsChanged: (opts) => {
         this.runDefaults = { ...this.runDefaults, ...opts };
       },
@@ -352,7 +360,7 @@ export class Game {
     this.hideCombatChrome();
     this.input.reloadBinds();
     this.refreshHint();
-    this.menus.show();
+    this.menus.show("main", { allowMenuMusic: true });
   }
 
   private returnToMainMenu(): void {
@@ -362,11 +370,12 @@ export class Game {
     this.hideCombatChrome();
     this.input.reloadBinds();
     this.refreshHint();
-    this.menus.show();
+    this.menus.show("main", { allowMenuMusic: true });
   }
 
   private beginRun(heroId: HeroId, opts?: Partial<RunOptions>): void {
     unlockAudio();
+    stopMenuMusic();
     this.menus.hide();
     this.input.reset();
     this.input.reloadBinds();
@@ -383,6 +392,8 @@ export class Game {
       wavesToWin: opts?.wavesToWin ?? this.runDefaults.wavesToWin ?? WIN_WAVES,
       friendlyFire: opts?.friendlyFire ?? this.runDefaults.friendlyFire ?? false,
       ascension,
+      livesPerWave: opts?.livesPerWave ?? this.runDefaults.livesPerWave ?? 0,
+      livesPerRun: opts?.livesPerRun ?? this.runDefaults.livesPerRun ?? 0,
       modifiers: playerMods,
       teamSize: opts?.teamSize ?? 1,
       endless: !!opts?.endless,
@@ -428,6 +439,7 @@ export class Game {
     this.lastShopKey = "";
     this.lastSendUnlockKey = "";
     this.lastAbilityKey = "";
+    this.wasNearShopAuto = false;
     this.buildSendBar();
     this.layoutLaneChrome();
     this.last = performance.now();
@@ -466,6 +478,26 @@ export class Game {
       chestDespawnSec: opts.chestDespawnSec,
       chestSpawnChance: opts.chestSpawnChance,
       utilityDraftLevel: opts.utilityDraftLevel,
+      livesPerWave: opts.livesPerWave ?? 0,
+      livesPerRun: opts.livesPerRun ?? 0,
+      enemyDensityMul: opts.enemyDensityMul,
+      enemyHpMul: opts.enemyHpMul,
+      enemySpeedMul: opts.enemySpeedMul,
+      incomeMul: opts.incomeMul,
+      respawnMul: opts.respawnMul,
+      startingBaseLevel: opts.startingBaseLevel,
+      levelDraftSize: opts.levelDraftSize,
+      relicDraftSize: opts.relicDraftSize,
+      disableArtifacts: opts.disableArtifacts,
+      disableChests: opts.disableChests,
+      disableElites: opts.disableElites,
+      disableBosses: opts.disableBosses,
+      disableShop: opts.disableShop,
+      disableSends: opts.disableSends,
+      disableRelics: opts.disableRelics,
+      fogAlways: opts.fogAlways,
+      doubleElites: opts.doubleElites,
+      suddenDeathBaseHp: opts.suddenDeathBaseHp,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -487,6 +519,7 @@ export class Game {
     this.lastShopKey = "";
     this.lastSendUnlockKey = "";
     this.lastAbilityKey = "";
+    this.wasNearShopAuto = false;
     this.buildSendBar();
     this.layoutLaneChrome();
     this.last = performance.now();
@@ -621,7 +654,7 @@ export class Game {
   private openPauseSettings(): void {
     this.pauseMode = "settings";
     this.overlay.classList.add("hidden");
-    this.menus.show("settings");
+    this.menus.show("settings", { allowMenuMusic: false });
     // When leaving settings back to main, intercept — keep paused overlay
     const check = () => {
       if (!this.state?.paused) return;
@@ -794,7 +827,7 @@ export class Game {
       this.shopPanel.classList.add("hidden");
       this.relicDraft.classList.add("hidden");
       this.overlay.classList.add("hidden");
-      this.menus.show("singleplayer");
+      this.menus.show("singleplayer", { allowMenuMusic: true });
     });
     this.overlayActions.appendChild(again);
 
@@ -809,7 +842,7 @@ export class Game {
       this.shopPanel.classList.add("hidden");
       this.relicDraft.classList.add("hidden");
       this.overlay.classList.add("hidden");
-      this.menus.show("barracks");
+      this.menus.show("barracks", { allowMenuMusic: true });
     });
     this.overlayActions.appendChild(barracks);
 
@@ -1031,7 +1064,10 @@ export class Game {
     if (this.state.pausedForDraft && this.state.utilityDraft) {
       this.relicDraft.classList.remove("hidden");
       this.relicSkip.classList.add("hidden");
-      this.draftTitle.textContent = `Utility Ability (Lv ${this.state.utilityDraftLevel})`;
+      this.draftTitle.textContent =
+        this.state.utilityDraftLevel < 0
+          ? "Utility Ability (Run Start)"
+          : `Utility Ability (Lv ${this.state.utilityDraftLevel})`;
       this.draftBlurb.textContent = "Choose one global utility for the Spacebar slot.";
       const key = `U:${this.state.utilityDraft.join(",")}`;
       if (key === this.lastDraftKey) return;
@@ -1128,7 +1164,7 @@ export class Game {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card";
-        btn.innerHTML = `<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
+        btn.innerHTML = `${relicArtImg(id, "relic-art relic-card-art")}<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
           chooseRelic(this.state, id);
@@ -1234,6 +1270,7 @@ export class Game {
 
   private openMultiplayer(draft: LobbyDraft, heroId: HeroId): void {
     unlockAudio();
+    stopMenuMusic();
     this.hideCombatChrome();
     this.menus.hide();
     const menusRoot = document.querySelector<HTMLElement>("#menus")!;
@@ -1255,6 +1292,30 @@ export class Game {
       wavesToWin: draft.wavesToWin,
       friendlyFire: draft.friendlyFire,
       utilityDraftLevel: draft.utilityDraftLevel,
+      ascension: draft.ascension,
+      livesPerWave: draft.livesPerWave,
+      livesPerRun: draft.livesPerRun,
+      chestOpenMul: draft.chestOpenMul,
+      chestDespawnSec: draft.chestDespawnSec,
+      chestSpawnChance: draft.chestSpawnChance,
+      enemyDensityMul: draft.enemyDensityMul,
+      enemyHpMul: draft.enemyHpMul,
+      enemySpeedMul: draft.enemySpeedMul,
+      incomeMul: draft.incomeMul,
+      respawnMul: draft.respawnMul,
+      startingBaseLevel: draft.startingBaseLevel,
+      levelDraftSize: draft.levelDraftSize,
+      relicDraftSize: draft.relicDraftSize,
+      disableArtifacts: draft.disableArtifacts,
+      disableChests: draft.disableChests,
+      disableElites: draft.disableElites,
+      disableBosses: draft.disableBosses,
+      disableShop: draft.disableShop,
+      disableSends: draft.disableSends,
+      disableRelics: draft.disableRelics,
+      fogAlways: draft.fogAlways,
+      doubleElites: draft.doubleElites,
+      suddenDeathBaseHp: draft.suddenDeathBaseHp,
       heroId,
       preferredCode: draft.hostCode,
       joinCode: draft.joinCode,
@@ -1293,6 +1354,9 @@ export class Game {
       utilityDraftLevel:
         start.utilityDraftLevel ?? start.lobby.utilityDraftLevel ?? 10,
     });
+    for (const lane of this.mpMatch.lanes) {
+      openRunStartUtilityDraft(lane);
+    }
 
     // Attach trained AI to PvE enemy lane when a school is selected
     if (this.mpMatch.lanes[1].aiControlled) {
@@ -1357,6 +1421,19 @@ export class Game {
     };
 
     const local = gatherLocalIntent(this.input, aim, controlled);
+    // Auto-open shop once on pad enter (client setting; edge-triggered).
+    const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
+    if (controlled && loadSettings().autoOpenShop && !myLane.disableShop && myLane.curseShopBlock <= 0) {
+      const shop = myLane.map.shop;
+      const near =
+        controlled.alive && dist(controlled, shop) <= shop.interactRange;
+      if (near && !this.wasNearShopAuto && !myLane.shopOpen) {
+        local.toggleShop = true;
+      }
+      this.wasNearShopAuto = near;
+    } else {
+      this.wasNearShopAuto = false;
+    }
     // Shop slots when shop open: digits 4-6
     if (lane.shopOpen && local.sendDigit != null && local.sendDigit >= 4) {
       local.shopSlot = local.sendDigit - 4;
@@ -1575,7 +1652,13 @@ export class Game {
 
     // Simplified top-left panel (no map / wave / base·hero HP labels)
     this.statsEl.innerHTML = [
-      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}${s.endless ? " · Endless" : ""}</div>`,
+      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}${s.endless ? " · Endless" : ""}${
+        s.livesPerRun > 0
+          ? ` · Lives ${s.runLivesLeft}`
+          : s.livesPerWave > 0
+            ? ` · W.lives ${s.waveLivesLeft}`
+            : ""
+      }</div>`,
       `<div class="hud-line">Base Lv ${s.baseLevel}${
         s.endless
           ? aiSend
@@ -1620,7 +1703,13 @@ export class Game {
     this.bannerEl.className = "";
 
     if (!s.hero.alive) {
-      this.respawnEl.textContent = `Respawning in ${Math.max(0, s.respawnTimer).toFixed(1)}s`;
+      if (s.livesPerRun > 0 && s.runLivesLeft <= 0) {
+        this.respawnEl.textContent = "Out of lives";
+      } else if (s.waveRespawnBlocked || !Number.isFinite(s.respawnTimer)) {
+        this.respawnEl.textContent = "Respawn next wave";
+      } else {
+        this.respawnEl.textContent = `Respawning in ${Math.max(0, s.respawnTimer).toFixed(1)}s`;
+      }
       this.respawnEl.classList.remove("hidden");
     } else {
       this.respawnEl.textContent = "";
@@ -1654,8 +1743,14 @@ export class Game {
         const tip = `<strong>${u.name}</strong><br/>${u.hint}<br/>CD ${u.cooldown}s`;
         utilSlot = `<div class="ability ${ready ? "ready" : "cooling"}" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[2]}</kbd><span>${u.name}</span><em>${cdText}</em></div>`;
       } else {
-        const tip = `<strong>Utility</strong><br/>Empty — draft at Lv ${s.utilityDraftLevel || "—"}${s.utilityDraftLevel === 0 ? " (off)" : ""}`;
-        utilSlot = `<div class="ability cooling" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[2]}</kbd><span>Utility</span><em>${s.utilityDraftLevel <= 0 ? "off" : `Lv ${s.utilityDraftLevel}`}</em></div>`;
+        const utilWhen =
+          s.utilityDraftLevel < 0
+            ? "Run Start"
+            : s.utilityDraftLevel === 0
+              ? "off"
+              : `Lv ${s.utilityDraftLevel}`;
+        const tip = `<strong>Utility</strong><br/>Empty — draft at ${utilWhen}`;
+        utilSlot = `<div class="ability cooling" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[2]}</kbd><span>Utility</span><em>${utilWhen}</em></div>`;
       }
       this.abilityEl.innerHTML = heroSlots + utilSlot;
     }

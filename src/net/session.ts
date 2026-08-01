@@ -487,6 +487,7 @@ export function hostSetOpts(
   wavesToWin: number,
   friendlyFire: boolean,
   utilityDraftLevel = 10,
+  extras?: import("./types").MpRunExtras,
 ): void {
   if (S.mode !== "host" || !S.lobby) return;
   S.lobby.mapChoice = mapChoice;
@@ -495,6 +496,32 @@ export function hostSetOpts(
   S.lobby.wavesToWin = wavesToWin;
   S.lobby.friendlyFire = friendlyFire;
   S.lobby.utilityDraftLevel = utilityDraftLevel;
+  if (extras) {
+    if (extras.ascension != null) S.lobby.ascension = extras.ascension;
+    if (extras.livesPerWave != null) S.lobby.livesPerWave = extras.livesPerWave;
+    if (extras.livesPerRun != null) S.lobby.livesPerRun = extras.livesPerRun;
+    if (extras.chestOpenMul != null) S.lobby.chestOpenMul = extras.chestOpenMul;
+    if (extras.chestDespawnSec != null) S.lobby.chestDespawnSec = extras.chestDespawnSec;
+    if (extras.chestSpawnChance != null) S.lobby.chestSpawnChance = extras.chestSpawnChance;
+    if (extras.enemyDensityMul != null) S.lobby.enemyDensityMul = extras.enemyDensityMul;
+    if (extras.enemyHpMul != null) S.lobby.enemyHpMul = extras.enemyHpMul;
+    if (extras.enemySpeedMul != null) S.lobby.enemySpeedMul = extras.enemySpeedMul;
+    if (extras.incomeMul != null) S.lobby.incomeMul = extras.incomeMul;
+    if (extras.respawnMul != null) S.lobby.respawnMul = extras.respawnMul;
+    if (extras.startingBaseLevel != null) S.lobby.startingBaseLevel = extras.startingBaseLevel;
+    if (extras.levelDraftSize != null) S.lobby.levelDraftSize = extras.levelDraftSize;
+    if (extras.relicDraftSize != null) S.lobby.relicDraftSize = extras.relicDraftSize;
+    if (extras.disableArtifacts != null) S.lobby.disableArtifacts = extras.disableArtifacts;
+    if (extras.disableChests != null) S.lobby.disableChests = extras.disableChests;
+    if (extras.disableElites != null) S.lobby.disableElites = extras.disableElites;
+    if (extras.disableBosses != null) S.lobby.disableBosses = extras.disableBosses;
+    if (extras.disableShop != null) S.lobby.disableShop = extras.disableShop;
+    if (extras.disableSends != null) S.lobby.disableSends = extras.disableSends;
+    if (extras.disableRelics != null) S.lobby.disableRelics = extras.disableRelics;
+    if (extras.fogAlways != null) S.lobby.fogAlways = extras.fogAlways;
+    if (extras.doubleElites != null) S.lobby.doubleElites = extras.doubleElites;
+    if (extras.suddenDeathBaseHp != null) S.lobby.suddenDeathBaseHp = extras.suddenDeathBaseHp;
+  }
   netBroadcast({
     k: "opts",
     mapChoice,
@@ -503,6 +530,7 @@ export function hostSetOpts(
     wavesToWin,
     friendlyFire,
     utilityDraftLevel,
+    extras,
   });
   broadcastLobby();
 }

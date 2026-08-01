@@ -52,6 +52,9 @@ export const ATTACK_STYLES: AttackStyle[] = [
   "needle",
   "echo",
   "warpbolt",
+  "magnet",
+  "chrono",
+  "drone",
 ];
 
 export const AIM_MODES: AimMode[] = ["free", "engage", "auto"];

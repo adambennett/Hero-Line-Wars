@@ -36,6 +36,8 @@ export type RunModifiers = {
   startingHpFlat: number;
   attackSpeedMetaMul: number;
   baseDamageTakenMetaMul: number;
+  /** Multiplier on chest spawn chance (Ascension 13). */
+  chestSpawnMul: number;
 };
 
 export type MetaRanks = Partial<Record<MetaUpgradeId, number>>;
@@ -77,6 +79,7 @@ export function composeRunModifiers(
     startingHpFlat: 0,
     attackSpeedMetaMul: 1,
     baseDamageTakenMetaMul: 1,
+    chestSpawnMul: 1,
   };
 
   if (a >= 1) mods.enemyHpMul *= 1.12;
@@ -91,6 +94,12 @@ export function composeRunModifiers(
   if (a >= 10) mods.respawnMul *= 1.2;
   if (a >= 11) mods.goldRewardMul *= 0.85;
   if (a >= 12) mods.enemySpeedMul *= 1.08;
+  if (a >= 13) mods.chestSpawnMul *= 0.7;
+  if (a >= 14) mods.baseHpMul *= 0.85;
+  if (a >= 15) {
+    mods.enemyDamageMul *= 1.1;
+    mods.eliteBossHpExtra *= 1.1;
+  }
 
   if (applyPlayerMeta) {
     mods.startingGoldDelta += rank(ranks, "war_chest") * 8;

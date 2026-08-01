@@ -36,6 +36,10 @@ export type CustomMapSpecials = {
   dualSpawners?: boolean;
   /** Higher chance for chests to spawn. */
   chestMagnet?: boolean;
+  /** Periodic horizontal rifts yank units toward lane mid-X during waves. */
+  riftSurges?: boolean;
+  /** Spawns delayed explosive orbs in the lane during waves. */
+  volatileOrbs?: boolean;
 };
 
 /** Full authored custom map (geometry + specials + effect zones). */

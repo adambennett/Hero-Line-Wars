@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="Copper Spike">
+  <rect x="3" y="3" width="58" height="58" rx="10" fill="#141c28" stroke="#2db87a" stroke-width="2"/>
+  <rect x="3" y="3" width="58" height="22" rx="10" fill="#1a2434" opacity="0.55"/>
+  <path d="M34 14 L30 44 L26 40 L22 50 L38 42 L32 38 Z" fill="#e070a8"/>
+</svg>

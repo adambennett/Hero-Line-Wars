@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="Pulse Bracer">
+  <rect x="3" y="3" width="58" height="58" rx="10" fill="#141c28" stroke="#2db87a" stroke-width="2"/>
+  <rect x="3" y="3" width="58" height="22" rx="10" fill="#1a2434" opacity="0.55"/>
+  <path d="M32 16l13 5v11c0 9-7 14-13 16-6-2-13-7-13-16V21z" fill="none" stroke="#e070a8" stroke-width="2.2"/>
+</svg>

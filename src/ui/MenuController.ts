@@ -6,6 +6,7 @@ import { SHOP_ITEMS } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
 import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyKind } from "../data/enemies";
 import { RARITY_LABEL, RARITY_COLOR, RARITY_ORDER, type Rarity } from "../data/rarity";
+import { utilityDraftLevelOptionsHtml } from "../data/utilities";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import type { RunOptions } from "../game/state";
@@ -67,6 +68,7 @@ import {
 import { downloadSaveExport, importSaveFromFile } from "../meta/saveio";
 import { isMapUnlocked } from "../meta/contentLocks";
 import { unlockAudio } from "../systems/audio";
+import { stopMenuMusic, syncMenuMusicFromSettings } from "../systems/music";
 import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
 import { MapEditorPanel } from "./MapEditorPanel";
@@ -79,6 +81,10 @@ import {
   type CareerStats,
 } from "../meta/careerStats";
 import { MainMenuFx } from "./mainMenuFx";
+import { paintEnemyThumbs } from "./enemyThumbs";
+import { relicArtImg } from "../data/relicArt";
+import { itemArtImg } from "../data/itemArt";
+import { heroArtImg } from "../data/heroArt";
 
 export type { MatchMode, MatchPrivacy } from "../net/types";
 
@@ -115,8 +121,34 @@ export type LobbyDraft = {
   /** 0 = unlimited. */
   wavesToWin: number;
   friendlyFire: boolean;
-  /** Level for global utility draft; 0 = Never. */
+  /** Level for global utility draft; −1 = Run Start, 0 = Never. */
   utilityDraftLevel: number;
+  /** 0 = unlimited. */
+  livesPerWave: number;
+  /** 0 = unlimited. */
+  livesPerRun: number;
+  ascension: number;
+  chestOpenMul: number;
+  chestDespawnSec: number;
+  chestSpawnChance: number;
+  enemyDensityMul: number;
+  enemyHpMul: number;
+  enemySpeedMul: number;
+  incomeMul: number;
+  respawnMul: number;
+  startingBaseLevel: number;
+  levelDraftSize: number;
+  relicDraftSize: number;
+  disableArtifacts: boolean;
+  disableChests: boolean;
+  disableElites: boolean;
+  disableBosses: boolean;
+  disableShop: boolean;
+  disableSends: boolean;
+  disableRelics: boolean;
+  fogAlways: boolean;
+  doubleElites: boolean;
+  suddenDeathBaseHp: number;
 };
 
 export type MenuCallbacks = {
@@ -126,7 +158,7 @@ export type MenuCallbacks = {
   onRunOptionsChanged?: (opts: Partial<RunOptions>) => void;
 };
 
-type CompTab = "heroes" | "items" | "relics" | "enemies" | "sends" | "maps" | "ascensions";
+type CompTab = "heroes" | "items" | "artifacts" | "relics" | "enemies" | "sends" | "maps" | "ascensions";
 
 const MODE_OPTIONS: { id: MatchMode; label: string; hint: string }[] = [
   { id: "1v1", label: "1v1 PvP", hint: "One hero per side" },
@@ -162,6 +194,30 @@ export class MenuController {
     wavesToWin: WIN_WAVES,
     friendlyFire: false,
     utilityDraftLevel: 10,
+    livesPerWave: 0,
+    livesPerRun: 0,
+    ascension: 0,
+    chestOpenMul: 1,
+    chestDespawnSec: 28,
+    chestSpawnChance: 0.08,
+    enemyDensityMul: 1,
+    enemyHpMul: 1,
+    enemySpeedMul: 1,
+    incomeMul: 1,
+    respawnMul: 1,
+    startingBaseLevel: 0,
+    levelDraftSize: 3,
+    relicDraftSize: 3,
+    disableArtifacts: false,
+    disableChests: false,
+    disableElites: false,
+    disableBosses: false,
+    disableShop: false,
+    disableSends: false,
+    disableRelics: false,
+    fogAlways: false,
+    doubleElites: false,
+    suddenDeathBaseHp: 0,
   };
   private spMapChoice: MapId | string | "random" = "random";
   private spMaxTurrets = DEFAULT_MAX_TURRETS;
@@ -169,6 +225,8 @@ export class MenuController {
   private spWavesToWin = WIN_WAVES;
   private spFriendlyFire = false;
   private spAscension = 0;
+  private spLivesPerWave = 0;
+  private spLivesPerRun = 0;
   private spTeamSize: 1 | 2 | 3 = 1;
   private spEndless = false;
   private spChestOpenMul = 1;
@@ -209,6 +267,8 @@ export class MenuController {
   private statsTab: StatsTab = "overview";
   private readonly mainFx = new MainMenuFx();
   private cheatOpts: CheatOptions = loadCheatOptions();
+  /** False while pause-settings overlays a live run (no menu BGM). */
+  private allowMenuMusic = true;
 
   constructor(root: HTMLElement, callbacks: MenuCallbacks) {
     this.root = root;
@@ -216,20 +276,36 @@ export class MenuController {
     this.root.addEventListener("click", (e) => this.onClick(e));
     this.root.addEventListener("input", (e) => this.onInput(e));
     this.root.addEventListener("change", (e) => this.onChange(e));
+    this.root.addEventListener(
+      "pointerdown",
+      () => {
+        unlockAudio();
+        this.syncMenuMusic();
+      },
+      { passive: true },
+    );
   }
 
-  show(screen: MenuScreen = "main"): void {
+  show(screen: MenuScreen = "main", opts?: { allowMenuMusic?: boolean }): void {
     this.settings = loadSettings();
+    this.allowMenuMusic = opts?.allowMenuMusic ?? true;
     this.stopRebindListen();
     this.root.classList.remove("hidden");
     this.go(screen);
+    this.syncMenuMusic();
   }
 
   hide(): void {
     this.stopRebindListen();
     this.mainFx.stop();
+    stopMenuMusic();
+    this.allowMenuMusic = false;
     this.root.classList.add("hidden");
     this.root.innerHTML = "";
+  }
+
+  private syncMenuMusic(): void {
+    syncMenuMusicFromSettings(this.allowMenuMusic && this.isVisible());
   }
 
   isVisible(): boolean {
@@ -244,6 +320,7 @@ export class MenuController {
 
   private persist(): void {
     saveSettings(this.settings);
+    this.syncMenuMusic();
     this.callbacks.onSettingsChanged?.();
   }
 
@@ -301,6 +378,8 @@ export class MenuController {
           wavesToWin: this.spEndless ? 0 : this.spWavesToWin,
           friendlyFire: this.spEndless ? false : this.spFriendlyFire,
           ascension: this.spAscension,
+          livesPerWave: this.spLivesPerWave,
+          livesPerRun: this.spLivesPerRun,
           teamSize: this.spEndless ? 1 : this.spTeamSize,
           endless: this.spEndless,
           chestOpenMul: this.spChestOpenMul,
@@ -379,10 +458,14 @@ export class MenuController {
       case "reset-settings":
         this.settings = {
           masterVolume: 0.7,
+          musicVolume: 0.7,
+          sfxVolume: 0.8,
+          menuMusicEnabled: true,
           showDamageNumbers: true,
           screenShake: true,
           reduceMotion: false,
           damageScreenFx: "full",
+          autoOpenShop: false,
           keybinds: { ...DEFAULT_KEYBINDS },
           gamepadEnabled: true,
           gamepadBinds: { ...DEFAULT_GAMEPAD },
@@ -561,6 +644,18 @@ export class MenuController {
       const label = this.root.querySelector("#volume-label");
       if (label) label.textContent = `${Math.round(this.settings.masterVolume * 100)}%`;
     }
+    if (el.dataset.field === "music-volume") {
+      this.settings.musicVolume = Number(el.value);
+      this.persist();
+      const label = this.root.querySelector("#music-volume-label");
+      if (label) label.textContent = `${Math.round(this.settings.musicVolume * 100)}%`;
+    }
+    if (el.dataset.field === "sfx-volume") {
+      this.settings.sfxVolume = Number(el.value);
+      this.persist();
+      const label = this.root.querySelector("#sfx-volume-label");
+      if (label) label.textContent = `${Math.round(this.settings.sfxVolume * 100)}%`;
+    }
     if (el.dataset.field === "mp-turrets") {
       this.lobby.maxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
       this.emitLobbyOpts();
@@ -586,6 +681,30 @@ export class MenuController {
       wavesToWin: this.lobby.wavesToWin,
       friendlyFire: this.lobby.friendlyFire,
       utilityDraftLevel: this.lobby.utilityDraftLevel,
+      ascension: this.lobby.ascension,
+      livesPerWave: this.lobby.livesPerWave,
+      livesPerRun: this.lobby.livesPerRun,
+      chestOpenMul: this.lobby.chestOpenMul,
+      chestDespawnSec: this.lobby.chestDespawnSec,
+      chestSpawnChance: this.lobby.chestSpawnChance,
+      enemyDensityMul: this.lobby.enemyDensityMul,
+      enemyHpMul: this.lobby.enemyHpMul,
+      enemySpeedMul: this.lobby.enemySpeedMul,
+      incomeMul: this.lobby.incomeMul,
+      respawnMul: this.lobby.respawnMul,
+      startingBaseLevel: this.lobby.startingBaseLevel,
+      levelDraftSize: this.lobby.levelDraftSize,
+      relicDraftSize: this.lobby.relicDraftSize,
+      disableArtifacts: this.lobby.disableArtifacts,
+      disableChests: this.lobby.disableChests,
+      disableElites: this.lobby.disableElites,
+      disableBosses: this.lobby.disableBosses,
+      disableShop: this.lobby.disableShop,
+      disableSends: this.lobby.disableSends,
+      disableRelics: this.lobby.disableRelics,
+      fogAlways: this.lobby.fogAlways,
+      doubleElites: this.lobby.doubleElites,
+      suddenDeathBaseHp: this.lobby.suddenDeathBaseHp > 0 ? this.lobby.suddenDeathBaseHp : undefined,
     });
   }
 
@@ -594,12 +713,16 @@ export class MenuController {
     if ((el as HTMLInputElement).dataset.setting === "showDamageNumbers") {
       this.settings.showDamageNumbers = (el as HTMLInputElement).checked;
       this.persist();
+    } else if ((el as HTMLInputElement).dataset.setting === "autoOpenShop") {
+      this.settings.autoOpenShop = (el as HTMLInputElement).checked;
+      this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "screenShake") {
       this.settings.screenShake = (el as HTMLInputElement).checked;
       this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "reduceMotion") {
       this.settings.reduceMotion = (el as HTMLInputElement).checked;
       this.persist();
+      this.render();
     } else if (el.dataset.field === "damage-fx") {
       this.settings.damageScreenFx = el.value as DamageScreenFx;
       this.persist();
@@ -615,16 +738,95 @@ export class MenuController {
     } else if (el.dataset.field === "mp-waves-to-win") {
       this.lobby.wavesToWin = Number(el.value);
       this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-lives-wave") {
+      this.lobby.livesPerWave = Number(el.value);
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-lives-run") {
+      this.lobby.livesPerRun = Number(el.value);
+      this.emitLobbyOpts();
     } else if (el.dataset.field === "mp-utility-level") {
       this.lobby.utilityDraftLevel = Number(el.value);
       this.emitLobbyOpts();
     } else if (el.dataset.field === "mp-friendly-fire") {
       this.lobby.friendlyFire = el.value === "1";
       this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-turrets") {
+      this.lobby.maxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-chest-open") {
+      this.lobby.chestOpenMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-chest-despawn") {
+      this.lobby.chestDespawnSec = Number(el.value) || 28;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-chest-chance") {
+      this.lobby.chestSpawnChance = Number(el.value) || 0.08;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-enemy-density") {
+      this.lobby.enemyDensityMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-enemy-hp") {
+      this.lobby.enemyHpMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-enemy-speed") {
+      this.lobby.enemySpeedMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-income") {
+      this.lobby.incomeMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-respawn") {
+      this.lobby.respawnMul = Number(el.value) || 1;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-start-base") {
+      this.lobby.startingBaseLevel = Number(el.value) || 0;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-level-draft") {
+      this.lobby.levelDraftSize = Number(el.value) || 3;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-relic-draft") {
+      this.lobby.relicDraftSize = Number(el.value) || 3;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-sudden") {
+      this.lobby.suddenDeathBaseHp = Number(el.value) || 0;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-ascension") {
+      this.lobby.ascension = Number(el.value) || 0;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-art") {
+      this.lobby.disableArtifacts = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-chest") {
+      this.lobby.disableChests = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-elite") {
+      this.lobby.disableElites = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-boss") {
+      this.lobby.disableBosses = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-shop") {
+      this.lobby.disableShop = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-send") {
+      this.lobby.disableSends = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-no-relic") {
+      this.lobby.disableRelics = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-fog") {
+      this.lobby.fogAlways = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-dbl-elite") {
+      this.lobby.doubleElites = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
     } else if (el.dataset.field === "sp-starting-gold") {
       this.spStartingGold = Number(el.value) || STARTING_GOLD;
     } else if (el.dataset.field === "sp-waves-to-win") {
       this.spWavesToWin = Number(el.value);
+    } else if (el.dataset.field === "sp-lives-wave") {
+      this.spLivesPerWave = Number(el.value);
+    } else if (el.dataset.field === "sp-lives-run") {
+      this.spLivesPerRun = Number(el.value);
     } else if (el.dataset.field === "sp-friendly-fire") {
       this.spFriendlyFire = el.value === "1";
     } else if (el.dataset.field === "sp-turrets") {
@@ -691,6 +893,9 @@ export class MenuController {
       this.spDoubleElites = (el as HTMLInputElement).checked;
     } else if ((el as HTMLInputElement).dataset.setting === "gamepadEnabled") {
       this.settings.gamepadEnabled = (el as HTMLInputElement).checked;
+      this.persist();
+    } else if ((el as HTMLInputElement).dataset.setting === "menuMusicEnabled") {
+      this.settings.menuMusicEnabled = (el as HTMLInputElement).checked;
       this.persist();
     } else if ((el as HTMLInputElement).dataset.cheat) {
       const key = (el as HTMLInputElement).dataset.cheat as keyof CheatOptions;
@@ -798,17 +1003,15 @@ export class MenuController {
 
     this.mainFx.stop();
     const isMain = this.screen === "main";
+    const fxVar = isMain ? "main" : "sub";
+    const reduceMotion = !!this.settings.reduceMotion;
     this.root.innerHTML = `
-      <div class="menu-backdrop${isMain ? " main-fx" : ""}">
-        ${
-          isMain
-            ? `<div class="menu-aurora" aria-hidden="true"></div>
-               <div class="menu-waves" aria-hidden="true"></div>
-               <canvas id="menu-fx-canvas" aria-hidden="true"></canvas>`
-            : ""
-        }
+      <div class="menu-backdrop menu-fx fx-${fxVar}${reduceMotion ? " reduce-motion" : ""}">
+        <div class="menu-aurora" aria-hidden="true"></div>
+        <div class="menu-waves" aria-hidden="true"></div>
+        <canvas id="menu-fx-canvas" aria-hidden="true"></canvas>
       </div>
-      <div class="menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" || this.screen === "stats" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}">
+      <div class="menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}">
         ${body}
         ${toastHtml}
       </div>
@@ -817,13 +1020,16 @@ export class MenuController {
     const shell = this.root.querySelector(".menu-shell");
     if (shell) shell.scrollTop = scroll;
 
-    if (isMain) {
-      const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
-      if (fxCanvas) this.mainFx.start(fxCanvas);
+    const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
+    if (fxCanvas) {
+      this.mainFx.start(fxCanvas, { variation: fxVar, reduceMotion });
     }
 
     if (this.screen === "compendium" && this.compendiumTab === "maps") {
       this.paintMapThumbs();
+    }
+    if (this.screen === "compendium" && this.compendiumTab === "enemies") {
+      paintEnemyThumbs(this.root);
     }
     if (this.screen === "map-editor") this.mapEditor.bind(this.root);
     if (this.screen === "hero-editor") this.heroEditor.bind(this.root);
@@ -860,6 +1066,7 @@ export class MenuController {
     }
     list.innerHTML = this.compendiumContent();
     if (this.compendiumTab === "maps") this.paintMapThumbs();
+    if (this.compendiumTab === "enemies") paintEnemyThumbs(this.root);
   }
 
   private paintMapThumbs(): void {
@@ -917,41 +1124,39 @@ export class MenuController {
       .join("");
 
     return `
-      <header class="menu-header compact stats-header">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <div class="stats-header-text">
-          <h1 class="menu-title">Career Stats</h1>
-          <p class="menu-lead">Lifetime record across every finished run.</p>
+      <div class="stats-layout">
+        <header class="menu-header compact stats-header">
+          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          <div class="stats-header-text">
+            <h1 class="menu-title">Career Stats</h1>
+            <p class="menu-lead">Lifetime record across every finished run.</p>
+          </div>
+        </header>
+        <div class="stats-hero-strip">
+          <article class="stats-hero-card tone-win">
+            <span class="stats-hero-label">Win rate</span>
+            <strong>${c.runs ? winRate(c).toFixed(1) : "—"}%</strong>
+            <em>${c.wins}W · ${c.losses}L · ${c.runs} runs</em>
+          </article>
+          <article class="stats-hero-card tone-wave">
+            <span class="stats-hero-label">Best wave</span>
+            <strong>${formatCompact(Math.max(c.bestWave, meta.bestWave))}</strong>
+            <em>${formatCompact(c.wavesCleared)} waves cleared</em>
+          </article>
+          <article class="stats-hero-card tone-time">
+            <span class="stats-hero-label">Time in runs</span>
+            <strong>${formatDuration(c.playTimeSec)}</strong>
+            <em>${formatCompact(meta.lifetimeCrests)} lifetime crests</em>
+          </article>
+          <article class="stats-hero-card tone-kill">
+            <span class="stats-hero-label">Kills</span>
+            <strong>${formatCompact(c.kills)}</strong>
+            <em>${formatCompact(c.damageDealt)} damage dealt</em>
+          </article>
         </div>
-        <div class="stats-crest-pill" title="War Crests">
-          <span>Crests</span>
-          <strong>${formatCompact(meta.crests)}</strong>
-        </div>
-      </header>
-      <div class="stats-hero-strip">
-        <article class="stats-hero-card tone-win">
-          <span class="stats-hero-label">Win rate</span>
-          <strong>${c.runs ? winRate(c).toFixed(1) : "—"}%</strong>
-          <em>${c.wins}W · ${c.losses}L · ${c.runs} runs</em>
-        </article>
-        <article class="stats-hero-card tone-wave">
-          <span class="stats-hero-label">Best wave</span>
-          <strong>${formatCompact(Math.max(c.bestWave, meta.bestWave))}</strong>
-          <em>${formatCompact(c.wavesCleared)} waves cleared</em>
-        </article>
-        <article class="stats-hero-card tone-time">
-          <span class="stats-hero-label">Time in runs</span>
-          <strong>${formatDuration(c.playTimeSec)}</strong>
-          <em>${formatCompact(meta.lifetimeCrests)} lifetime crests</em>
-        </article>
-        <article class="stats-hero-card tone-kill">
-          <span class="stats-hero-label">Kills</span>
-          <strong>${formatCompact(c.kills)}</strong>
-          <em>${formatCompact(c.damageDealt)} damage dealt</em>
-        </article>
+        <nav class="stats-tabs" aria-label="Stats sections">${tabNav}</nav>
+        <div class="stats-panel">${this.renderStatsTab(c, meta.crests, meta.lifetimeCrests)}</div>
       </div>
-      <nav class="stats-tabs" aria-label="Stats sections">${tabNav}</nav>
-      <div class="stats-panel">${this.renderStatsTab(c, meta.crests, meta.lifetimeCrests)}</div>
     `;
   }
 
@@ -1182,6 +1387,8 @@ export class MenuController {
     const turrets = scope === "sp" ? this.spMaxTurrets : this.lobby.maxTurrets;
     const gold = scope === "sp" ? this.spStartingGold : this.lobby.startingGold;
     const waves = scope === "sp" ? this.spWavesToWin : this.lobby.wavesToWin;
+    const livesWave = scope === "sp" ? this.spLivesPerWave : this.lobby.livesPerWave;
+    const livesRun = scope === "sp" ? this.spLivesPerRun : this.lobby.livesPerRun;
     const ff = scope === "sp" ? this.spFriendlyFire : this.lobby.friendlyFire;
     const goldOpts = [0, 10, 45, 50, 60, 80, 100, 150, 200, 500, 1000]
       .map(
@@ -1196,12 +1403,35 @@ export class MenuController {
         return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
+    const livesWaveOpts = [0, 1, 2, 3, 5, 10]
+      .map((n) => {
+        const label = n === 0 ? "Unlimited" : String(n);
+        const def = n === 0 ? " (default)" : "";
+        return `<option value="${n}" ${livesWave === n ? "selected" : ""}>${label}${def}</option>`;
+      })
+      .join("");
+    const livesRunOpts = [0, 1, 2, 3, 5]
+      .map((n) => {
+        const label = n === 0 ? "Unlimited" : String(n);
+        const def = n === 0 ? " (default)" : "";
+        return `<option value="${n}" ${livesRun === n ? "selected" : ""}>${label}${def}</option>`;
+      })
+      .join("");
     const turretOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       .map(
         (n) =>
           `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
+    const livesFields = `
+          <label class="run-field">
+            <span>Lives / wave</span>
+            <select data-field="${scope}-lives-wave">${livesWaveOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Lives / run</span>
+            <select data-field="${scope}-lives-run">${livesRunOpts}</select>
+          </label>`;
     const showFf =
       scope === "mp" ? this.lobby.mode !== "1v1" : !this.spEndless && this.spTeamSize > 1;
     const ffField = showFf
@@ -1265,6 +1495,7 @@ export class MenuController {
             <select data-field="sp-starting-gold">${goldOpts}</select>
           </label>
           ${wavesField}
+          ${livesFields}
           ${ffField}
         </div>
         ${
@@ -1314,7 +1545,7 @@ export class MenuController {
               <select data-field="sp-relic-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.spRelicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Utility draft Lv</span>
-              <select data-field="sp-utility-level">${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${this.spUtilityDraftLevel === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
+              <select data-field="sp-utility-level">${utilityDraftLevelOptionsHtml(this.spUtilityDraftLevel)}</select>
             </label>
             <label class="run-field"><span>Ally AI</span>
               <select data-field="sp-ally-ai">${[0.7, 1, 1.4, 1.8].map((n) => `<option value="${n}" ${this.spAllyAi === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
@@ -1345,33 +1576,95 @@ export class MenuController {
       `;
     }
     return `
-      <label class="setting-row">
-        <span>Max artifacts <em id="${scope}-turret-label">${turrets}</em></span>
-        <input type="range" min="1" max="10" step="1" value="${turrets}" data-field="${scope}-turrets" />
-      </label>
-      <label class="setting-row">
-        <span>Starting gold</span>
-        <select data-field="${scope}-starting-gold">${goldOpts}</select>
-      </label>
-      <label class="setting-row">
-        <span>Waves to win</span>
-        <select data-field="${scope}-waves-to-win">${waveOpts}</select>
-      </label>
-      <label class="setting-row">
-        <span>Utility draft Lv</span>
-        <select data-field="${scope}-utility-level">${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${(scope === "mp" ? this.lobby.utilityDraftLevel : this.spUtilityDraftLevel) === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
-      </label>
-      ${
-        showFf
-          ? `<label class="setting-row">
-        <span>Friendly fire</span>
-        <select data-field="${scope}-friendly-fire">
-          <option value="0" ${!ff ? "selected" : ""}>Off</option>
-          <option value="1" ${ff ? "selected" : ""}>On</option>
-        </select>
-      </label>`
-          : ""
-      }
+      <div class="run-grid cols-4">
+        <label class="run-field">
+          <span>Artifacts</span>
+          <select data-field="${scope}-turrets">${turretOpts}</select>
+        </label>
+        <label class="run-field">
+          <span>Starting gold</span>
+          <select data-field="${scope}-starting-gold">${goldOpts}</select>
+        </label>
+        <label class="run-field">
+          <span>Waves to win</span>
+          <select data-field="${scope}-waves-to-win">${waveOpts}</select>
+        </label>
+        ${livesFields}
+        ${ffField}
+      </div>
+      <div class="run-grid cols-3" style="margin-top:8px">
+        <label class="run-field">
+          <span>Chest open</span>
+          <select data-field="${scope}-chest-open">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
+        </label>
+        <label class="run-field">
+          <span>Chest despawn</span>
+          <select data-field="${scope}-chest-despawn">${[12, 20, 28, 40, 60].map((n) => `<option value="${n}" ${this.lobby.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
+        </label>
+        <label class="run-field">
+          <span>Chest spawn</span>
+          <select data-field="${scope}-chest-chance">${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.lobby.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
+        </label>
+      </div>
+      <details class="muted-box" style="margin-top:10px">
+        <summary>Creative options</summary>
+        <div class="run-grid cols-4" style="margin-top:8px">
+          <label class="run-field"><span>Enemy density</span>
+            <select data-field="${scope}-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Enemy HP</span>
+            <select data-field="${scope}-enemy-hp">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Enemy speed</span>
+            <select data-field="${scope}-enemy-speed">${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.lobby.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Income</span>
+            <select data-field="${scope}-income">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Respawn</span>
+            <select data-field="${scope}-respawn">${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.lobby.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Start base Lv</span>
+            <select data-field="${scope}-start-base">${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.lobby.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Level draft size</span>
+            <select data-field="${scope}-level-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.lobby.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Relic draft size</span>
+            <select data-field="${scope}-relic-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.lobby.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Utility draft Lv</span>
+            <select data-field="${scope}-utility-level">${utilityDraftLevelOptionsHtml(this.lobby.utilityDraftLevel)}</select>
+          </label>
+          <label class="run-field"><span>Sudden death HP</span>
+            <select data-field="${scope}-sudden">${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.lobby.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+          </label>
+          <label class="run-field"><span>Ascension</span>
+            <select data-field="${scope}-ascension">${Array.from({ length: loadMetaStore().ascensionUnlocked + 1 }, (_, i) => {
+              const def = ASCENSIONS[i]!;
+              return `<option value="${i}" ${this.lobby.ascension === i ? "selected" : ""}>A${i} · ${escapeHtml(def.name)}</option>`;
+            }).join("")}</select>
+          </label>
+        </div>
+        <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+          ${[
+            [`${scope}-no-art`, "No artifacts", this.lobby.disableArtifacts],
+            [`${scope}-no-chest`, "No chests", this.lobby.disableChests],
+            [`${scope}-no-elite`, "No elites", this.lobby.disableElites],
+            [`${scope}-no-boss`, "No bosses", this.lobby.disableBosses],
+            [`${scope}-no-shop`, "No shop", this.lobby.disableShop],
+            [`${scope}-no-send`, "No sends", this.lobby.disableSends],
+            [`${scope}-no-relic`, "No relics", this.lobby.disableRelics],
+            [`${scope}-fog`, "Fog always", this.lobby.fogAlways],
+            [`${scope}-dbl-elite`, "Double elites", this.lobby.doubleElites],
+          ]
+            .map(
+              ([field, label, on]) =>
+                `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
+            )
+            .join("")}
+        </div>
+      </details>
     `;
   }
 
@@ -1426,6 +1719,7 @@ export class MenuController {
       const selected = h.id === this.selectedHero;
       return `
         <button type="button" class="hero-card compact ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
+          ${heroArtImg(h.id, "hero-art hero-card-art")}
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong>${escapeHtml(h.name)}</strong>
           <span>Custom · ${escapeHtml(h.blurb)}</span>
@@ -1439,6 +1733,7 @@ export class MenuController {
         const unlocked = isHeroUnlocked(h.id, meta);
         return `
         <button type="button" class="hero-card compact ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
+          ${heroArtImg(h.id, "hero-art hero-card-art")}
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong>${escapeHtml(h.name)}</strong>
           <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
@@ -1682,6 +1977,7 @@ export class MenuController {
               <h3>${escapeHtml(h.name)}</h3>
               <p class="comp-meta">HP ${h.maxHp} · Spd ${h.speed} · Atk ${h.attackDamage}</p>
             </div>
+            ${heroArtImg(h.id, "hero-art comp-hero-art")}
           </div>
           <p>${escapeHtml(h.blurb)}</p>
           <ul class="comp-ability-list">
@@ -1696,31 +1992,45 @@ export class MenuController {
       return `<div class="comp-grid heroes">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "items") {
-      let items = SHOP_ITEMS.filter((i) => this.matchesFilter(i.name, i.effect, i.rarity));
+      let items = SHOP_ITEMS.filter(
+        (i) => i.category === "gear" && this.matchesFilter(i.name, i.effect, i.rarity),
+      );
       items = sortByRarityOrName(items, this.compSort, (i) => i.rarity, (i) => i.name);
-      const byCat = new Map<string, typeof items>();
-      for (const i of items) {
-        const list = byCat.get(i.category) ?? [];
-        list.push(i);
-        byCat.set(i.category, list);
-      }
-      const sections = [...byCat.entries()]
-        .map(([cat, list]) => {
-          const cards = list
-            .map(
-              (i) => `
+      const cards = items
+        .map(
+          (i) => `
+            <article class="comp-card compact item-comp">
+              <div class="item-comp-top">
+                ${itemArtImg(i.id, "item-art comp-item-art")}
+                <div>
+                  ${this.rarityBadge(i.rarity)}
+                  <h3>${escapeHtml(i.name)}</h3>
+                </div>
+              </div>
+              <p>${escapeHtml(i.effect)}</p>
+              <p class="comp-meta">${i.cost}g · max ×${i.maxStacks}</p>
+            </article>`,
+        )
+        .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
+    }
+    if (this.compendiumTab === "artifacts") {
+      let items = SHOP_ITEMS.filter(
+        (i) => i.category === "artifact" && this.matchesFilter(i.name, i.effect, i.rarity),
+      );
+      items = sortByRarityOrName(items, this.compSort, (i) => i.rarity, (i) => i.name);
+      const cards = items
+        .map(
+          (i) => `
             <article class="comp-card compact">
               ${this.rarityBadge(i.rarity)}
               <h3>${escapeHtml(i.name)}</h3>
               <p>${escapeHtml(i.effect)}</p>
-              <p class="comp-meta">${i.cost}g · max ×${i.maxStacks}</p>
+              <p class="comp-meta">${i.cost}g · max ×${i.maxStacks} · Artifact</p>
             </article>`,
-            )
-            .join("");
-          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(capitalize(cat))}</h2><div class="comp-grid">${cards}</div></section>`;
-        })
+        )
         .join("");
-      return sections || emptyComp();
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "relics") {
       let relics = RELIC_LIST.filter((r) => this.matchesFilter(r.name, r.blurb, r.rarity));
@@ -1728,9 +2038,14 @@ export class MenuController {
       const cards = relics
         .map(
           (r) => `
-        <article class="comp-card compact">
-          ${this.rarityBadge(r.rarity)}
-          <h3>${escapeHtml(r.name)}</h3>
+        <article class="comp-card compact relic-comp">
+          <div class="relic-comp-top">
+            ${relicArtImg(r.id, "relic-art comp-relic-art")}
+            <div>
+              ${this.rarityBadge(r.rarity)}
+              <h3>${escapeHtml(r.name)}</h3>
+            </div>
+          </div>
           <p>${escapeHtml(r.blurb)}</p>
           <p class="comp-meta">${escapeHtml(r.tag)} · after elite/boss</p>
         </article>`,
@@ -1758,14 +2073,17 @@ export class MenuController {
             .map((k) => {
               const d = ENEMY_DEFS[k];
               return `
-            <article class="comp-card compact">
-              <h3>${escapeHtml(d.name)}</h3>
-              <p>Intent: <strong>${escapeHtml(d.intent)}</strong>${d.ranged ? " · ranged" : ""}${d.dashSpeed ? " · dash" : ""}${d.projectileAoe ? " · AoE shell" : ""}${d.slamRadius ? " · slam" : ""}</p>
-              <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s${d.attackDamage ? ` · Shot ${d.attackDamage}` : ""} · Gold ${d.goldReward}</p>
+            <article class="comp-card compact enemy-comp">
+              <div class="enemy-thumb"><canvas data-enemy="${k}"></canvas></div>
+              <div class="enemy-comp-body">
+                <h3>${escapeHtml(d.name)}</h3>
+                <p>Intent: <strong>${escapeHtml(d.intent)}</strong>${d.ranged ? " · ranged" : ""}${d.dashSpeed ? " · dash" : ""}${d.projectileAoe ? " · AoE shell" : ""}${d.slamRadius ? " · slam" : ""}</p>
+                <p class="comp-meta">HP ${d.maxHp} · Spd ${d.speed} · Contact ${d.contactDamage}/s${d.attackDamage ? ` · Shot ${d.attackDamage}` : ""} · Gold ${d.goldReward}</p>
+              </div>
             </article>`;
             })
             .join("");
-          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(title)}</h2><div class="comp-grid">${cards}</div></section>`;
+          return `<section class="comp-section"><h2 class="comp-section-title">${escapeHtml(title)}</h2><div class="comp-grid enemies">${cards}</div></section>`;
         })
         .join("");
       return sections || emptyComp();
@@ -1802,12 +2120,25 @@ export class MenuController {
         .join("");
       return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
+    const isSpecialMap = (m: (typeof MAP_LIST)[number]) =>
+      !!(
+        m.shiftingObstacles ||
+        m.shrinkingLane ||
+        m.movingHazards ||
+        m.eclipseFog ||
+        m.dualSpawners ||
+        m.riftSurges ||
+        m.volatileOrbs ||
+        m.chestMagnet
+      );
     const cards = MAP_LIST.filter((m) => this.matchesFilter(m.name, m.blurb))
+      .slice()
+      .sort((a, b) => Number(isSpecialMap(a)) - Number(isSpecialMap(b)))
       .map(
         (m) => `
         <article class="comp-card map-comp">
           <div class="map-thumb"><canvas data-map="${m.id}"></canvas></div>
-          <h3>${escapeHtml(m.name)}${m.shiftingObstacles || m.shrinkingLane || m.movingHazards || m.eclipseFog || m.dualSpawners ? ` <em class="special-tag">Special</em>` : ""}</h3>
+          <h3>${escapeHtml(m.name)}${isSpecialMap(m) ? ` <em class="special-tag">Special</em>` : ""}</h3>
           <p>${escapeHtml(m.blurb)}</p>
           <p class="comp-meta">Obstacles ${m.obstacles.length} · High grounds ${m.highGrounds.length} · Artifacts ${m.turretSlots.length}</p>
         </article>`,
@@ -1817,7 +2148,7 @@ export class MenuController {
   }
 
   private renderCompendium(): string {
-    const tabs = (["heroes", "items", "relics", "enemies", "sends", "maps", "ascensions"] as const)
+    const tabs = (["heroes", "items", "artifacts", "relics", "enemies", "sends", "maps", "ascensions"] as const)
       .map(
         (tab) => `
         <button type="button" class="chip ${this.compendiumTab === tab ? "selected" : ""}" data-action="comp-tab" data-tab="${tab}">
@@ -1826,7 +2157,10 @@ export class MenuController {
       )
       .join("");
 
-    const showRarity = this.compendiumTab === "items" || this.compendiumTab === "relics";
+    const showRarity =
+      this.compendiumTab === "items" ||
+      this.compendiumTab === "artifacts" ||
+      this.compendiumTab === "relics";
     const rarityOpts = [
       `<option value="all"${this.compRarity === "all" ? " selected" : ""}>All rarities</option>`,
       ...RARITY_ORDER.map(
@@ -1860,36 +2194,89 @@ export class MenuController {
 
   private renderGameInfo(): string {
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Game Info</h1>
-        <p class="menu-lead">How the lane, sends, and combat loop work.</p>
-      </header>
-      <div class="info-stack">
-        <section class="info-block">
-          <h2>The line</h2>
-          <p>You defend your <strong>base</strong> on the left. Enemies spawn on the right and march toward you. Survive waves, spend gold, and outlast the enemy lane.</p>
-        </section>
-        <section class="info-block highlight">
-          <h2>Sending enemies (the core loop)</h2>
-          <p>Gold buys <strong>send packs</strong> (keys 1–3, or the send bar). Sending does two things:</p>
+      <div class="info-layout">
+        <header class="menu-header compact info-header">
+          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          <div>
+            <h1 class="menu-title">Game Info</h1>
+            <p class="menu-lead">How the lane, sends, and progression loop work.</p>
+          </div>
+        </header>
+
+        <section class="info-hero">
+          <p class="info-kicker">Core loop</p>
+          <h2>Sending enemies</h2>
+          <p>Passive gold ticks in. Spend it on <strong>send packs</strong> (keys 1–6, or the send bar). Sending does two things:</p>
           <ul>
             <li><strong>Raises your income</strong> permanently for the run (+gold/sec).</li>
-            <li><strong>Adds those creeps to the enemy's next wave</strong> — pressuring their hero and base.</li>
+            <li><strong>Queues those creeps into the enemy's next wave</strong> — pressuring their hero and base.</li>
           </ul>
-          <p>The AI opponent does the same to you. Spending on sends is how you snowball economy <em>and</em> attack the other lane.</p>
+          <p>The rival lane sends back at you. Snowball economy <em>and</em> attack with the same gold. In <strong>Endless</strong>, there is no rival lane — sends queue into <em>your</em> next wave for income, and you fight what you buy.</p>
         </section>
-        <section class="info-block">
-          <h2>Shop, base, relics</h2>
-          <p>Walk to the shop pad and press <strong>F</strong>. Upgrade Base (<strong>U</strong>) unlocks stronger packs. After elite/boss waves, draft a relic. Level-ups offer passive drafts.</p>
+
+        <div class="info-grid">
+          <section class="info-block">
+            <h2>The line</h2>
+            <p>Hold your <strong>base</strong> on the left. Creeps spawn on the right and march toward you. By default you respawn when downed — only a destroyed base (or clearing the wave goal) ends the run. Run options can set <strong>Lives / wave</strong> (no mid-wave respawn after they're spent) and <strong>Lives / run</strong> (out of lives = no respawn; if every ally is out, that side loses). High ground grants bonus damage. Default win is a wave count (configurable); Unlimited / Endless fight until a base falls.</p>
+          </section>
+          <section class="info-block">
+            <h2>Shop, base &amp; artifacts</h2>
+            <p>Stand on the SHOP pad and press <strong>F</strong> (during or between waves). Optional Settings toggle <strong>Auto Open Shop</strong> opens the panel when you touch the pad. Buy gear with keys while the shop is open. <strong>Artifacts</strong> are placeable auto-turrets (own Compendium tab) that occupy free slots near your base — including the legendary <strong>Sovereign Nexus</strong>, which crowns a tough foe then commands every other artifact to fire. <strong>Upgrade Base (U)</strong> unlocks stronger send packs and scales cost/power; at certain levels you draft a <strong>base branch</strong>.</p>
+          </section>
+          <section class="info-block">
+            <h2>Heroes, abilities &amp; utility</h2>
+            <p>Starting roster is six heroes (2×3). Others unlock via Barracks commissions — some also need a challenge first (Lodestone, Chrona, Hive, Hex). Chaos unlocks barracks-only like Coil and Thorn. Each hero has a basic, mobility, ultimate, and passive. At a chosen level (default 10; configurable — including <strong>Run Start</strong>), draft a global <strong>Utility</strong> for the Spacebar slot. Full kits are in the Compendium.</p>
+          </section>
+          <section class="info-block">
+            <h2>Relics &amp; level drafts</h2>
+            <p>Level-ups pause for a passive draft. Elite/boss clearances offer a relic draft. A few relics and items boost XP (Level Torrent, Mentor Sigil, XP Primer, etc.) — XP stays precious overall. Both drafts support <strong>Skip</strong> and <strong>reroll tokens</strong>. Open the Bag to inspect owned relics, items, and your passive.</p>
+          </section>
+          <section class="info-block">
+            <h2>Combat &amp; controls</h2>
+            <p>WASD / arrows to move. Hold attack and <strong>aim with the mouse</strong> (some heroes auto-aim). Defaults: LMB attack, RMB mobility, MMB ultimate, Space utility, 1–6 sends. Remap keyboard/mouse and Xbox pad under Settings → Controls.</p>
+          </section>
+          <section class="info-block">
+            <h2>Maps &amp; Ascension</h2>
+            <p>Built-in layouts include cover, high ground, dual spawners, shifting obstacles, shrinking lanes, fog, hazards, rift surges, volatile orbs, and more. Some unlock via Barracks / challenges. Ascension stacks through <strong>A15</strong>. The Workshop <strong>Map Editor</strong> builds custom maps (specials + tooltips, load template, export JSON).</p>
+          </section>
+        </div>
+
+        <section class="info-band">
+          <h2>Modes</h2>
+          <div class="info-band-cols">
+            <div>
+              <h3>Singleplayer</h3>
+              <p>Classic AI or a trained neural school (Rookie→Brutal). Team size 1v1–3v3 with AI allies, or Endless solo survival. Run options include map, Ascension, starting gold, draft sizes, and creative toggles.</p>
+            </div>
+            <div>
+              <h3>Multiplayer</h3>
+              <p>PeerJS lobbies (private code or public find-match). 1v1 / 2v2 / 3v3 PvP and 2p / 3p PvE. Host sets options; allies share a lane.</p>
+            </div>
+          </div>
         </section>
-        <section class="info-block">
-          <h2>Combat</h2>
-          <p>WASD to move. Hold attack and <strong>aim with the mouse</strong> (Prism auto-aims his beam). Mobility and ultimate are mouse-bound by default (RMB / MMB).</p>
-        </section>
-        <section class="info-block">
-          <h2>Enemy lane panel</h2>
-          <p>Top-right shows opponent HP, level, income, fight status, and whether they are sending — without leaving your lane. <strong>View lane</strong> toggles a full flip to their lane; toggle again to return.</p>
+
+        <div class="info-grid info-grid-meta">
+          <section class="info-block">
+            <h2>Meta progression</h2>
+            <p><strong>War Crests</strong> pay out at run end. Spend them in the <strong>Barracks</strong> on permanent ranks and hero unlocks. <strong>Ascension</strong> (A0–A15) stacks modifiers; win at your highest unlocked level to open the next — Crests scale with it. <strong>Challenges</strong> unlock Barracks purchases (rewards are not free). <strong>Stats</strong> tracks career numbers. Export/import save JSON from Settings.</p>
+          </section>
+          <section class="info-block">
+            <h2>Workshop</h2>
+            <p><strong>Map Editor</strong> and <strong>Hero Editor</strong> for custom content. <strong>AI Lab</strong> trains brains on unlimited-wave duels; checkpoints become difficulty tiers for solo / PvE. Compendium lists heroes, maps, and more.</p>
+          </section>
+          <section class="info-block">
+            <h2>Enemy lane panel</h2>
+            <p>Top-right shows opponent HP, level, income, fight status, and whether they are sending — without leaving your lane. <strong>View lane</strong> flips the camera to their lane; toggle again to return.</p>
+          </section>
+          <section class="info-block">
+            <h2>Audio &amp; settings</h2>
+            <p>Master, music, and SFX volumes live in Settings. Menu music shuffles on title screens (toggleable). Combat SFX are procedural; in-battle music is not wired yet.</p>
+          </section>
+        </div>
+
+        <section class="info-footnote">
+          <h2>Online note</h2>
+          <p>Multiplayer runs over PeerJS with a host-authoritative sim. Lobbies and matches work, but expect ongoing polish — desync edge cases and deeper PvP feel are still being tightened.</p>
         </section>
       </div>
     `;
@@ -1918,9 +2305,25 @@ export class MenuController {
           <span>Master volume <em id="volume-label">${Math.round(s.masterVolume * 100)}%</em></span>
           <input type="range" min="0" max="1" step="0.05" value="${s.masterVolume}" data-field="volume" />
         </label>
+        <label class="setting-row">
+          <span>Music volume <em id="music-volume-label">${Math.round(s.musicVolume * 100)}%</em></span>
+          <input type="range" min="0" max="1" step="0.05" value="${s.musicVolume}" data-field="music-volume" />
+        </label>
+        <label class="setting-row">
+          <span>SFX volume <em id="sfx-volume-label">${Math.round(s.sfxVolume * 100)}%</em></span>
+          <input type="range" min="0" max="1" step="0.05" value="${s.sfxVolume}" data-field="sfx-volume" />
+        </label>
+        <label class="setting-row check">
+          <span>Main menu music<em>Shuffle playlist on the title screens</em></span>
+          <input type="checkbox" data-setting="menuMusicEnabled" ${s.menuMusicEnabled ? "checked" : ""} />
+        </label>
         <label class="setting-row check">
           <span>Show damage numbers</span>
           <input type="checkbox" data-setting="showDamageNumbers" ${s.showDamageNumbers ? "checked" : ""} />
+        </label>
+        <label class="setting-row check">
+          <span>Auto-open shop<em>Open once when you step onto the shop pad</em></span>
+          <input type="checkbox" data-setting="autoOpenShop" ${s.autoOpenShop ? "checked" : ""} />
         </label>
         <label class="setting-row">
           <span>Damage screen effects<em>Flash / vignette / shake intensity</em></span>
@@ -1996,29 +2399,31 @@ export class MenuController {
 
   private renderChallenges(): string {
     const store = loadMetaStore();
-    const rows = CHALLENGES.map((c) => {
+    const cards = CHALLENGES.map((c) => {
       const done = isChallengeComplete(c.id, store);
       const unlock = META_UPGRADES.find((u) => u.id === c.unlocks);
       const owned = unlock ? getRank(store, unlock.id) >= 1 : false;
       return `
-        <div class="meta-row">
-          <div>
+        <article class="meta-card ${done ? "done" : ""}">
+          <div class="meta-card-top">
             <strong>${escapeHtml(c.name)}</strong>
-            <span class="stat-hint">${escapeHtml(c.blurb)}</span>
-            <em>${escapeHtml(challengeProgressHint(c, store))} · Reward: ${escapeHtml(unlock?.name ?? c.unlocks)}${owned ? " (purchased)" : done ? " (buy in Barracks)" : ""}</em>
+            <span class="chip ${done ? "selected" : ""}">${done ? "Done" : "Locked"}</span>
           </div>
-          <span class="chip ${done ? "selected" : ""}">${done ? "Done" : "Locked"}</span>
-        </div>`;
+          <span class="stat-hint">${escapeHtml(c.blurb)}</span>
+          <em>${escapeHtml(challengeProgressHint(c, store))} · Reward: ${escapeHtml(unlock?.name ?? c.unlocks)}${owned ? " (purchased)" : done ? " (buy in Barracks)" : ""}</em>
+        </article>`;
     }).join("");
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Challenges</h1>
-        <p class="menu-lead">Complete mid/end-run goals to unlock Barracks purchases — rewards are not free.</p>
-      </header>
-      <section class="menu-section muted-box meta-list">${rows}</section>
-      <div class="menu-footer">
-        <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Open Barracks</button>
+      <div class="meta-hub">
+        <header class="menu-header compact">
+          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          <h1 class="menu-title">Challenges</h1>
+          <p class="menu-lead">Complete mid/end-run goals to unlock Barracks purchases — rewards are not free.</p>
+        </header>
+        <div class="meta-card-grid">${cards}</div>
+        <div class="menu-footer">
+          <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Open Barracks</button>
+        </div>
       </div>
     `;
   }
@@ -2157,7 +2562,7 @@ export class MenuController {
 
   private renderBarracks(): string {
     const store = loadMetaStore();
-    const rows = META_UPGRADES.map((u) => {
+    const cards = META_UPGRADES.map((u) => {
       const rank = getRank(store, u.id);
       const cost = nextCost(u.id, rank);
       const maxed = cost == null;
@@ -2171,53 +2576,53 @@ export class MenuController {
         ? ` · Requires challenge: ${u.requiresChallenge}`
         : "";
       return `
-        <div class="meta-row">
-          <div>
+        <article class="meta-card">
+          <div class="meta-card-top">
             <strong>${escapeHtml(u.name)}</strong>
-            <span class="stat-hint">${escapeHtml(u.blurb)}${escapeHtml(challengeNote)}</span>
             <em>${escapeHtml(rankLabel)}</em>
           </div>
+          <span class="stat-hint">${escapeHtml(u.blurb)}${escapeHtml(challengeNote)}</span>
           <button type="button" class="menu-btn ${canBuy ? "primary" : ""}" data-action="buy-meta" data-upgrade-id="${u.id}" ${maxed || !canBuy ? "disabled" : ""}>
             ${maxed ? "Max" : challengeBlocked ? "Challenge" : `${cost} crests`}
           </button>
-        </div>`;
+        </article>`;
     }).join("");
 
     const ascName = ASCENSIONS.find((a) => a.level === store.ascensionUnlocked)?.name ?? "Standard";
 
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Barracks</h1>
-        <p class="menu-lead">Permanent upgrades bought with War Crests.</p>
-      </header>
-      <div class="menu-hero-stats" aria-label="Progression summary">
-        <div class="stat-tile stat-crest">
-          <p class="stat-label">War Crests</p>
-          <p class="stat-value">${store.crests}</p>
-          <p class="stat-hint">Spend below · earn on run end</p>
+      <div class="meta-hub">
+        <header class="menu-header compact">
+          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          <h1 class="menu-title">Barracks</h1>
+          <p class="menu-lead">Permanent upgrades bought with War Crests.</p>
+        </header>
+        <div class="menu-hero-stats" aria-label="Progression summary">
+          <div class="stat-tile stat-crest">
+            <p class="stat-label">War Crests</p>
+            <p class="stat-value">${store.crests}</p>
+            <p class="stat-hint">Spend below · earn on run end</p>
+          </div>
+          <div class="stat-tile">
+            <p class="stat-label">Wins</p>
+            <p class="stat-value">${store.totalWins}</p>
+            <p class="stat-hint">${store.totalRuns} runs total</p>
+          </div>
+          <div class="stat-tile">
+            <p class="stat-label">Best wave</p>
+            <p class="stat-value">${store.bestWave}</p>
+            <p class="stat-hint">Highest reached</p>
+          </div>
+          <div class="stat-tile">
+            <p class="stat-label">Ascension</p>
+            <p class="stat-value">A${store.ascensionUnlocked}</p>
+            <p class="stat-hint">${escapeHtml(ascName)} unlocked</p>
+          </div>
         </div>
-        <div class="stat-tile">
-          <p class="stat-label">Wins</p>
-          <p class="stat-value">${store.totalWins}</p>
-          <p class="stat-hint">${store.totalRuns} runs total</p>
-        </div>
-        <div class="stat-tile">
-          <p class="stat-label">Best wave</p>
-          <p class="stat-value">${store.bestWave}</p>
-          <p class="stat-hint">Highest reached</p>
-        </div>
-        <div class="stat-tile">
-          <p class="stat-label">Ascension</p>
-          <p class="stat-value">A${store.ascensionUnlocked}</p>
-          <p class="stat-hint">${escapeHtml(ascName)} unlocked</p>
-        </div>
+        <h2 class="meta-section-title">Upgrades</h2>
+        <div class="meta-card-grid">${cards}</div>
+        <p class="menu-note">Win at your highest Ascension to unlock the next. Crest payouts scale with waves, sends, and Ascension.</p>
       </div>
-      <section class="menu-section muted-box meta-list">
-        <h2>Upgrades</h2>
-        ${rows}
-      </section>
-      <p class="menu-note">Win at your highest Ascension to unlock the next. Crest payouts scale with waves, sends, and Ascension.</p>
     `;
   }
 }

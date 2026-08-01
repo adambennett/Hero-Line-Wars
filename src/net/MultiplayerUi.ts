@@ -1,8 +1,10 @@
 import { HERO_LIST, type HeroId } from "../data/heroes";
-import { isHeroUnlocked } from "../meta/store";
+import { isHeroUnlocked, loadMetaStore } from "../meta/store";
+import { ASCENSIONS } from "../meta/ascension";
 import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
+import { utilityDraftLevelOptionsHtml } from "../data/utilities";
 import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
 import {
@@ -22,7 +24,7 @@ import {
   quickJoin,
 } from "./session";
 import { lobbyBalanced, lobbyFull, lobbyReadyCount, lobbySeat, lobbyTeamCount } from "./lobby";
-import type { LobbyState, MatchMode, MatchPrivacy, NetMode, NetMsg } from "./types";
+import type { LobbyState, MatchMode, MatchPrivacy, MpRunExtras, NetMode, NetMsg } from "./types";
 import { isPveMode, modeCap, teamNeed } from "./types";
 
 export type MpUiCallbacks = {
@@ -55,6 +57,30 @@ export class MultiplayerUi {
   private wavesToWin = WIN_WAVES;
   private friendlyFire = false;
   private utilityDraftLevel = 10;
+  private livesPerWave = 0;
+  private livesPerRun = 0;
+  private ascension = 0;
+  private chestOpenMul = 1;
+  private chestDespawnSec = 28;
+  private chestSpawnChance = 0.08;
+  private enemyDensityMul = 1;
+  private enemyHpMul = 1;
+  private enemySpeedMul = 1;
+  private incomeMul = 1;
+  private respawnMul = 1;
+  private startingBaseLevel = 0;
+  private levelDraftSize = 3;
+  private relicDraftSize = 3;
+  private disableArtifacts = false;
+  private disableChests = false;
+  private disableElites = false;
+  private disableBosses = false;
+  private disableShop = false;
+  private disableSends = false;
+  private disableRelics = false;
+  private fogAlways = false;
+  private doubleElites = false;
+  private suddenDeathBaseHp = 0;
   private preferredCode = randomMpCode();
   private busy = false;
 
@@ -87,6 +113,30 @@ export class MultiplayerUi {
     wavesToWin?: number;
     friendlyFire?: boolean;
     utilityDraftLevel?: number;
+    livesPerWave?: number;
+    livesPerRun?: number;
+    ascension?: number;
+    chestOpenMul?: number;
+    chestDespawnSec?: number;
+    chestSpawnChance?: number;
+    enemyDensityMul?: number;
+    enemyHpMul?: number;
+    enemySpeedMul?: number;
+    incomeMul?: number;
+    respawnMul?: number;
+    startingBaseLevel?: number;
+    levelDraftSize?: number;
+    relicDraftSize?: number;
+    disableArtifacts?: boolean;
+    disableChests?: boolean;
+    disableElites?: boolean;
+    disableBosses?: boolean;
+    disableShop?: boolean;
+    disableSends?: boolean;
+    disableRelics?: boolean;
+    fogAlways?: boolean;
+    doubleElites?: boolean;
+    suddenDeathBaseHp?: number;
     heroId?: HeroId;
     preferredCode?: string;
     joinCode?: string;
@@ -100,6 +150,30 @@ export class MultiplayerUi {
     if (opts?.wavesToWin != null) this.wavesToWin = opts.wavesToWin;
     if (opts?.friendlyFire != null) this.friendlyFire = opts.friendlyFire;
     if (opts?.utilityDraftLevel != null) this.utilityDraftLevel = opts.utilityDraftLevel;
+    if (opts?.livesPerWave != null) this.livesPerWave = opts.livesPerWave;
+    if (opts?.livesPerRun != null) this.livesPerRun = opts.livesPerRun;
+    if (opts?.ascension != null) this.ascension = opts.ascension;
+    if (opts?.chestOpenMul != null) this.chestOpenMul = opts.chestOpenMul;
+    if (opts?.chestDespawnSec != null) this.chestDespawnSec = opts.chestDespawnSec;
+    if (opts?.chestSpawnChance != null) this.chestSpawnChance = opts.chestSpawnChance;
+    if (opts?.enemyDensityMul != null) this.enemyDensityMul = opts.enemyDensityMul;
+    if (opts?.enemyHpMul != null) this.enemyHpMul = opts.enemyHpMul;
+    if (opts?.enemySpeedMul != null) this.enemySpeedMul = opts.enemySpeedMul;
+    if (opts?.incomeMul != null) this.incomeMul = opts.incomeMul;
+    if (opts?.respawnMul != null) this.respawnMul = opts.respawnMul;
+    if (opts?.startingBaseLevel != null) this.startingBaseLevel = opts.startingBaseLevel;
+    if (opts?.levelDraftSize != null) this.levelDraftSize = opts.levelDraftSize;
+    if (opts?.relicDraftSize != null) this.relicDraftSize = opts.relicDraftSize;
+    if (opts?.disableArtifacts != null) this.disableArtifacts = opts.disableArtifacts;
+    if (opts?.disableChests != null) this.disableChests = opts.disableChests;
+    if (opts?.disableElites != null) this.disableElites = opts.disableElites;
+    if (opts?.disableBosses != null) this.disableBosses = opts.disableBosses;
+    if (opts?.disableShop != null) this.disableShop = opts.disableShop;
+    if (opts?.disableSends != null) this.disableSends = opts.disableSends;
+    if (opts?.disableRelics != null) this.disableRelics = opts.disableRelics;
+    if (opts?.fogAlways != null) this.fogAlways = opts.fogAlways;
+    if (opts?.doubleElites != null) this.doubleElites = opts.doubleElites;
+    if (opts?.suddenDeathBaseHp != null) this.suddenDeathBaseHp = opts.suddenDeathBaseHp;
     if (opts?.heroId) this.heroId = opts.heroId;
     if (opts?.preferredCode) this.preferredCode = opts.preferredCode.toUpperCase();
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
@@ -128,6 +202,48 @@ export class MultiplayerUi {
       return;
     }
     this.renderHub();
+  }
+
+  private runExtras(): MpRunExtras {
+    return {
+      utilityDraftLevel: this.utilityDraftLevel,
+      ascension: this.ascension,
+      livesPerWave: this.livesPerWave,
+      livesPerRun: this.livesPerRun,
+      chestOpenMul: this.chestOpenMul,
+      chestDespawnSec: this.chestDespawnSec,
+      chestSpawnChance: this.chestSpawnChance,
+      enemyDensityMul: this.enemyDensityMul,
+      enemyHpMul: this.enemyHpMul,
+      enemySpeedMul: this.enemySpeedMul,
+      incomeMul: this.incomeMul,
+      respawnMul: this.respawnMul,
+      startingBaseLevel: this.startingBaseLevel,
+      levelDraftSize: this.levelDraftSize,
+      relicDraftSize: this.relicDraftSize,
+      disableArtifacts: this.disableArtifacts,
+      disableChests: this.disableChests,
+      disableElites: this.disableElites,
+      disableBosses: this.disableBosses,
+      disableShop: this.disableShop,
+      disableSends: this.disableSends,
+      disableRelics: this.disableRelics,
+      fogAlways: this.fogAlways,
+      doubleElites: this.doubleElites,
+      suddenDeathBaseHp: this.suddenDeathBaseHp,
+    };
+  }
+
+  private pushHostOpts(): void {
+    hostSetOpts(
+      this.mapChoice,
+      this.maxTurrets,
+      this.startingGold,
+      this.wavesToWin,
+      this.friendlyFire,
+      this.utilityDraftLevel,
+      this.runExtras(),
+    );
   }
 
   private runSetupHtml(prefix: string, editable: boolean): string {
@@ -162,6 +278,26 @@ export class MultiplayerUi {
         return `<option value="${w}" ${this.wavesToWin === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
+    const livesWaveOpts = [0, 1, 2, 3, 5, 10]
+      .map((n) => {
+        const label = n === 0 ? "Unlimited" : String(n);
+        const def = n === 0 ? " (default)" : "";
+        return `<option value="${n}" ${this.livesPerWave === n ? "selected" : ""}>${label}${def}</option>`;
+      })
+      .join("");
+    const livesRunOpts = [0, 1, 2, 3, 5]
+      .map((n) => {
+        const label = n === 0 ? "Unlimited" : String(n);
+        const def = n === 0 ? " (default)" : "";
+        return `<option value="${n}" ${this.livesPerRun === n ? "selected" : ""}>${label}${def}</option>`;
+      })
+      .join("");
+    const meta = loadMetaStore();
+    const ascMax = Math.max(meta.ascensionUnlocked, this.ascension);
+    const ascOpts = Array.from({ length: ascMax + 1 }, (_, i) => {
+      const def = ASCENSIONS[i]!;
+      return `<option value="${i}" ${this.ascension === i ? "selected" : ""}>A${i} · ${escapeAttr(def.name)}</option>`;
+    }).join("");
 
     const showFf = this.mode !== "1v1";
 
@@ -174,22 +310,22 @@ export class MultiplayerUi {
             <select id="${prefix}-map" ${dis}>${mapOpts}</select>
           </label>
           <label class="run-field">
-            <span>Artifacts</span>
-            <select id="${prefix}-turrets" ${dis}>${turretOpts}</select>
+            <span>Ascension</span>
+            <select id="${prefix}-ascension" ${dis}>${ascOpts}</select>
           </label>
           <label class="run-field">
-            <span>Starting gold</span>
-            <select id="${prefix}-gold" ${dis}>${goldOpts}</select>
+            <span>Artifacts</span>
+            <select id="${prefix}-turrets" ${dis}>${turretOpts}</select>
           </label>
         </div>
         <div class="run-grid cols-3">
           <label class="run-field">
-            <span>Waves to win</span>
-            <select id="${prefix}-waves" ${dis}>${waveOpts}</select>
+            <span>Starting gold</span>
+            <select id="${prefix}-gold" ${dis}>${goldOpts}</select>
           </label>
           <label class="run-field">
-            <span>Utility draft Lv</span>
-            <select id="${prefix}-utility" ${dis}>${[0, 3, 5, 7, 8, 10, 12, 15, 20, 25].map((n) => `<option value="${n}" ${this.utilityDraftLevel === n ? "selected" : ""}>${n === 0 ? "Never" : n}</option>`).join("")}</select>
+            <span>Waves to win</span>
+            <select id="${prefix}-waves" ${dis}>${waveOpts}</select>
           </label>
           ${
             showFf
@@ -203,29 +339,203 @@ export class MultiplayerUi {
               : `<div class="run-field"></div>`
           }
         </div>
+        <div class="run-grid cols-3">
+          <label class="run-field">
+            <span>Lives / wave</span>
+            <select id="${prefix}-lives-wave" ${dis}>${livesWaveOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Lives / run</span>
+            <select id="${prefix}-lives-run" ${dis}>${livesRunOpts}</select>
+          </label>
+          <div class="run-field"></div>
+        </div>
+        <div class="run-grid cols-3">
+          <label class="run-field">
+            <span>Chest open</span>
+            <select id="${prefix}-chest-open" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest despawn</span>
+            <select id="${prefix}-chest-despawn" ${dis}>${[12, 20, 28, 40, 60].map((n) => `<option value="${n}" ${this.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest spawn</span>
+            <select id="${prefix}-chest-chance" ${dis}>${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
+          </label>
+        </div>
+        <details class="muted-box" style="margin-top:4px">
+          <summary>Creative options</summary>
+          <div class="run-grid cols-4" style="margin-top:8px">
+            <label class="run-field"><span>Enemy density</span>
+              <select id="${prefix}-enemy-density" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Enemy HP</span>
+              <select id="${prefix}-enemy-hp" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Enemy speed</span>
+              <select id="${prefix}-enemy-speed" ${dis}>${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Income</span>
+              <select id="${prefix}-income" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Respawn</span>
+              <select id="${prefix}-respawn" ${dis}>${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Start base Lv</span>
+              <select id="${prefix}-start-base" ${dis}>${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Level draft size</span>
+              <select id="${prefix}-level-draft" ${dis}>${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Relic draft size</span>
+              <select id="${prefix}-relic-draft" ${dis}>${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Utility draft Lv</span>
+              <select id="${prefix}-utility" ${dis}>${utilityDraftLevelOptionsHtml(this.utilityDraftLevel)}</select>
+            </label>
+            <label class="run-field"><span>Sudden death HP</span>
+              <select id="${prefix}-sudden" ${dis}>${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+            </label>
+          </div>
+          <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+            ${[
+              ["no-art", "No artifacts", this.disableArtifacts],
+              ["no-chest", "No chests", this.disableChests],
+              ["no-elite", "No elites", this.disableElites],
+              ["no-boss", "No bosses", this.disableBosses],
+              ["no-shop", "No shop", this.disableShop],
+              ["no-send", "No sends", this.disableSends],
+              ["no-relic", "No relics", this.disableRelics],
+              ["fog", "Fog always", this.fogAlways],
+              ["dbl-elite", "Double elites", this.doubleElites],
+            ]
+              .map(
+                ([id, label, on]) =>
+                  `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
+              )
+              .join("")}
+          </div>
+        </details>
       </section>
     `;
   }
 
   private bindRunSetup(prefix: string, onChange?: () => void): void {
     const read = () => {
-      const map = this.root.querySelector<HTMLSelectElement>(`#${prefix}-map`);
-      const turrets = this.root.querySelector<HTMLSelectElement>(`#${prefix}-turrets`);
-      const gold = this.root.querySelector<HTMLSelectElement>(`#${prefix}-gold`);
-      const waves = this.root.querySelector<HTMLSelectElement>(`#${prefix}-waves`);
-      const util = this.root.querySelector<HTMLSelectElement>(`#${prefix}-utility`);
-      const ff = this.root.querySelector<HTMLSelectElement>(`#${prefix}-ff`);
+      const sel = (id: string) => this.root.querySelector<HTMLSelectElement | HTMLInputElement>(`#${prefix}-${id}`);
+      const map = sel("map") as HTMLSelectElement | null;
+      const turrets = sel("turrets") as HTMLSelectElement | null;
+      const gold = sel("gold") as HTMLSelectElement | null;
+      const waves = sel("waves") as HTMLSelectElement | null;
+      const util = sel("utility") as HTMLSelectElement | null;
+      const ff = sel("ff") as HTMLSelectElement | null;
+      const asc = sel("ascension") as HTMLSelectElement | null;
       if (map) this.mapChoice = map.value as MapId | string | "random";
       if (turrets) this.maxTurrets = Number(turrets.value) || DEFAULT_MAX_TURRETS;
       if (gold) this.startingGold = Number(gold.value) || STARTING_GOLD;
       if (waves) this.wavesToWin = Number(waves.value);
       if (util) this.utilityDraftLevel = Number(util.value);
       if (ff) this.friendlyFire = ff.value === "1";
+      if (asc) this.ascension = Number(asc.value) || 0;
+      const num = (id: string, fallback: number) => {
+        const el = sel(id) as HTMLSelectElement | null;
+        return el ? Number(el.value) || fallback : fallback;
+      };
+      this.livesPerWave = num("lives-wave", 0);
+      this.livesPerRun = num("lives-run", 0);
+      this.chestOpenMul = num("chest-open", 1);
+      this.chestDespawnSec = num("chest-despawn", 28);
+      this.chestSpawnChance = num("chest-chance", 0.08);
+      this.enemyDensityMul = num("enemy-density", 1);
+      this.enemyHpMul = num("enemy-hp", 1);
+      this.enemySpeedMul = num("enemy-speed", 1);
+      this.incomeMul = num("income", 1);
+      this.respawnMul = num("respawn", 1);
+      this.startingBaseLevel = num("start-base", 0);
+      this.levelDraftSize = num("level-draft", 3);
+      this.relicDraftSize = num("relic-draft", 3);
+      this.suddenDeathBaseHp = num("sudden", 0);
+      const chk = (id: string) => !!(sel(id) as HTMLInputElement | null)?.checked;
+      this.disableArtifacts = chk("no-art");
+      this.disableChests = chk("no-chest");
+      this.disableElites = chk("no-elite");
+      this.disableBosses = chk("no-boss");
+      this.disableShop = chk("no-shop");
+      this.disableSends = chk("no-send");
+      this.disableRelics = chk("no-relic");
+      this.fogAlways = chk("fog");
+      this.doubleElites = chk("dbl-elite");
       onChange?.();
     };
-    for (const id of ["map", "turrets", "gold", "waves", "utility", "ff"]) {
+    const ids = [
+      "map",
+      "turrets",
+      "gold",
+      "waves",
+      "utility",
+      "ff",
+      "ascension",
+      "lives-wave",
+      "lives-run",
+      "chest-open",
+      "chest-despawn",
+      "chest-chance",
+      "enemy-density",
+      "enemy-hp",
+      "enemy-speed",
+      "income",
+      "respawn",
+      "start-base",
+      "level-draft",
+      "relic-draft",
+      "sudden",
+      "no-art",
+      "no-chest",
+      "no-elite",
+      "no-boss",
+      "no-shop",
+      "no-send",
+      "no-relic",
+      "fog",
+      "dbl-elite",
+    ];
+    for (const id of ids) {
       this.root.querySelector(`#${prefix}-${id}`)?.addEventListener("change", read);
     }
+  }
+
+  private syncOptsFromLobby(lobby: LobbyState): void {
+    this.mapChoice = lobby.mapChoice;
+    this.maxTurrets = lobby.maxTurrets;
+    this.startingGold = lobby.startingGold;
+    this.wavesToWin = lobby.wavesToWin;
+    this.friendlyFire = lobby.friendlyFire;
+    if (lobby.utilityDraftLevel != null) this.utilityDraftLevel = lobby.utilityDraftLevel;
+    if (lobby.livesPerWave != null) this.livesPerWave = lobby.livesPerWave;
+    if (lobby.livesPerRun != null) this.livesPerRun = lobby.livesPerRun;
+    if (lobby.ascension != null) this.ascension = lobby.ascension;
+    if (lobby.chestOpenMul != null) this.chestOpenMul = lobby.chestOpenMul;
+    if (lobby.chestDespawnSec != null) this.chestDespawnSec = lobby.chestDespawnSec;
+    if (lobby.chestSpawnChance != null) this.chestSpawnChance = lobby.chestSpawnChance;
+    if (lobby.enemyDensityMul != null) this.enemyDensityMul = lobby.enemyDensityMul;
+    if (lobby.enemyHpMul != null) this.enemyHpMul = lobby.enemyHpMul;
+    if (lobby.enemySpeedMul != null) this.enemySpeedMul = lobby.enemySpeedMul;
+    if (lobby.incomeMul != null) this.incomeMul = lobby.incomeMul;
+    if (lobby.respawnMul != null) this.respawnMul = lobby.respawnMul;
+    if (lobby.startingBaseLevel != null) this.startingBaseLevel = lobby.startingBaseLevel;
+    if (lobby.levelDraftSize != null) this.levelDraftSize = lobby.levelDraftSize;
+    if (lobby.relicDraftSize != null) this.relicDraftSize = lobby.relicDraftSize;
+    if (lobby.disableArtifacts != null) this.disableArtifacts = lobby.disableArtifacts;
+    if (lobby.disableChests != null) this.disableChests = lobby.disableChests;
+    if (lobby.disableElites != null) this.disableElites = lobby.disableElites;
+    if (lobby.disableBosses != null) this.disableBosses = lobby.disableBosses;
+    if (lobby.disableShop != null) this.disableShop = lobby.disableShop;
+    if (lobby.disableSends != null) this.disableSends = lobby.disableSends;
+    if (lobby.disableRelics != null) this.disableRelics = lobby.disableRelics;
+    if (lobby.fogAlways != null) this.fogAlways = lobby.fogAlways;
+    if (lobby.doubleElites != null) this.doubleElites = lobby.doubleElites;
+    if (lobby.suddenDeathBaseHp != null) this.suddenDeathBaseHp = lobby.suddenDeathBaseHp;
   }
 
   private heroGridHtml(): string {
@@ -509,15 +819,6 @@ export class MultiplayerUi {
     if (m) this.mode = m.value as MatchMode;
   }
 
-  private syncOptsFromLobby(lobby: LobbyState): void {
-    this.mapChoice = lobby.mapChoice;
-    this.maxTurrets = lobby.maxTurrets;
-    this.startingGold = lobby.startingGold;
-    this.wavesToWin = lobby.wavesToWin;
-    this.friendlyFire = lobby.friendlyFire;
-    if (lobby.utilityDraftLevel != null) this.utilityDraftLevel = lobby.utilityDraftLevel;
-  }
-
   private renderLobby(lobby: LobbyState, mySlot: number, mode: NetMode): void {
     this.syncOptsFromLobby(lobby);
     const mySeat = lobbySeat(lobby, mySlot);
@@ -604,14 +905,7 @@ export class MultiplayerUi {
 
     if (isHost) {
       this.bindRunSetup("live", () => {
-        hostSetOpts(
-          this.mapChoice,
-          this.maxTurrets,
-          this.startingGold,
-          this.wavesToWin,
-          this.friendlyFire,
-          this.utilityDraftLevel,
-        );
+        this.pushHostOpts();
       });
     }
 
@@ -627,14 +921,7 @@ export class MultiplayerUi {
     this.root.querySelector("#mp-start")?.addEventListener("click", () => {
       if (!canStartMatch()) return;
       hostSetMode(lobby.mode);
-      hostSetOpts(
-        this.mapChoice,
-        this.maxTurrets,
-        this.startingGold,
-        this.wavesToWin,
-        this.friendlyFire,
-        this.utilityDraftLevel,
-      );
+      this.pushHostOpts();
       const mapId = resolveMapChoice(this.mapChoice);
       const msg = hostStartMatch(
         mapId,

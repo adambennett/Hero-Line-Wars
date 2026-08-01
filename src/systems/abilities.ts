@@ -1,5 +1,5 @@
 import { type AbilityKind, type AbilitySlot } from "../data/heroes";
-import { heroUsesGyroKit, resolveHero } from "../custom/registry";
+import { heroUsesGyroKit, resolveHero, heroHasPassive } from "../custom/registry";
 import { MAP_W } from "../data/constants";
 import { circleHitsObstacle, findClearSpot, rayObstacleHitT } from "../data/maps";
 import { draftCurseChoices, CURSES, type CurseId } from "../data/curses";
@@ -619,6 +619,85 @@ function castBladeStorm(state: GameState): boolean {
   return true;
 }
 
+function castPolarPull(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 100, "#8aa0ff");
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) > 110 + e.radius) continue;
+    const n = normalize(state.hero.x - e.x, state.hero.y - e.y);
+    e.x += n.x * 36;
+    e.y += n.y * 36;
+  }
+  addFx(state, state.hero.x, state.hero.y, 110, "#8aa0ff66", 0.35);
+  return true;
+}
+
+function castFluxBurst(state: GameState): boolean {
+  const rad = 120;
+  const dmg = attackDamage(state) * 2.1;
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) > rad + e.radius) continue;
+    const n = normalize(e.x - state.hero.x, e.y - state.hero.y);
+    e.x += n.x * 48;
+    e.y += n.y * 48;
+    damageEnemy(state, e, dmg);
+  }
+  addFx(state, state.hero.x, state.hero.y, rad, "#a0b0ff88", 0.45);
+  return true;
+}
+
+function castTimeStep(state: GameState, move: Vec2): boolean {
+  dashHero(state, move, 130, "#d0a0ff", { phase: true });
+  state.hexZones.push({
+    x: state.hero.x,
+    y: state.hero.y,
+    radius: 65,
+    life: 2,
+    dps: attackDamage(state) * 0.9,
+  });
+  addFx(state, state.hero.x, state.hero.y, 65, "#c080ff66", 0.35);
+  return true;
+}
+
+function castStasis(state: GameState): boolean {
+  state.hero.stasisTimer = 2.2;
+  const rad = 115;
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, rad, attackDamage(state) * 1.5);
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) <= rad + e.radius) applySlow(e, 0.15, 2.2);
+  }
+  addFx(state, state.hero.x, state.hero.y, rad, "#e0c0ff66", 0.5);
+  return true;
+}
+
+function castSwarmDash(state: GameState, move: Vec2): boolean {
+  const drones = state.hero.hiveDrones ?? 0;
+  const distDash = 110 + drones * 12;
+  const trail = attackDamage(state) * (0.55 + drones * 0.18);
+  dashHero(state, move, distDash, "#e8c060", { damageTrail: trail });
+  return true;
+}
+
+function castHiveDetonate(state: GameState): boolean {
+  const drones = Math.max(0, state.hero.hiveDrones ?? 0);
+  const per = attackDamage(state) * 1.15;
+  for (let i = 0; i < Math.max(1, drones); i++) {
+    const a = (i / Math.max(1, drones)) * Math.PI * 2 + state.elapsed;
+    const ox = state.hero.x + Math.cos(a) * 28;
+    const oy = state.hero.y + Math.sin(a) * 28;
+    damageEnemiesInRadius(state, ox, oy, 70, per);
+    addFx(state, ox, oy, 70, "#ffe08a66", 0.4);
+  }
+  if (drones <= 0) {
+    damageEnemiesInRadius(state, state.hero.x, state.hero.y, 80, per);
+    addFx(state, state.hero.x, state.hero.y, 80, "#ffe08a66", 0.4);
+  }
+  state.hero.hiveDrones = 2;
+  return true;
+}
+
 const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = {
   dash: (s, m) => castDash(s, m),
   slide: (s, m) => castSlide(s, m),
@@ -656,6 +735,12 @@ const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = 
   echonova: (s) => castEchoNova(s),
   bladehook: (s) => castBladeHook(s, s.hero.bladeHookCharge ?? 0.45),
   bladestorm: (s) => castBladeStorm(s),
+  polarpull: (s, m) => castPolarPull(s, m),
+  fluxburst: (s) => castFluxBurst(s),
+  timestep: (s, m) => castTimeStep(s, m),
+  stasis: (s) => castStasis(s),
+  swarmdash: (s, m) => castSwarmDash(s, m),
+  hivedetonate: (s) => castHiveDetonate(s),
 };
 
 export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2): void {
@@ -750,6 +835,54 @@ export function tickAbilityEffects(state: GameState, dt: number): void {
       state.hero.y + (state.hero.chargeVy ?? 0) * dt,
     );
     damageEnemiesInRadius(state, state.hero.x, state.hero.y, 50, attackDamage(state) * 1.1 * dt);
+  }
+
+  // Chrona Stasis Field
+  if ((state.hero.stasisTimer ?? 0) > 0) {
+    state.hero.stasisTimer = Math.max(0, (state.hero.stasisTimer ?? 0) - dt);
+    const dmg = attackDamage(state) * 0.65 * dt;
+    damageEnemiesInRadius(state, state.hero.x, state.hero.y, 115, dmg);
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(state.hero, e) <= 115 + e.radius) applySlow(e, 0.15, 0.35);
+    }
+  }
+
+  // Lodestone Field Drag
+  if (state.hero.alive && heroHasPassive(state.hero.heroId, "field_drag")) {
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(state.hero, e) > 130 + e.radius) continue;
+      const n = normalize(state.hero.x - e.x, state.hero.y - e.y);
+      e.x += n.x * 28 * dt;
+      e.y += n.y * 28 * dt;
+    }
+  }
+
+  // Chrona Rewind Ward clean heal
+  if (heroHasPassive(state.hero.heroId, "rewind_ward")) {
+    if ((state.hero.chronaCleanTimer ?? 0) > 0) {
+      state.hero.chronaCleanTimer = Math.max(0, (state.hero.chronaCleanTimer ?? 0) - dt);
+      if ((state.hero.chronaCleanTimer ?? 0) <= 0 && (state.hero.chronaBank ?? 0) > 0) {
+        const heal = (state.hero.chronaBank ?? 0) * 0.4;
+        const before = state.hero.hp;
+        state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + heal);
+        state.healingDone += Math.max(0, state.hero.hp - before);
+        state.hero.chronaBank = 0;
+        addFx(state, state.hero.x, state.hero.y, 40, "#d0a0ff88", 0.35);
+      }
+    }
+  }
+
+  // Hive Nest Memory orbit contact
+  const drones = state.hero.hiveDrones ?? 0;
+  if (state.hero.alive && drones > 0 && heroHasPassive(state.hero.heroId, "nest_memory")) {
+    const rad = state.hero.radius + 18 + drones * 4;
+    damageEnemiesInRadius(state, state.hero.x, state.hero.y, rad, attackDamage(state) * 0.22 * drones * dt);
+  }
+
+  if ((state.wardBeaconTimer ?? 0) > 0) {
+    state.wardBeaconTimer = Math.max(0, state.wardBeaconTimer - dt);
   }
 }
 

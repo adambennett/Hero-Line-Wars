@@ -22,7 +22,9 @@ export type MapId =
   | "hex_warrens"
   | "ascendant_spine"
   | "treasure_vein"
-  | "tourist_loop";
+  | "tourist_loop"
+  | "rift_cataract"
+  | "orb_foundry";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -82,6 +84,10 @@ export type MapDef = {
   dualSpawners?: boolean;
   /** Boost chest spawn rolls. */
   chestMagnet?: boolean;
+  /** Periodic pull toward lane mid-X during waves. */
+  riftSurges?: boolean;
+  /** Spawn delayed explosive orbs during waves. */
+  volatileOrbs?: boolean;
   /** Standing heals heroes. */
   healSprings?: EffectRect[];
   /** Slows units inside. */
@@ -588,6 +594,55 @@ export const MAPS: Record<MapId, MapDef> = {
     ],
     shiftingObstacles: true,
     dualSpawners: true,
+  },
+  rift_cataract: {
+    id: "rift_cataract",
+    name: "Rift Cataract",
+    blurb: "Special — horizontal rifts yank everything toward mid-lane midpoints.",
+    laneTop: sy(90),
+    laneBottom: MAP_H - sy(90),
+    base: { x: 54, y: MID_Y, radius: 45, maxHp: 118 },
+    shop: { x: 150, y: MID_Y + sy(95), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 28 },
+    highGrounds: [HG(520, 170, 200, 180)],
+    obstacles: [
+      { x: 300, y: sy(130), w: 40, h: sh(60) },
+      { x: 300, y: sy(360), w: 40, h: sh(60) },
+      { x: 680, y: MID_Y - sh(40), w: 55, h: sh(80) },
+      { x: 1050, y: sy(140), w: 42, h: sh(55) },
+      { x: 1050, y: sy(360), w: 42, h: sh(55) },
+    ],
+    turretSlots: [
+      { x: 118, y: sy(190) },
+      { x: 118, y: sy(370) },
+      { x: 200, y: MID_Y },
+    ],
+    riftSurges: true,
+  },
+  orb_foundry: {
+    id: "orb_foundry",
+    name: "Orb Foundry",
+    blurb: "Special — volatile orbs cook mid-lane and detonate after a delay.",
+    laneTop: sy(85),
+    laneBottom: MAP_H - sy(85),
+    base: { x: 52, y: MID_Y, radius: 46, maxHp: 120 },
+    shop: { x: 145, y: MID_Y - sy(100), radius: 36, interactRange: 55 },
+    spawner: { x: MAP_W - 52, y: MID_Y, radius: 28 },
+    highGrounds: [HG(400, 190, 160, 140), HG(900, 190, 160, 140)],
+    obstacles: [
+      { x: 340, y: sy(145), w: 44, h: sh(50) },
+      { x: 340, y: sy(360), w: 44, h: sh(50) },
+      { x: 720, y: MID_Y - sh(35), w: 48, h: sh(70) },
+      { x: 1180, y: sy(160), w: 40, h: sh(55) },
+      { x: 1180, y: sy(350), w: 40, h: sh(55) },
+    ],
+    turretSlots: [
+      { x: 120, y: sy(195) },
+      { x: 120, y: sy(365) },
+      { x: 205, y: MID_Y },
+      { x: 95, y: MID_Y },
+    ],
+    volatileOrbs: true,
   },
 };
 

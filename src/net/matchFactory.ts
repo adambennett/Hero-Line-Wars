@@ -3,6 +3,7 @@ import { HERO_LIST, type HeroId } from "../data/heroes";
 import { resolveMapChoice, type MapId } from "../data/maps";
 import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
+import { composeRunModifiers } from "../meta/modifiers";
 import { isPveMode, type LobbyState, type MatchMode, type MpTeam } from "./types";
 
 export type MpMatch = {
@@ -100,6 +101,7 @@ export function buildMpMatch(
   const team0 = lobby.slots.filter((s) => s.team === 0).sort((a, b) => a.slot - b.slot);
   const team1Human = lobby.slots.filter((s) => s.team === 1).sort((a, b) => a.slot - b.slot);
 
+  const ascension = lobby.ascension ?? 0;
   const sharedOpts = {
     mapId: resolved,
     maxTurrets,
@@ -108,9 +110,38 @@ export function buildMpMatch(
     friendlyFire: runOpts?.friendlyFire ?? lobby.friendlyFire,
     utilityDraftLevel:
       runOpts?.utilityDraftLevel ?? lobby.utilityDraftLevel ?? 10,
+    ascension,
+    livesPerWave: lobby.livesPerWave ?? 0,
+    livesPerRun: lobby.livesPerRun ?? 0,
+    chestOpenMul: lobby.chestOpenMul,
+    chestDespawnSec: lobby.chestDespawnSec,
+    chestSpawnChance: lobby.chestSpawnChance,
+    enemyDensityMul: lobby.enemyDensityMul,
+    enemyHpMul: lobby.enemyHpMul,
+    enemySpeedMul: lobby.enemySpeedMul,
+    incomeMul: lobby.incomeMul,
+    respawnMul: lobby.respawnMul,
+    startingBaseLevel: lobby.startingBaseLevel,
+    levelDraftSize: lobby.levelDraftSize,
+    relicDraftSize: lobby.relicDraftSize,
+    disableArtifacts: lobby.disableArtifacts,
+    disableChests: lobby.disableChests,
+    disableElites: lobby.disableElites,
+    disableBosses: lobby.disableBosses,
+    disableShop: lobby.disableShop,
+    disableSends: lobby.disableSends,
+    disableRelics: lobby.disableRelics,
+    fogAlways: lobby.fogAlways,
+    doubleElites: lobby.doubleElites,
+    suddenDeathBaseHp: lobby.suddenDeathBaseHp && lobby.suddenDeathBaseHp > 0
+      ? lobby.suddenDeathBaseHp
+      : undefined,
   };
 
-  const lane0 = createState(team0[0]?.heroId ?? "ranger", sharedOpts);
+  const lane0 = createState(team0[0]?.heroId ?? "ranger", {
+    ...sharedOpts,
+    modifiers: composeRunModifiers(ascension, {}, true),
+  });
   lane0.mpLane = true;
   populateLane(
     lane0,
@@ -121,12 +152,18 @@ export function buildMpMatch(
   let lane1: GameState;
   if (isPveMode(lobby.mode)) {
     const aiHero = HERO_LIST[Math.floor(seed % HERO_LIST.length)]!.id;
-    lane1 = createState(aiHero, sharedOpts);
+    lane1 = createState(aiHero, {
+      ...sharedOpts,
+      modifiers: composeRunModifiers(ascension, {}, false),
+    });
     lane1.mpLane = true;
     lane1.aiControlled = true;
     populateLane(lane1, [{ slot: -1, heroId: aiHero }], 20);
   } else {
-    lane1 = createState(team1Human[0]?.heroId ?? "warden", sharedOpts);
+    lane1 = createState(team1Human[0]?.heroId ?? "warden", {
+      ...sharedOpts,
+      modifiers: composeRunModifiers(ascension, {}, true),
+    });
     lane1.mpLane = true;
     populateLane(
       lane1,
@@ -176,6 +213,26 @@ export function buildSoloVsAiMatch(opts: {
   chestDespawnSec?: number;
   chestSpawnChance?: number;
   utilityDraftLevel?: number;
+  livesPerWave?: number;
+  livesPerRun?: number;
+  enemyDensityMul?: number;
+  enemyHpMul?: number;
+  enemySpeedMul?: number;
+  incomeMul?: number;
+  respawnMul?: number;
+  startingBaseLevel?: number;
+  levelDraftSize?: number;
+  relicDraftSize?: number;
+  disableArtifacts?: boolean;
+  disableChests?: boolean;
+  disableElites?: boolean;
+  disableBosses?: boolean;
+  disableShop?: boolean;
+  disableSends?: boolean;
+  disableRelics?: boolean;
+  fogAlways?: boolean;
+  doubleElites?: boolean;
+  suddenDeathBaseHp?: number;
 }): MpMatch {
   const resolved = resolveMapChoice(opts.mapId);
   const teamSize = opts.teamSize ?? 1;
@@ -195,6 +252,28 @@ export function buildSoloVsAiMatch(opts: {
     chestDespawnSec: opts.chestDespawnSec,
     chestSpawnChance: opts.chestSpawnChance,
     utilityDraftLevel: opts.utilityDraftLevel ?? 10,
+    livesPerWave: opts.livesPerWave ?? 0,
+    livesPerRun: opts.livesPerRun ?? 0,
+    enemyDensityMul: opts.enemyDensityMul,
+    enemyHpMul: opts.enemyHpMul,
+    enemySpeedMul: opts.enemySpeedMul,
+    incomeMul: opts.incomeMul,
+    respawnMul: opts.respawnMul,
+    startingBaseLevel: opts.startingBaseLevel,
+    levelDraftSize: opts.levelDraftSize,
+    relicDraftSize: opts.relicDraftSize,
+    disableArtifacts: opts.disableArtifacts,
+    disableChests: opts.disableChests,
+    disableElites: opts.disableElites,
+    disableBosses: opts.disableBosses,
+    disableShop: opts.disableShop,
+    disableSends: opts.disableSends,
+    disableRelics: opts.disableRelics,
+    fogAlways: opts.fogAlways,
+    doubleElites: opts.doubleElites,
+    suddenDeathBaseHp: opts.suddenDeathBaseHp && opts.suddenDeathBaseHp > 0
+      ? opts.suddenDeathBaseHp
+      : undefined,
   };
 
   const lane0 = createState(opts.playerHeroId, {

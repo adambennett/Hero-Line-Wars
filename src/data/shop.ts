@@ -1,4 +1,4 @@
-import { TURRET_DEFS, type TurretKind } from "./turrets";
+import { TURRET_DEFS, isTurretKind, type TurretKind } from "./turrets";
 import type { Rarity } from "./rarity";
 import { isItemUnlocked } from "../meta/contentLocks";
 
@@ -63,6 +63,26 @@ export type ShopItemId =
   | "ascent_crown"
   | "void_thread"
   | "starfall_lens"
+  | "jade_anklet"
+  | "sparring_gloves"
+  | "field_rations"
+  | "courier_badge"
+  | "lane_chalk"
+  | "pulse_bracer"
+  | "mirror_shard"
+  | "harvest_sickle"
+  | "arc_capacitor"
+  | "grove_charm"
+  | "siege_grease"
+  | "whisper_cloak"
+  | "xp_primer"
+  | "mentor_tome"
+  | "scholar_lens"
+  | "blood_engine"
+  | "forge_heart"
+  | "eclipse_crown"
+  | "nest_core"
+  | "temporal_coil"
   | TurretKind;
 
 export type ShopCategory = "gear" | "artifact";
@@ -444,6 +464,26 @@ export const SHOP_ITEMS: ShopItemDef[] = [
   { id: "ascent_crown", name: "Ascent Crown", cost: 160, effect: "+1.2 income, +12 damage", maxStacks: 1, category: "gear", rarity: "legendary" },
   { id: "void_thread", name: "Void Thread", cost: 130, effect: "Attack 15% faster, +8 damage", maxStacks: 1, category: "gear", rarity: "mythic" },
   { id: "starfall_lens", name: "Starfall Lens", cost: 150, effect: "+0.15 crit, +10 damage", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "jade_anklet", name: "Jade Anklet", cost: 32, effect: "+18 move speed", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "sparring_gloves", name: "Sparring Gloves", cost: 36, effect: "+3 damage, attacks 4% faster", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "field_rations", name: "Field Rations", cost: 34, effect: "+18 max HP (heals 18)", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "courier_badge", name: "Courier Badge", cost: 42, effect: "+0.4 gold/sec income", maxStacks: 2, category: "gear", rarity: "common" },
+  { id: "lane_chalk", name: "Lane Chalk", cost: 48, effect: "+5 damage", maxStacks: 3, category: "gear", rarity: "common" },
+  { id: "pulse_bracer", name: "Pulse Bracer", cost: 62, effect: "+6 damage, +8 max HP", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "mirror_shard", name: "Mirror Shard", cost: 70, effect: "+10% crit chance", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "harvest_sickle", name: "Harvest Sickle", cost: 68, effect: "+3 gold per kill", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "arc_capacitor", name: "Arc Capacitor", cost: 78, effect: "Attacks 10% faster", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "grove_charm", name: "Grove Charm", cost: 72, effect: "+28 max HP (heals 14)", maxStacks: 2, category: "gear", rarity: "uncommon" },
+  { id: "siege_grease", name: "Siege Grease", cost: 88, effect: "Base +25 HP (repairs 25)", maxStacks: 2, category: "gear", rarity: "rare" },
+  { id: "whisper_cloak", name: "Whisper Cloak", cost: 95, effect: "+40 speed, +6% crit", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "xp_primer", name: "XP Primer", cost: 90, effect: "+12% XP from kills", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "mentor_tome", name: "Mentor Tome", cost: 110, effect: "+18% XP from kills", maxStacks: 1, category: "gear", rarity: "mythic" },
+  { id: "scholar_lens", name: "Scholar Lens", cost: 100, effect: "+10% XP, +5% crit", maxStacks: 1, category: "gear", rarity: "rare" },
+  { id: "blood_engine", name: "Blood Engine", cost: 200, effect: "Legendary: kills heal 8 HP; +2% damage per stack (max 10)", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "forge_heart", name: "Forge Heart", cost: 190, effect: "Legendary: +1 artifact slot; artifacts +20% damage", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "eclipse_crown", name: "Eclipse Crown", cost: 210, effect: "Legendary: +25% damage under 50% HP; +0.8 income", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "nest_core", name: "Nest Core", cost: 185, effect: "Legendary: every 8 kills, queue 1 into next wave", maxStacks: 1, category: "gear", rarity: "legendary" },
+  { id: "temporal_coil", name: "Temporal Coil", cost: 195, effect: "Legendary: mobility & ultimate cool 18% faster", maxStacks: 1, category: "gear", rarity: "legendary" },
   {
     id: "ballista",
     name: TURRET_DEFS.ballista.name,
@@ -471,6 +511,123 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     category: "artifact",
     rarity: "mythic",
   },
+  {
+    id: "frost_spire",
+    name: TURRET_DEFS.frost_spire.name,
+    cost: TURRET_DEFS.frost_spire.cost,
+    effect: TURRET_DEFS.frost_spire.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "chain_coil",
+    name: TURRET_DEFS.chain_coil.name,
+    cost: TURRET_DEFS.chain_coil.cost,
+    effect: TURRET_DEFS.chain_coil.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "gold_siphon",
+    name: TURRET_DEFS.gold_siphon.name,
+    cost: TURRET_DEFS.gold_siphon.cost,
+    effect: TURRET_DEFS.gold_siphon.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "uncommon",
+  },
+  {
+    id: "bastion_lamp",
+    name: TURRET_DEFS.bastion_lamp.name,
+    cost: TURRET_DEFS.bastion_lamp.cost,
+    effect: TURRET_DEFS.bastion_lamp.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "uncommon",
+  },
+  {
+    id: "venom_censer",
+    name: TURRET_DEFS.venom_censer.name,
+    cost: TURRET_DEFS.venom_censer.cost,
+    effect: TURRET_DEFS.venom_censer.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "grav_anchor",
+    name: TURRET_DEFS.grav_anchor.name,
+    cost: TURRET_DEFS.grav_anchor.cost,
+    effect: TURRET_DEFS.grav_anchor.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "mythic",
+  },
+  {
+    id: "rail_lance",
+    name: TURRET_DEFS.rail_lance.name,
+    cost: TURRET_DEFS.rail_lance.cost,
+    effect: TURRET_DEFS.rail_lance.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "mythic",
+  },
+  {
+    id: "splinter_nest",
+    name: TURRET_DEFS.splinter_nest.name,
+    cost: TURRET_DEFS.splinter_nest.cost,
+    effect: TURRET_DEFS.splinter_nest.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "execute_glyph",
+    name: TURRET_DEFS.execute_glyph.name,
+    cost: TURRET_DEFS.execute_glyph.cost,
+    effect: TURRET_DEFS.execute_glyph.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "mythic",
+  },
+  {
+    id: "mine_layer",
+    name: TURRET_DEFS.mine_layer.name,
+    cost: TURRET_DEFS.mine_layer.cost,
+    effect: TURRET_DEFS.mine_layer.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "storm_rod",
+    name: TURRET_DEFS.storm_rod.name,
+    cost: TURRET_DEFS.storm_rod.cost,
+    effect: TURRET_DEFS.storm_rod.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "mythic",
+  },
+  {
+    id: "ward_beacon",
+    name: TURRET_DEFS.ward_beacon.name,
+    cost: TURRET_DEFS.ward_beacon.cost,
+    effect: TURRET_DEFS.ward_beacon.effect,
+    maxStacks: 3,
+    category: "artifact",
+    rarity: "rare",
+  },
+  {
+    id: "sovereign_nexus",
+    name: TURRET_DEFS.sovereign_nexus.name,
+    cost: TURRET_DEFS.sovereign_nexus.cost,
+    effect: TURRET_DEFS.sovereign_nexus.effect,
+    maxStacks: 1,
+    category: "artifact",
+    rarity: "legendary",
+  },
 ];
 
 export const SHOP_OFFER_SIZE = 3;
@@ -484,7 +641,7 @@ export function getShopItem(id: ShopItemId): ShopItemDef | undefined {
 }
 
 export function isTurretArtifact(id: ShopItemId): id is TurretKind {
-  return id === "ballista" || id === "brazier" || id === "hex_totem";
+  return isTurretKind(id);
 }
 
 /** Roll a fresh offer of distinct items. Prefer not repeating the previous offer. */

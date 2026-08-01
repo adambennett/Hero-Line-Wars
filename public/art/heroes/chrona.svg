@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 64 64" role="img" aria-label="Chrona">
+  <defs>
+    <radialGradient id="bg-chrona" cx="40%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#243048"/>
+      <stop offset="100%" stop-color="#0a1018"/>
+    </radialGradient>
+    <linearGradient id="rim-chrona" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e8d0ff"/>
+      <stop offset="100%" stop-color="#c8a0ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg-chrona)" stroke="url(#rim-chrona)" stroke-width="2.5"/>
+  <circle cx="32" cy="34" r="22" fill="#c8a0ff" opacity="0.08"/>
+  
+    <ellipse cx="32" cy="48" rx="14" ry="8" fill="#c8a0ff" opacity="0.35"/>
+    <path d="M22 46c2-14 6-22 10-26 4 4 8 12 10 26" fill="#c8a0ff" opacity="0.9"/>
+    <circle cx="32" cy="18" r="9" fill="#c8a0ff"/>
+    <circle cx="32" cy="18" r="9" fill="none" stroke="#e8d0ff" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="32" cy="28" r="14" fill="none" stroke="#e8d0ff" stroke-width="2.2"/>
+      <circle cx="32" cy="28" r="2" fill="#e8d0ff"/>
+      <path d="M32 28 L32 18 M32 28 L40 32" stroke="#e8d0ff" stroke-width="2" stroke-linecap="round"/>
+      <path d="M20 44h24" stroke="#c8a0ff" stroke-width="2" opacity="0.6"/>
+</svg>

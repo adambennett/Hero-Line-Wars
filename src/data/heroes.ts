@@ -18,7 +18,10 @@ export type HeroId =
   | "tempest"
   | "curses"
   | "warp"
-  | "gyro";
+  | "gyro"
+  | "lodestone"
+  | "chrona"
+  | "hive";
 
 export type AbilityKind =
   | "dash"
@@ -56,7 +59,13 @@ export type AbilityKind =
   | "padlink"
   | "echonova"
   | "bladehook"
-  | "bladestorm";
+  | "bladestorm"
+  | "polarpull"
+  | "fluxburst"
+  | "timestep"
+  | "stasis"
+  | "swarmdash"
+  | "hivedetonate";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -79,7 +88,10 @@ export type AttackStyle =
   | "emberbolt"
   | "needle"
   | "echo"
-  | "warpbolt";
+  | "warpbolt"
+  | "magnet"
+  | "chrono"
+  | "drone";
 /**
  * How basics / ults interact with attack range:
  * - free: fire along aim anywhere (no range circle / no engage gate)
@@ -810,6 +822,120 @@ export const HEROES: Record<HeroId, HeroDef> = {
       },
     ],
   },
+  lodestone: {
+    id: "lodestone",
+    name: "Lodestone",
+    blurb: "Magnet controller — yank creeps into kill zones, then reverse the field.",
+    color: "#6a8cff",
+    glowColor: "#b8c8ff",
+    radius: 17,
+    speed: 205,
+    maxHp: 115,
+    attackRange: 145,
+    attackDamage: 12,
+    attackCooldown: 0.38,
+    projectileSpeed: 480,
+    attackStyle: "magnet",
+    aimMode: "free",
+    attackHint: "Magnet bolt — pulls foes a short distance on hit",
+    passive: {
+      id: "field_drag",
+      name: "Field Drag",
+      blurb: "Nearby enemies slowly drift toward you while you are alive.",
+    },
+    abilities: [
+      {
+        id: "polarpull",
+        slot: "mobility",
+        name: "Polar Pull",
+        cooldown: 6,
+        hint: "Dash (~100), then yank nearby enemies toward you.",
+      },
+      {
+        id: "fluxburst",
+        slot: "ultimate",
+        name: "Flux Burst",
+        cooldown: 12,
+        hint: "Reverse polarity — blast nearby foes outward for heavy damage.",
+      },
+    ],
+  },
+  chrona: {
+    id: "chrona",
+    name: "Chrona",
+    blurb: "Timeweaver — delayed echoes, blink scars, and stasis locks.",
+    color: "#c8a0ff",
+    glowColor: "#e8d0ff",
+    radius: 15,
+    speed: 222,
+    maxHp: 90,
+    attackRange: 155,
+    attackDamage: 11,
+    attackCooldown: 0.42,
+    projectileSpeed: 400,
+    attackStyle: "chrono",
+    aimMode: "free",
+    attackHint: "Chrono bolt — damage lands after a short delay",
+    passive: {
+      id: "rewind_ward",
+      name: "Rewind Ward",
+      blurb: "Damage taken is banked. After 2s without hits, heal 40% of banked damage.",
+    },
+    abilities: [
+      {
+        id: "timestep",
+        slot: "mobility",
+        name: "Time Step",
+        cooldown: 5.5,
+        hint: "Blink (~130) and leave a lingering damage scar for 2s.",
+      },
+      {
+        id: "stasis",
+        slot: "ultimate",
+        name: "Stasis Field",
+        cooldown: 13,
+        hint: "Freeze and shred enemies in a large zone for 2.2s.",
+      },
+    ],
+  },
+  hive: {
+    id: "hive",
+    name: "Hive",
+    blurb: "Swarmcaller — launch drones, orbit kills, and detonate the nest.",
+    color: "#d4a020",
+    glowColor: "#ffe08a",
+    radius: 16,
+    speed: 210,
+    maxHp: 105,
+    attackRange: 150,
+    attackDamage: 10,
+    attackCooldown: 0.36,
+    projectileSpeed: 380,
+    attackStyle: "drone",
+    aimMode: "free",
+    attackHint: "Seeking drone — homes on nearest foe briefly",
+    passive: {
+      id: "nest_memory",
+      name: "Nest Memory",
+      blurb: "Kills spawn an orbiting drone (max 5) that deals contact damage.",
+    },
+    abilities: [
+      {
+        id: "swarmdash",
+        slot: "mobility",
+        name: "Swarm Dash",
+        cooldown: 5.5,
+        hint: "Dash (~110). Extra range and trail damage per orbiting drone.",
+      },
+      {
+        id: "hivedetonate",
+        slot: "ultimate",
+        name: "Hive Detonate",
+        cooldown: 12,
+        hint: "Explode all drones for AoE damage, then refill two.",
+      },
+    ],
+  },
 };
 
 export const HERO_LIST: HeroDef[] = [
@@ -831,6 +957,9 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.curses,
   HEROES.warp,
   HEROES.gyro,
+  HEROES.lodestone,
+  HEROES.chrona,
+  HEROES.hive,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

@@ -147,7 +147,7 @@ function drawTurret(ctx: CanvasRenderingContext2D, t: TurretUnit): void {
   ctx.fillStyle = "#fff8";
   ctx.font = "bold 8px Segoe UI, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(t.kind === "ballista" ? "BAL" : t.kind === "brazier" ? "AOE" : "HEX", t.x, t.y + 3);
+  ctx.fillText(def.label, t.x, t.y + 3);
 }
 
 function mixTint(a: string, b: string, t: number): string {
@@ -335,6 +335,18 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.font = "bold 8px Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("CHEST", c.x, c.y + 3);
+  }
+
+  // Volatile orbs
+  for (const orb of state.mapOrbs ?? []) {
+    const pulse = 0.55 + 0.45 * Math.sin((2.2 - orb.fuse) * 6);
+    ctx.beginPath();
+    ctx.arc(orb.x, orb.y, orb.radius * (0.55 + 0.2 * pulse), 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 120, 60, ${0.2 + 0.25 * pulse})`;
+    ctx.fill();
+    ctx.strokeStyle = "#ff9040cc";
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   // Shop pad

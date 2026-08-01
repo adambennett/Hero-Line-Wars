@@ -6,9 +6,17 @@ import {
 } from "../data/xp";
 import { LEVEL_PASSIVES } from "../data/xp";
 import { draftRelicChoices } from "../data/relics";
-import { draftUtilities } from "../data/utilities";
+import {
+  draftUtilities,
+  UTILITY_DRAFT_AT_RUN_START,
+} from "../data/utilities";
 import type { EnemyUnit, GameState } from "../game/state";
 import { isBossKind, isEliteKind } from "../data/enemies";
+import { hasRelic } from "./relics";
+
+function levelDraftChoiceCount(state: GameState): number {
+  return (state.levelDraftSize ?? 3) + (hasRelic(state, "draft_sage") ? 1 : 0);
+}
 
 export function grantKillXp(state: GameState, e: EnemyUnit): void {
   const kindWeight =
@@ -22,6 +30,17 @@ export function grantKillXp(state: GameState, e: EnemyUnit): void {
   let xp = killXpForEnemy(e.goldReward, kindWeight);
   // Luck passive: small XP bonus
   xp = Math.round(xp * (1 + state.hero.luck * 0.15));
+
+  let mul = 1;
+  if (hasRelic(state, "level_torrent")) mul += 0.15;
+  if (hasRelic(state, "mentor_sigil")) mul += 0.12;
+  if (hasRelic(state, "scholar_band")) mul += 0.08;
+  if (hasRelic(state, "ascent_primer")) mul += 0.22;
+  if ((state.shopOwned.xp_primer ?? 0) > 0) mul += 0.12;
+  if ((state.shopOwned.mentor_tome ?? 0) > 0) mul += 0.18;
+  if ((state.shopOwned.scholar_lens ?? 0) > 0) mul += 0.1;
+  xp = Math.round(xp * mul);
+
   state.xp += xp;
   tryLevelUp(state);
 }
@@ -33,6 +52,16 @@ export function shouldOfferUtilityDraft(state: GameState): boolean {
     state.utilityDraftLevel > 0 &&
     state.level >= state.utilityDraftLevel
   );
+}
+
+/** Prompt at beginRun when utilityDraftLevel === Run Start (−1). */
+export function openRunStartUtilityDraft(state: GameState): void {
+  if (state.utilityDraftLevel !== UTILITY_DRAFT_AT_RUN_START) return;
+  if (state.utilityId || state.utilityDraftOffered || state.utilityDraft) return;
+  state.utilityDraft = draftUtilities(3);
+  state.utilityDraftOffered = true;
+  state.pausedForDraft = true;
+  state.draftKind = "utility";
 }
 
 export function openUtilityDraft(state: GameState): void {
@@ -61,7 +90,7 @@ function tryLevelUp(state: GameState): void {
 
 export function openLevelDraft(state: GameState): void {
   if (state.pendingLevelUps <= 0) return;
-  const size = state.levelDraftSize ?? 3;
+  const size = levelDraftChoiceCount(state);
   state.levelDraft = draftLevelPassives(size);
   state.pausedForDraft = true;
   state.draftKind = "level";
@@ -72,7 +101,7 @@ export function rerollLevelDraft(state: GameState): boolean {
   if (!state.levelDraft) return false;
   if (state.rerollTokens <= 0) return false;
   state.rerollTokens -= 1;
-  state.levelDraft = draftLevelPassives(state.levelDraftSize ?? 3);
+  state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state));
   return true;
 }
 
@@ -117,7 +146,7 @@ export function chooseLevelPassive(state: GameState, id: LevelPassiveId): void {
   state.levelDraft = null;
   state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
   if (state.pendingLevelUps > 0) {
-    state.levelDraft = draftLevelPassives(state.levelDraftSize ?? 3);
+    state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state));
     state.draftKind = "level";
     state.pausedForDraft = true;
     state.levelDraftsTaken += 1;

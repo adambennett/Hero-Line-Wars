@@ -32,8 +32,11 @@ function audio(): AudioContext | null {
   return ctx;
 }
 
-function masterGain(): number {
-  return Math.max(0, Math.min(1, loadSettings().masterVolume)) * 0.35;
+function sfxGain(): number {
+  const s = loadSettings();
+  const master = Math.max(0, Math.min(1, s.masterVolume));
+  const sfx = Math.max(0, Math.min(1, s.sfxVolume ?? 0.8));
+  return master * sfx * 0.35;
 }
 
 function tone(
@@ -87,7 +90,7 @@ export function playSfx(kind: SfxKind): void {
   if (kind !== "ui" && !laneSfxEnabled) return;
   const ac = audio();
   if (!ac) return;
-  const m = masterGain();
+  const m = sfxGain();
   if (m <= 0.001) return;
 
   switch (kind) {

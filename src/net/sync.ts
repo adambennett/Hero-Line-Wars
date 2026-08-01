@@ -51,6 +51,11 @@ export function buildLaneSnap(state: GameState): LaneSnap {
     draftKind: state.draftKind,
     pausedForDraft: state.pausedForDraft,
     respawnTimer: state.respawnTimer,
+    livesPerWave: state.livesPerWave,
+    livesPerRun: state.livesPerRun,
+    waveLivesLeft: state.waveLivesLeft,
+    runLivesLeft: state.runLivesLeft,
+    waveRespawnBlocked: state.waveRespawnBlocked,
     heroes: allLaneHeroes(state).map(heroSnap),
     enemies: state.enemies.map((e) => ({
       id: e.id,
@@ -144,6 +149,11 @@ export function applyLaneSnap(state: GameState, snap: LaneSnap): void {
   state.draftKind = snap.draftKind as GameState["draftKind"];
   state.pausedForDraft = snap.pausedForDraft;
   state.respawnTimer = snap.respawnTimer;
+  state.livesPerWave = snap.livesPerWave ?? 0;
+  state.livesPerRun = snap.livesPerRun ?? 0;
+  state.waveLivesLeft = snap.waveLivesLeft ?? 0;
+  state.runLivesLeft = snap.runLivesLeft ?? 0;
+  state.waveRespawnBlocked = !!snap.waveRespawnBlocked;
   state.pendingSends = snap.pendingSends.map((s) => ({ ...s }));
   state.beam = snap.beam ? { ...snap.beam } : null;
   state.fx = snap.fx.map((f) => ({ ...f }));

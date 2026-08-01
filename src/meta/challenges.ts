@@ -31,7 +31,10 @@ export type ChallengeId =
   | "high_ascent"
   | "chest_glutton"
   | "send_abstinence"
-  | "deathless_boss";
+  | "deathless_boss"
+  | "polarity_prodigy"
+  | "time_keeper"
+  | "swarm_lord";
 
 export type ChallengeDef = {
   id: ChallengeId;
@@ -264,6 +267,30 @@ export const CHALLENGES: ChallengeDef[] = [
     kind: "kill_elites",
     threshold: 8,
   },
+  {
+    id: "polarity_prodigy",
+    name: "Polarity Prodigy",
+    blurb: "Reach wave 16 in a single run.",
+    unlocks: "unlock_lodestone",
+    kind: "reach_wave",
+    threshold: 16,
+  },
+  {
+    id: "time_keeper",
+    name: "Time Keeper",
+    blurb: "Win with 1 or fewer deaths on Ascension 3+.",
+    unlocks: "unlock_chrona",
+    kind: "win_deaths_le",
+    threshold: 1,
+  },
+  {
+    id: "swarm_lord",
+    name: "Swarm Lord",
+    blurb: "Place 5 artifacts in one run.",
+    unlocks: "unlock_hive",
+    kind: "place_artifacts",
+    threshold: 5,
+  },
 ];
 
 export type RunChallengeStats = {
@@ -336,6 +363,7 @@ export function evaluateChallenges(stats: RunChallengeStats): ChallengeId[] {
         break;
       case "win_deaths_le":
         ok = stats.won && stats.deaths <= c.threshold;
+        if (c.id === "time_keeper") ok = stats.won && stats.deaths <= 1 && stats.ascension >= 3;
         break;
       case "win_ascension_ge":
         ok = stats.won && stats.ascension >= c.threshold;

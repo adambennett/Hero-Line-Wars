@@ -151,9 +151,41 @@ export const UTILITIES: Record<UtilityId, UtilityDef> = {
 
 export const UTILITY_LIST: UtilityDef[] = Object.values(UTILITIES);
 
-/** Level at which the utility draft appears. `0` / null = Never (off). */
-export const UTILITY_DRAFT_LEVEL_OPTIONS = [0, 3, 5, 7, 8, 10, 12, 15, 20, 25] as const;
+/**
+ * Level at which the utility draft appears.
+ * `-1` = Run Start (prompt before combat), `0` = Never (off).
+ */
+export const UTILITY_DRAFT_AT_RUN_START = -1;
+export const UTILITY_DRAFT_LEVEL_OPTIONS = [
+  UTILITY_DRAFT_AT_RUN_START,
+  0,
+  3,
+  5,
+  7,
+  8,
+  10,
+  12,
+  15,
+  20,
+  25,
+  30,
+  40,
+  50,
+] as const;
 export const DEFAULT_UTILITY_DRAFT_LEVEL = 10;
+
+export function utilityDraftLevelLabel(n: number): string {
+  if (n === UTILITY_DRAFT_AT_RUN_START) return "Run Start";
+  if (n === 0) return "Never";
+  return String(n);
+}
+
+export function utilityDraftLevelOptionsHtml(selected: number): string {
+  return UTILITY_DRAFT_LEVEL_OPTIONS.map(
+    (n) =>
+      `<option value="${n}" ${selected === n ? "selected" : ""}>${utilityDraftLevelLabel(n)}</option>`,
+  ).join("");
+}
 
 export function draftUtilities(count = 3, exclude: UtilityId[] = []): UtilityId[] {
   const pool = UTILITY_LIST.map((u) => u.id).filter((id) => !exclude.includes(id));
