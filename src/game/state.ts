@@ -569,6 +569,12 @@ export type GameState = {
   disableRelics: boolean;
   fogAlways: boolean;
   doubleElites: boolean;
+  /**
+   * Per-controller economy (MP shared lane). When set, gold/shop/relics/drafts/sends
+   * live in bags; lane fields mirror `activeBagKey` for HUD/systems.
+   */
+  playerBags?: Record<string, import("../net/playerBag").PlayerBag>;
+  activeBagKey?: string | null;
 };
 
 export function createState(
@@ -792,6 +798,8 @@ export function createState(
     disableRelics: !!opts?.disableRelics,
     fogAlways: !!opts?.fogAlways,
     doubleElites: !!opts?.doubleElites,
+    playerBags: undefined,
+    activeBagKey: null,
   };
 }
 

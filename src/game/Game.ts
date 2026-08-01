@@ -40,6 +40,7 @@ import { stopMenuMusic } from "../systems/music";
 import { opponentStatusLabel, opponentEnemiesRemaining } from "../systems/opponent";
 import { MultiplayerUi } from "../net/MultiplayerUi";
 import {
+  bindHooks,
   bindMatchHandlers,
   disconnectNet,
   netBroadcast,
@@ -60,6 +61,8 @@ import { chooseBaseBranch } from "../systems/baseUpgrade";
 import { BASE_BRANCHES } from "../data/baseBranches";
 import { ascensionLabel } from "../meta/ascension";
 import { buildMpMatch, buildSoloVsAiMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
+import { focusBag, withPlayerBag } from "../net/playerBag";
+import { emptyIntent } from "../net/types";
 
 export class Game {
   private readonly canvas: HTMLCanvasElement;
@@ -137,6 +140,8 @@ export class Game {
   private remoteIntents = new Map<number, CombatIntent>();
   private intentSeq = 0;
   private snapSeq = 0;
+  /** Queued draft / shop UI choices for the next MP intent frame. */
+  private mpUiIntent: CombatIntent = emptyIntent();
   private lastShopKey = "";
   private lastSendUnlockKey = "";
   private lastDraftKey = "";
@@ -144,6 +149,7 @@ export class Game {
   private pauseMode: "none" | "paused" | "confirm" | "settings" | "inventory" = "none";
   /** Edge tracker for auto-open shop in MP / dual-lane. */
   private wasNearShopAuto = false;
+  private mpDisconnectHandled = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -267,7 +273,11 @@ export class Game {
     });
     this.relicSkip.addEventListener("click", () => {
       if (!this.state) return;
-      skipRelic(this.state);
+      if (this.mpMatch) {
+        this.mpUiIntent.skipRelic = true;
+      } else {
+        skipRelic(this.state);
+      }
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
       focusGame();
@@ -1027,9 +1037,10 @@ export class Game {
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseCurse(this.state, id);
+          if (this.mpMatch) this.mpUiIntent.chooseCurse = id;
+          else chooseCurse(this.state, id);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
           this.canvas.focus({ preventScroll: true });
         });
         this.relicChoices.appendChild(btn);
@@ -1052,9 +1063,10 @@ export class Game {
         btn.innerHTML = `<span class="relic-tag">Chest</span><strong>${opt.label}</strong><span>${opt.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseChestReward(this.state, index);
+          if (this.mpMatch) this.mpUiIntent.chooseChest = index;
+          else chooseChestReward(this.state, index);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
           this.canvas.focus({ preventScroll: true });
         });
         this.relicChoices.appendChild(btn);
@@ -1081,9 +1093,10 @@ export class Game {
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}<br/>${def.hint}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseUtility(this.state, id);
+          if (this.mpMatch) this.mpUiIntent.chooseUtility = id;
+          else chooseUtility(this.state, id);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
@@ -1106,9 +1119,10 @@ export class Game {
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseBaseBranch(this.state, id);
+          if (this.mpMatch) this.mpUiIntent.chooseBaseBranch = id;
+          else chooseBaseBranch(this.state, id);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
@@ -1131,9 +1145,10 @@ export class Game {
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseLevelUp(this.state, id);
+          if (this.mpMatch) this.mpUiIntent.chooseLevel = id;
+          else chooseLevelUp(this.state, id);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
@@ -1147,7 +1162,12 @@ export class Game {
       reroll.disabled = this.state.rerollTokens <= 0;
       reroll.addEventListener("click", () => {
         if (!this.state) return;
-        if (rerollLevelDraft(this.state)) this.lastDraftKey = "";
+        if (this.mpMatch) {
+          this.mpUiIntent.rerollLevel = true;
+          this.lastDraftKey = "";
+        } else if (rerollLevelDraft(this.state)) {
+          this.lastDraftKey = "";
+        }
       });
       this.relicChoices.appendChild(reroll);
     } else if (this.state.pausedForDraft && this.state.relicDraft) {
@@ -1167,9 +1187,10 @@ export class Game {
         btn.innerHTML = `${relicArtImg(id, "relic-art relic-card-art")}<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
-          chooseRelic(this.state, id);
+          if (this.mpMatch) this.mpUiIntent.chooseRelic = id;
+          else chooseRelic(this.state, id);
           this.lastDraftKey = "";
-          if (!this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
@@ -1183,7 +1204,12 @@ export class Game {
       reroll.disabled = this.state.rerollTokens <= 0;
       reroll.addEventListener("click", () => {
         if (!this.state) return;
-        if (rerollRelicDraft(this.state)) this.lastDraftKey = "";
+        if (this.mpMatch) {
+          this.mpUiIntent.rerollRelic = true;
+          this.lastDraftKey = "";
+        } else if (rerollRelicDraft(this.state)) {
+          this.lastDraftKey = "";
+        }
       });
       this.relicChoices.appendChild(reroll);
     } else {
@@ -1270,9 +1296,8 @@ export class Game {
 
   private openMultiplayer(draft: LobbyDraft, heroId: HeroId): void {
     unlockAudio();
-    stopMenuMusic();
     this.hideCombatChrome();
-    this.menus.hide();
+    this.menus.hide({ keepMusic: true });
     const menusRoot = document.querySelector<HTMLElement>("#menus")!;
     this.mpUi = new MultiplayerUi(menusRoot, {
       onBack: () => {
@@ -1336,16 +1361,40 @@ export class Game {
   }
 
   private beginMultiplayerMatch(
-    start: Extract<NetMsg, { k: "start" }>,
+    startMsg: Extract<NetMsg, { k: "start" }>,
     mySlot: number,
     isHost: boolean,
   ): void {
-    this.mpUi?.destroy();
+    // Keep PeerJS alive — only clear lobby chrome (destroy() defaults to disconnectNet).
+    stopMenuMusic();
+    this.mpUi?.destroy({ disconnect: false });
     this.mpUi = null;
+    bindHooks(null);
     this.menus.hide();
     this.mpHost = isHost;
     this.remoteIntents.clear();
+    this.mpUiIntent = emptyIntent();
+    this.mpDisconnectHandled = false;
     this.state = null;
+    let start = startMsg;
+    const rejectCustoms = loadSettings().rejectPeerCustoms;
+    const usesCustoms =
+      (start.customMaps?.length ?? 0) > 0 ||
+      (start.customHeroes?.length ?? 0) > 0 ||
+      String(start.mapId).startsWith("cm_") ||
+      start.lobby.slots.some((s) => String(s.heroId).startsWith("ch_"));
+    if (rejectCustoms && usesCustoms) {
+      this.overlay.classList.remove("hidden");
+      this.overlayTitle.textContent = "Custom content blocked";
+      this.overlayBody.textContent =
+        "This lobby uses custom maps or heroes, but Settings → Reject peer custom content is on. Turn the setting off to play, or ask the host to use stock content.";
+      this.overlayActions.innerHTML = `<button type="button" class="menu-btn primary" id="mp-custom-block">Back to Menu</button>`;
+      document.querySelector("#mp-custom-block")!.addEventListener("click", () => {
+        disconnectNet();
+        this.showMainMenu();
+      });
+      return;
+    }
     registerSessionCustoms({ maps: start.customMaps, heroes: start.customHeroes });
     this.mpMatch = buildMpMatch(start.lobby, start.mapId, start.maxTurrets, start.seed, mySlot, {
       startingGold: start.startingGold ?? start.lobby.startingGold,
@@ -1355,7 +1404,13 @@ export class Game {
         start.utilityDraftLevel ?? start.lobby.utilityDraftLevel ?? 10,
     });
     for (const lane of this.mpMatch.lanes) {
-      openRunStartUtilityDraft(lane);
+      if (lane.playerBags) {
+        for (const key of Object.keys(lane.playerBags)) {
+          withPlayerBag(lane, Number(key), () => openRunStartUtilityDraft(lane));
+        }
+      } else {
+        openRunStartUtilityDraft(lane);
+      }
     }
 
     // Attach trained AI to PvE enemy lane when a school is selected
@@ -1387,16 +1442,24 @@ export class Game {
       }
     }
     this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+    focusBag(this.mpMatch.lanes[this.mpMatch.myTeam], mySlot);
 
     bindMatchHandlers({
       onState: (msg) => {
         if (this.mpHost || !this.mpMatch) return;
         applyMatchSnap(this.mpMatch, msg.snap);
+        focusBag(this.mpMatch.lanes[this.mpMatch.myTeam], this.mpMatch.mySlot);
         this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+        if (this.mpMatch.viewTeam === this.mpMatch.myTeam) {
+          focusBag(this.state, this.mpMatch.mySlot);
+        }
       },
       onIntent: (seat, intent) => {
         if (!this.mpHost) return;
         this.remoteIntents.set(seat, intent);
+      },
+      onPeerLost: (who) => {
+        this.handleMpDisconnect(who);
       },
     });
   }
@@ -1405,7 +1468,6 @@ export class Game {
     if (!this.mpMatch) return;
     const view = computeView(this.canvas);
 
-    const lane = this.mpMatch.lanes[this.mpMatch.viewTeam];
     const controlled =
       heroForSlot(this.mpMatch.lanes[this.mpMatch.myTeam], this.mpMatch.mySlot) ??
       this.mpMatch.lanes[this.mpMatch.myTeam].hero;
@@ -1421,8 +1483,21 @@ export class Game {
     };
 
     const local = gatherLocalIntent(this.input, aim, controlled);
+    // Merge queued draft / UI choices (clients must send these — never mutate host sim locally)
+    local.chooseRelic = this.mpUiIntent.chooseRelic ?? local.chooseRelic;
+    local.skipRelic = this.mpUiIntent.skipRelic || local.skipRelic;
+    local.chooseLevel = this.mpUiIntent.chooseLevel ?? local.chooseLevel;
+    local.chooseUtility = this.mpUiIntent.chooseUtility ?? local.chooseUtility;
+    local.chooseCurse = this.mpUiIntent.chooseCurse ?? local.chooseCurse;
+    local.chooseChest = this.mpUiIntent.chooseChest ?? local.chooseChest;
+    local.chooseBaseBranch = this.mpUiIntent.chooseBaseBranch ?? local.chooseBaseBranch;
+    local.rerollLevel = this.mpUiIntent.rerollLevel || local.rerollLevel;
+    local.rerollRelic = this.mpUiIntent.rerollRelic || local.rerollRelic;
+    this.mpUiIntent = emptyIntent();
+
     // Auto-open shop once on pad enter (client setting; edge-triggered).
     const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
+    focusBag(myLane, this.mpMatch.mySlot);
     if (controlled && loadSettings().autoOpenShop && !myLane.disableShop && myLane.curseShopBlock <= 0) {
       const near = nearAnyShop(myLane.map, controlled, controlled.alive);
       if (near && !this.wasNearShopAuto && !myLane.shopOpen) {
@@ -1432,8 +1507,8 @@ export class Game {
     } else {
       this.wasNearShopAuto = false;
     }
-    // Shop slots when shop open: digits 4-6
-    if (lane.shopOpen && local.sendDigit != null && local.sendDigit >= 4) {
+    // Shop slots when LOCAL player's shop is open: digits 4-6 (not viewed opponent lane)
+    if (myLane.shopOpen && local.sendDigit != null && local.sendDigit >= 4) {
       local.shopSlot = local.sendDigit - 4;
       local.sendDigit = null;
     }
@@ -1468,9 +1543,10 @@ export class Game {
     this.input.endFrame();
 
     this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
-    // Ensure draw focuses controlled hero on my team view
+    // Ensure draw focuses controlled hero on my team view + local economy bag
     if (this.mpMatch.viewTeam === this.mpMatch.myTeam && controlled) {
       const L = this.state;
+      focusBag(L, this.mpMatch.mySlot);
       if (L.hero !== controlled && L.allies.includes(controlled)) {
         const idx = L.allies.indexOf(controlled);
         L.allies[idx] = L.hero;
@@ -1486,6 +1562,25 @@ export class Game {
     this.syncDraft();
 
     if (this.mpMatch.ended) this.showMpEndOverlay();
+  }
+
+  private handleMpDisconnect(who: string): void {
+    if (!this.mpMatch || this.mpDisconnectHandled) return;
+    this.mpDisconnectHandled = true;
+    const hostGone = who === "Host";
+    this.overlay.classList.remove("hidden");
+    this.overlayTitle.textContent = hostGone ? "Host disconnected" : "Player left";
+    this.overlayBody.textContent = hostGone
+      ? "The host left the match. Multiplayer session ended — PeerJS reconnect is not supported mid-match."
+      : `${who} disconnected. The match cannot continue fairly without them — ending the session.`;
+    this.overlayActions.innerHTML = `<button type="button" class="menu-btn primary" id="mp-dc-done">Back to Menu</button>`;
+    document.querySelector("#mp-dc-done")!.addEventListener("click", () => {
+      this.endMultiplayer();
+      this.showMainMenu();
+    });
+    this.mpMatch = null;
+    this.state = null;
+    bindMatchHandlers(null);
   }
 
   private syncHudMp(): void {

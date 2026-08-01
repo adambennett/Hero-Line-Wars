@@ -22,7 +22,7 @@ import {
 } from "../systems/abilities";
 import { tryBasicAttack } from "../systems/combat";
 import { tryCastUtility, tickUtilityEffects } from "../systems/utility";
-import { tryUpgradeBase } from "../systems/baseUpgrade";
+import { chooseBaseBranch, tryUpgradeBase } from "../systems/baseUpgrade";
 import { buyShopItem, tickShopRotation, beginWaveShop } from "../systems/shop";
 import { buySendPack, availableSendPacks, consumePendingSends } from "../systems/send";
 import { updateEnemies, createEnemy } from "../systems/enemies";
@@ -39,6 +39,12 @@ import {
 import { circleHitsObstacle, findClearSpot, reshuffleObstacles, blockedByObstacle, mapRespawn, nearAnyShop } from "../data/maps";
 import { clamp, dist } from "../game/math";
 import { heroUsesGyroKit, heroUsesWarpKit, resolveHero } from "../custom/registry";
+import { rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
+import {
+  anyBagPausedForDraft,
+  withPlayerBag,
+} from "./playerBag";
+import { isAiControllerSlot } from "./matchFactory";
 
 function applyOutgoingCurseTo(from: GameState, to: GameState): void {
   const c = from.outgoingCurse;
@@ -153,16 +159,18 @@ function applyHeroCombat(state: GameState, hero: HeroRuntime, intent: CombatInte
 }
 
 function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
-  if (intent.upgradeBase) tryUpgradeBase(state);
-  if (intent.toggleShop) {
+  if (intent.upgradeBase && state.curseUpgradeBlock <= 0) tryUpgradeBase(state);
+  if (intent.toggleShop && state.curseShopBlock <= 0 && !state.disableShop) {
     if (state.shopOpen) state.shopOpen = false;
     else if (state.nearShop) state.shopOpen = true;
   }
-  if (intent.sendDigit != null) {
-    const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
-    if (pack) buySendPack(state, pack.id);
+  if (intent.sendDigit != null && state.curseSendBlock <= 0 && !state.disableSends) {
+    if (!(state.shopOpen && intent.sendDigit >= 4)) {
+      const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
+      if (pack) buySendPack(state, pack.id);
+    }
   }
-  if (intent.shopSlot != null && state.shopOpen) {
+  if (intent.shopSlot != null && state.shopOpen && state.curseShopBlock <= 0 && !state.disableShop) {
     const id = state.shopOffer[intent.shopSlot];
     if (id) buyShopItem(state, id);
   }
@@ -172,6 +180,9 @@ function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
   if (intent.chooseUtility) chooseUtility(state, intent.chooseUtility);
   if (intent.chooseCurse) chooseCurse(state, intent.chooseCurse);
   if (intent.chooseChest != null) chooseChestReward(state, intent.chooseChest);
+  if (intent.chooseBaseBranch) chooseBaseBranch(state, intent.chooseBaseBranch);
+  if (intent.rerollLevel) rerollLevelDraft(state);
+  if (intent.rerollRelic) rerollRelicDraft(state);
 }
 
 function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean }): void {
@@ -217,7 +228,13 @@ function startWave(state: GameState): void {
   if (state.waveTier === "boss") state.toSpawn = Math.max(2, Math.floor(state.toSpawn * 0.55));
   state.sentQueue = consumePendingSends(state);
   state.spawnCd = state.wave <= 2 ? 0.35 : 0;
-  beginWaveShop(state);
+  if (state.playerBags) {
+    for (const key of Object.keys(state.playerBags)) {
+      withPlayerBag(state, Number(key), () => beginWaveShop(state));
+    }
+  } else {
+    beginWaveShop(state);
+  }
 
   for (const h of allLaneHeroes(state)) {
     if (h.heroId === "warden" && h.alive) {
@@ -378,25 +395,46 @@ function updateProjectilesMp(state: GameState, dt: number): void {
   state.projectiles = state.projectiles.filter((p) => p.alive);
 }
 
+function openRelicDraftOnBag(state: GameState): boolean {
+  if (state.disableRelics) return false;
+  const choices = draftRelicChoices(state.relics, state.relicDraftSize || 3);
+  if (choices.length === 0) return false;
+  state.relicDraft = choices;
+  state.pausedForDraft = true;
+  state.pendingRelicDraft = true;
+  state.draftKind = "relic";
+  return true;
+}
+
 function afterWaveClearMp(state: GameState): void {
-  if (state.waveTier === "elite" || state.waveTier === "boss") {
-    const choices = draftRelicChoices(state.relics, 3);
-    if (choices.length > 0) {
-      state.relicDraft = choices;
-      state.pausedForDraft = true;
-      state.pendingRelicDraft = true;
-      state.draftKind = "relic";
-      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
-      if (state.pendingLevelUps > 0) openLevelDraft(state);
-      return;
+  const bags = state.playerBags;
+  const openForActive = () => {
+    if (state.waveTier === "elite" || state.waveTier === "boss") {
+      if (openRelicDraftOnBag(state)) {
+        state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+        if (state.pendingLevelUps > 0) openLevelDraft(state);
+        return true;
+      }
     }
+    if (state.pendingLevelUps > 0) {
+      openLevelDraft(state);
+      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+      return true;
+    }
+    applySecondWind(state);
+    return false;
+  };
+
+  if (bags) {
+    for (const key of Object.keys(bags)) {
+      withPlayerBag(state, Number(key), () => {
+        openForActive();
+      });
+    }
+  } else {
+    openForActive();
   }
-  if (state.pendingLevelUps > 0) {
-    openLevelDraft(state);
-    state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
-    return;
-  }
-  applySecondWind(state);
+
   state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
@@ -406,6 +444,81 @@ function afterWaveClearMp(state: GameState): void {
 function resolveAiIntent(state: GameState, neural: NeuralLaneAi | null | undefined, dt: number): CombatIntent {
   if (neural) return thinkNeural(state, neural, dt);
   return scriptedIntent(state);
+}
+
+function aiIntentForHero(
+  state: GameState,
+  hero: HeroRuntime,
+  neural: NeuralLaneAi | null | undefined,
+  dt: number,
+): CombatIntent {
+  let intent = emptyIntent();
+  withHero(state, hero, () => {
+    intent = resolveAiIntent(state, neural, dt);
+  });
+  return intent;
+}
+
+function tickIncomeForBags(state: GameState, dt: number): void {
+  const tax =
+    state.curseIncomeTaxTimer > 0 ? state.curseIncomeTaxMul : 1;
+  const bags = state.playerBags;
+  if (!bags) {
+    let incomeMp = state.incomePerSec;
+    if (state.utilityIncomeBoost > 0) incomeMp += state.utilityIncomeAmount;
+    incomeMp += state.baseBranchMods.incomeFlat;
+    incomeMp *= tax;
+    const gainedMp = incomeMp * dt;
+    state.gold += gainedMp;
+    state.goldFromIncome += gainedMp;
+    state.peakGold = Math.max(state.peakGold, state.gold);
+    state.peakIncome = Math.max(state.peakIncome, incomeMp);
+    return;
+  }
+  for (const key of Object.keys(bags)) {
+    withPlayerBag(state, Number(key), () => {
+      let incomeMp = state.incomePerSec;
+      if (state.utilityIncomeBoost > 0) incomeMp += state.utilityIncomeAmount;
+      incomeMp += state.baseBranchMods.incomeFlat;
+      incomeMp *= tax;
+      const gainedMp = incomeMp * dt;
+      state.gold += gainedMp;
+      state.goldFromIncome += gainedMp;
+      state.peakGold = Math.max(state.peakGold, state.gold);
+      state.peakIncome = Math.max(state.peakIncome, incomeMp);
+    });
+  }
+}
+
+function applyHeroUiAndCombat(
+  state: GameState,
+  hero: HeroRuntime,
+  intent: CombatIntent,
+  dt: number,
+  outboundSends: GameState["pendingSends"],
+): void {
+  const slot = hero.controllerSlot;
+  const run = () => {
+    // Shop proximity for THIS hero — not the lane primary
+    const nearNow = nearAnyShop(state.map, hero, hero.alive);
+    if (state.shopOpen && !nearNow) state.shopOpen = false;
+    state.nearShop = nearNow;
+    state.wasNearShop = nearNow;
+
+    const beforeSends = state.pendingSends.length;
+    applyLaneUiIntent(state, intent);
+    if (state.pendingSends.length > beforeSends) {
+      const neu = state.pendingSends.splice(beforeSends);
+      outboundSends.push(...neu);
+    }
+    applyHeroCombat(state, hero, intent, dt);
+  };
+
+  if (slot != null && state.playerBags) {
+    withPlayerBag(state, slot, run);
+  } else {
+    run();
+  }
 }
 
 function updateLaneMp(
@@ -418,31 +531,48 @@ function updateLaneMp(
   holdNextWave = false,
 ): void {
   if (state.status !== "playing") return;
-  if (
-    state.pausedForDraft &&
-    (state.relicDraft ||
-      state.levelDraft ||
-      state.utilityDraft ||
-      state.curseDraft ||
-      state.chestDraft)
-  ) {
+
+  if (anyBagPausedForDraft(state)) {
     state.elapsed += dt;
-    if (state.aiControlled) {
-      applyLaneUiIntent(state, resolveAiIntent(state, neural, dt));
-    } else {
-      for (const intent of intents.values()) applyLaneUiIntent(state, intent);
+    for (const h of allLaneHeroes(state)) {
+      const slot = h.controllerSlot;
+      let intent: CombatIntent;
+      if (state.aiControlled || isAiControllerSlot(slot)) {
+        intent = aiIntentForHero(state, h, neural, dt);
+      } else if (slot != null) {
+        intent = intents.get(slot) ?? emptyIntent();
+      } else {
+        continue;
+      }
+      applyHeroUiAndCombat(state, h, intent, dt, outboundSends);
     }
     return;
   }
 
   state.elapsed += dt;
-  let incomeMp = state.incomePerSec;
-  if (state.utilityIncomeBoost > 0) incomeMp += state.utilityIncomeAmount;
-  const gainedMp = incomeMp * dt;
-  state.gold += gainedMp;
-  state.goldFromIncome += gainedMp;
-  state.peakGold = Math.max(state.peakGold, state.gold);
-  state.peakIncome = Math.max(state.peakIncome, incomeMp);
+  tickIncomeForBags(state, dt);
+
+  // Soft curses on this lane (parity with SP update)
+  const tick = (v: number) => Math.max(0, v - dt);
+  state.curseShopBlock = tick(state.curseShopBlock);
+  state.curseSendBlock = tick(state.curseSendBlock);
+  state.curseUpgradeBlock = tick(state.curseUpgradeBlock);
+  state.curseIncomeTaxTimer = tick(state.curseIncomeTaxTimer);
+  state.curseFogTimer = tick(state.curseFogTimer);
+  state.curseShopRefreshSlowTimer = tick(state.curseShopRefreshSlowTimer);
+  if (state.fogAlways || state.curseFogTimer > 0) state.mapFogActive = true;
+
+  // Hex DoT zones
+  for (const z of state.hexZones) {
+    z.life -= dt;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(e, z) <= z.radius + e.radius) {
+        damageEnemy(state, e, z.dps * dt);
+      }
+    }
+  }
+  state.hexZones = state.hexZones.filter((z) => z.life > 0);
 
   if (state.toastTimer > 0) {
     state.toastTimer = Math.max(0, state.toastTimer - dt);
@@ -477,34 +607,17 @@ function updateLaneMp(
     }
   }
 
-  const nearNow = nearAnyShop(state.map, state.hero, state.hero.alive);
-  // Auto-close when leaving interact range (also covers death via nearShop=false).
-  if (state.shopOpen && !nearNow) {
-    state.shopOpen = false;
-  }
-  state.nearShop = nearNow;
-  state.wasNearShop = nearNow;
-
-  const beforeSends = state.pendingSends.length;
-
-  if (state.aiControlled) {
-    const ai = resolveAiIntent(state, neural, dt);
-    applyLaneUiIntent(state, ai);
-    applyHeroCombat(state, state.hero, ai, dt);
-  } else {
-    for (const h of allLaneHeroes(state)) {
-      const slot = h.controllerSlot;
-      if (slot == null || slot < 0) continue;
-      const intent = intents.get(slot) ?? emptyIntent();
-      applyLaneUiIntent(state, intent);
-      applyHeroCombat(state, h, intent, dt);
+  for (const h of allLaneHeroes(state)) {
+    const slot = h.controllerSlot;
+    let intent: CombatIntent;
+    if (state.aiControlled || isAiControllerSlot(slot)) {
+      intent = aiIntentForHero(state, h, neural, dt);
+    } else if (slot != null) {
+      intent = intents.get(slot) ?? emptyIntent();
+    } else {
+      continue;
     }
-  }
-
-  // Capture newly purchased sends for cross-lane exchange
-  if (state.pendingSends.length > beforeSends) {
-    const neu = state.pendingSends.splice(beforeSends);
-    outboundSends.push(...neu);
+    applyHeroUiAndCombat(state, h, intent, dt, outboundSends);
   }
 
   updateProjectilesMp(state, dt);
@@ -517,7 +630,16 @@ function updateLaneMp(
   state.fx = state.fx.filter((f) => f.life > 0);
 
   const waveActive = state.spawning || state.enemies.length > 0;
-  tickShopRotation(state, dt, waveActive && !state.pausedForDraft);
+  // Shop rotation per bag
+  if (state.playerBags) {
+    for (const key of Object.keys(state.playerBags)) {
+      withPlayerBag(state, Number(key), () => {
+        tickShopRotation(state, dt, waveActive && !state.pausedForDraft);
+      });
+    }
+  } else {
+    tickShopRotation(state, dt, waveActive && !state.pausedForDraft);
+  }
 
   if (state.spawning) {
     state.spawnCd -= dt;
@@ -534,7 +656,7 @@ function updateLaneMp(
       state.spawning = false;
       afterWaveClearMp(state);
     }
-  } else if (!state.pausedForDraft) {
+  } else if (!anyBagPausedForDraft(state)) {
     state.waveTimer -= dt;
     if (state.waveTimer <= 0) {
       if (holdNextWave) {
@@ -558,7 +680,7 @@ function updateLaneMp(
 /** Lane is between waves and ready to roll the next one (timer expired). */
 function laneReadyToStartWave(state: GameState): boolean {
   if (state.status !== "playing") return false;
-  if (state.pausedForDraft) return false;
+  if (anyBagPausedForDraft(state)) return false;
   if (state.spawning || state.enemies.length > 0) return false;
   return state.waveTimer <= 0;
 }
@@ -660,6 +782,9 @@ export function gatherLocalIntent(
     chooseUtility: null,
     chooseCurse: null,
     chooseChest: null,
+    chooseBaseBranch: null,
+    rerollLevel: false,
+    rerollRelic: false,
     viewOpponent: null,
   };
 }

@@ -20,6 +20,7 @@ import type { CombatIntent, LobbyState, MatchMode, MatchPrivacy, NetMode, NetMsg
 import { isPveMode, modeCap } from "./types";
 import { collectCustomsForMatch, getCustomHero, getCustomMap } from "../custom/registry";
 import { isCustomHeroId, isCustomMapId, type CustomHeroDef, type CustomMapDef } from "../custom/types";
+import { sanitizeCustomHero, sanitizeCustomMap } from "../custom/validate";
 
 export const CODE_ALPHA = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const PEER_PREFIX = "hlw-v1-";
@@ -36,6 +37,8 @@ export type SessionHooks = {
 export type MatchNetHandlers = {
   onState: (snap: Extract<NetMsg, { k: "state" }>) => void;
   onIntent: (seat: number, intent: CombatIntent, seq: number) => void;
+  /** Mid-match peer / host drop. */
+  onPeerLost?: (who: string) => void;
 };
 
 type Session = {
@@ -131,10 +134,12 @@ export function disconnectNet(): void {
 
 function ingestPeerCustoms(maps?: CustomMapDef[], heroes?: CustomHeroDef[]): void {
   for (const m of maps ?? []) {
-    if (m?.id) S.peerCustoms.maps.set(m.id, structuredClone(m));
+    const clean = sanitizeCustomMap(m);
+    if (clean) S.peerCustoms.maps.set(clean.id, clean);
   }
   for (const h of heroes ?? []) {
-    if (h?.id) S.peerCustoms.heroes.set(h.id, structuredClone(h));
+    const clean = sanitizeCustomHero(h);
+    if (clean) S.peerCustoms.heroes.set(clean.id, clean);
   }
 }
 
@@ -155,7 +160,7 @@ export function pushLocalCustoms(mapChoice?: string | "random"): void {
   else netSendToHost({ k: "customs", heroes, maps });
 }
 
-export function bindHooks(hooks: SessionHooks): void {
+export function bindHooks(hooks: SessionHooks | null): void {
   S.hooks = hooks;
 }
 
@@ -199,7 +204,9 @@ function onMsg(raw: unknown, fromSlot?: number): void {
     return;
   }
   if (m.k === "intent" && S.mode === "host") {
-    S.matchHandlers?.onIntent(m.seat, m.intent, m.seq);
+    // Bind seat to the connection — ignore client-claimed seat (spoof)
+    const seat = fromSlot != null ? fromSlot : m.seat;
+    S.matchHandlers?.onIntent(seat, m.intent, m.seq);
     return;
   }
 
@@ -287,8 +294,10 @@ function wireHostConn(conn: DataConnection): void {
   conn.on("close", () => {
     S.peers = S.peers.filter((p) => p !== peer);
     if (S.lobby) S.lobby.slots = S.lobby.slots.filter((s) => s.slot !== slot);
-    S.hooks?.onDisconnected(`Player ${slot + 1}`);
-    broadcastLobby();
+    // Mid-match: only matchHandlers (avoid stale lobby UI refresh)
+    if (S.matchHandlers?.onPeerLost) S.matchHandlers.onPeerLost(`Player ${slot + 1}`);
+    else S.hooks?.onDisconnected(`Player ${slot + 1}`);
+    if (!S.matchHandlers) broadcastLobby();
   });
 }
 
@@ -301,8 +310,11 @@ function wireClientConn(conn: DataConnection): void {
   });
   conn.on("close", () => {
     S.open = false;
-    S.hooks?.onDisconnected("Host");
-    status('<b style="color:#e85d04">Host disconnected.</b>');
+    if (S.matchHandlers?.onPeerLost) S.matchHandlers.onPeerLost("Host");
+    else {
+      S.hooks?.onDisconnected("Host");
+      status('<b style="color:#e85d04">Host disconnected.</b>');
+    }
   });
   conn.on("error", () => status("Connection error."));
 }

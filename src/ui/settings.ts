@@ -1,4 +1,4 @@
-const STORAGE_KEY = "hlw-settings-v5";
+const STORAGE_KEY = "hlw-settings-v6";
 
 /** Mouse: 0 left, 1 middle, 2 right. Keyboard: KeyboardEvent.code. Gamepad: button index. */
 export type Binding =
@@ -44,6 +44,11 @@ export type ClientSettings = {
   damageScreenFx: DamageScreenFx;
   /** Open shop once when walking onto the shop pad (default off — press shop bind). */
   autoOpenShop: boolean;
+  /**
+   * When true, refuse MP matches that ship custom maps/heroes so peer payloads
+   * are never registered on this machine for that match.
+   */
+  rejectPeerCustoms: boolean;
   keybinds: Keybinds;
   /** Prefer gamepad when a pad is connected and recently used. */
   gamepadEnabled: boolean;
@@ -108,6 +113,7 @@ const DEFAULTS: ClientSettingsFull = {
   reduceMotion: false,
   damageScreenFx: "full",
   autoOpenShop: false,
+  rejectPeerCustoms: false,
   keybinds: { ...DEFAULT_KEYBINDS },
   gamepadEnabled: true,
   gamepadBinds: { ...DEFAULT_GAMEPAD },
@@ -122,6 +128,7 @@ export function loadSettings(): ClientSettingsFull {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem("hlw-settings-v5") ??
       localStorage.getItem("hlw-settings-v4") ??
       localStorage.getItem("hlw-settings-v3") ??
       localStorage.getItem("hlw-settings-v2") ??
@@ -139,6 +146,10 @@ export function loadSettings(): ClientSettingsFull {
         typeof parsed.menuMusicEnabled === "boolean" ? parsed.menuMusicEnabled : DEFAULTS.menuMusicEnabled,
       damageScreenFx: fx === "off" || fx === "reduced" || fx === "full" ? fx : DEFAULTS.damageScreenFx,
       autoOpenShop: typeof parsed.autoOpenShop === "boolean" ? parsed.autoOpenShop : DEFAULTS.autoOpenShop,
+      rejectPeerCustoms:
+        typeof parsed.rejectPeerCustoms === "boolean"
+          ? parsed.rejectPeerCustoms
+          : DEFAULTS.rejectPeerCustoms,
       keybinds: {
         ...DEFAULT_KEYBINDS,
         ...(parsed.keybinds ?? {}),

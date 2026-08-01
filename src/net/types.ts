@@ -109,6 +109,9 @@ export type CombatIntent = {
   chooseUtility: import("../data/utilities").UtilityId | null;
   chooseCurse: import("../data/curses").CurseId | null;
   chooseChest: number | null;
+  chooseBaseBranch: import("../data/baseBranches").BaseBranchId | null;
+  rerollLevel: boolean;
+  rerollRelic: boolean;
   viewOpponent: boolean | null;
   /** Gyro: hold mobility to charge hook (AI / net). */
   mobilityHeld?: boolean;
@@ -242,6 +245,21 @@ export type LaneSnap = {
   beam: { x1: number; y1: number; x2: number; y2: number; life: number } | null;
   pendingSends: { enemies: number; hpScale: number }[];
   mapId: MapId | string;
+  utilityDraft: import("../data/utilities").UtilityId[] | null;
+  curseDraft: import("../data/curses").CurseId[] | null;
+  chestDraft: { label: string; blurb: string }[] | null;
+  baseBranchDraft: import("../data/baseBranches").BaseBranchId[] | null;
+  utilityId: import("../data/utilities").UtilityId | null;
+  levelPassives: LevelPassiveId[];
+  rerollTokens: number;
+  /** Per-controller economy when teammates share a lane. */
+  playerBags?: Record<string, import("./playerBag").PlayerBag>;
+  curseShopBlock: number;
+  curseSendBlock: number;
+  curseUpgradeBlock: number;
+  curseIncomeTaxTimer: number;
+  curseIncomeTaxMul: number;
+  curseFogTimer: number;
 };
 
 export type MatchSnap = {
@@ -292,6 +310,9 @@ export function emptyIntent(): CombatIntent {
     chooseUtility: null,
     chooseCurse: null,
     chooseChest: null,
+    chooseBaseBranch: null,
+    rerollLevel: false,
+    rerollRelic: false,
     viewOpponent: null,
     mobilityHeld: false,
   };

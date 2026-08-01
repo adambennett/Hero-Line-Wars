@@ -25,7 +25,7 @@ Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, 
 | Bag | Inspect owned relics/items + passive |
 | View lane | Flip the camera to the opponent’s lane |
 
-Remap Attack / Mobility / Ultimate under **Settings → Controls**. Master volume scales procedural Web Audio SFX.
+Remap Attack / Mobility / Ultimate under **Settings → Controls**. Master volume scales procedural Web Audio SFX. **Reject peer custom content** (Settings) refuses multiplayer matches that require workshop maps/heroes so those payloads are never loaded for that match.
 
 Default win condition is **10 waves** (configurable; **Unlimited** = base death only). High ground grants bonus damage. You **respawn** if downed — only a destroyed **base** (or clearing the wave goal) ends the run.
 
@@ -34,7 +34,7 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 - **Singleplayer** — Classic abstract opponent, or a trained neural school (Rookie → Brutal) on a real dual lane. Run options: map, max turrets, starting gold, waves to win, friendly fire, **Ascension**.
 - **Barracks** — Spend **War Crests** (earned at run end) on permanent upgrades and hero commissions (Coil / Thorn start locked).
 - **Ascension** — A0–A12 cumulative modifiers (StS-style). Win at your highest unlocked level to open the next; Crests scale with Ascension.
-- **Multiplayer** — PeerJS lobbies (private code or public find-match). Modes: **1v1 / 2v2 / 3v3** PvP and **2p / 3p PvE**. Host-authoritative sim; shared lane for allies.
+- **Multiplayer** — PeerJS lobbies (private code or public find-match). Modes: **1v1 / 2v2 / 3v3** PvP and **2p / 3p PvE**. Host-authoritative sim; allies share a physical lane but keep **independent** gold, shop, items, relics, and drafts. Mid-match disconnect shows an end overlay (no mid-match reconnect).
 - **AI Lab** — In-browser genetic training on unlimited-wave duels (base death wins). Recipes + checkpoints save as difficulty tiers for solo/PvE.
 
 ## Systems
@@ -65,4 +65,6 @@ Desktop (itch upload + Steam roadmap): **[`DESKTOP.md`](./DESKTOP.md)**.
 
 ## Later
 
-Deeper AI / balance polish, more Barracks nodes, and Ascension tuning based on playtests.
+Deeper AI / balance polish, more Barracks nodes, Ascension tuning, and optional mid-match reconnect if PeerJS session restore becomes feasible.
+
+Player-facing change log: **[`PATCHNOTES.md`](./PATCHNOTES.md)**.

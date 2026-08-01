@@ -2,6 +2,7 @@ import type { GameState, HeroRuntime } from "../game/state";
 import type { CombatIntent, HeroSnap, LaneSnap, MatchSnap, MpTeam } from "./types";
 import type { MpMatch } from "./matchFactory";
 import { allLaneHeroes } from "./matchFactory";
+import { applyBags, serializeBags, type PlayerBag } from "./playerBag";
 
 function heroSnap(h: HeroRuntime): HeroSnap {
   return {
@@ -91,6 +92,22 @@ export function buildLaneSnap(state: GameState): LaneSnap {
     beam: state.beam ? { ...state.beam } : null,
     pendingSends: state.pendingSends.map((s) => ({ ...s })),
     mapId: state.mapId,
+    utilityDraft: state.utilityDraft ? [...state.utilityDraft] : null,
+    curseDraft: state.curseDraft ? [...state.curseDraft] : null,
+    chestDraft: state.chestDraft
+      ? state.chestDraft.map((c) => ({ label: c.label, blurb: c.blurb }))
+      : null,
+    baseBranchDraft: state.baseBranchDraft ? [...state.baseBranchDraft] : null,
+    utilityId: state.utilityId,
+    levelPassives: [...state.levelPassives],
+    rerollTokens: state.rerollTokens,
+    playerBags: serializeBags(state.playerBags),
+    curseShopBlock: state.curseShopBlock,
+    curseSendBlock: state.curseSendBlock,
+    curseUpgradeBlock: state.curseUpgradeBlock,
+    curseIncomeTaxTimer: state.curseIncomeTaxTimer,
+    curseIncomeTaxMul: state.curseIncomeTaxMul,
+    curseFogTimer: state.curseFogTimer,
   };
 }
 
@@ -119,7 +136,11 @@ function applyHeroSnap(h: HeroRuntime, snap: HeroSnap): void {
   h.controllerSlot = snap.slot;
 }
 
-export function applyLaneSnap(state: GameState, snap: LaneSnap): void {
+export function applyLaneSnap(
+  state: GameState,
+  snap: LaneSnap,
+  focusSlot?: number | null,
+): void {
   state.status = snap.status as GameState["status"];
   state.wave = snap.wave;
   state.waveTier = snap.waveTier as GameState["waveTier"];
@@ -157,6 +178,32 @@ export function applyLaneSnap(state: GameState, snap: LaneSnap): void {
   state.pendingSends = snap.pendingSends.map((s) => ({ ...s }));
   state.beam = snap.beam ? { ...snap.beam } : null;
   state.fx = snap.fx.map((f) => ({ ...f }));
+  state.utilityDraft = snap.utilityDraft ? [...snap.utilityDraft] : null;
+  state.curseDraft = snap.curseDraft ? [...snap.curseDraft] : null;
+  // Chest options: labels only on wire; keep local options if labels match, else stub
+  if (snap.chestDraft) {
+    state.chestDraft = snap.chestDraft.map((c, i) => {
+      const prev = state.chestDraft?.[i];
+      if (prev && prev.label === c.label) return prev;
+      return { kind: "gold" as const, amount: 0, label: c.label, blurb: c.blurb };
+    });
+  } else {
+    state.chestDraft = null;
+  }
+  state.baseBranchDraft = snap.baseBranchDraft ? [...snap.baseBranchDraft] : null;
+  state.utilityId = snap.utilityId ?? null;
+  state.levelPassives = snap.levelPassives ? [...snap.levelPassives] : state.levelPassives;
+  state.rerollTokens = snap.rerollTokens ?? state.rerollTokens;
+  state.curseShopBlock = snap.curseShopBlock ?? 0;
+  state.curseSendBlock = snap.curseSendBlock ?? 0;
+  state.curseUpgradeBlock = snap.curseUpgradeBlock ?? 0;
+  state.curseIncomeTaxTimer = snap.curseIncomeTaxTimer ?? 0;
+  state.curseIncomeTaxMul = snap.curseIncomeTaxMul ?? 1;
+  state.curseFogTimer = snap.curseFogTimer ?? 0;
+
+  if (snap.playerBags) {
+    applyBags(state, snap.playerBags as Record<string, PlayerBag>, focusSlot);
+  }
 
   const heroes = snap.heroes;
   if (heroes[0]) {
@@ -220,27 +267,29 @@ export function applyLaneSnap(state: GameState, snap: LaneSnap): void {
 }
 
 export function applyMatchSnap(match: MpMatch, snap: MatchSnap): void {
-  applyLaneSnap(match.lanes[0], snap.lanes[0]);
-  applyLaneSnap(match.lanes[1], snap.lanes[1]);
-  match.viewTeam = snap.viewTeam;
+  const focus0 = match.myTeam === 0 ? match.mySlot : null;
+  const focus1 = match.myTeam === 1 ? match.mySlot : null;
+  applyLaneSnap(match.lanes[0], snap.lanes[0], focus0);
+  applyLaneSnap(match.lanes[1], snap.lanes[1], focus1);
+  // viewTeam is local-only — never overwrite from host snap
   match.ended = snap.ended;
   match.winnerTeam = snap.winnerTeam;
 }
 
-/** Transfer pending sends that were just purchased — call after both lanes update shop/sends. */
-export function exchangeLaneSends(a: GameState, b: GameState): void {
-  // Sends queued on A should spawn on B and vice versa.
-  // buySendPack already pushes to pendingSends on the buyer's state.
-  // Host moves newly purchased packs across each frame via drain markers.
-  const move = (from: GameState, to: GameState) => {
-    if (from.pendingSends.length === 0) return;
-    const batch = from.pendingSends.splice(0, from.pendingSends.length);
-    to.pendingSends.push(...batch);
-  };
-  // Only exchange packs marked as outbound this tick — see mpUpdate outbound buffers.
-  void move;
-  void a;
-  void b;
+/**
+ * Cross-lane send exchange is handled inside `stepMpMatch` via outbound buffers.
+ * Kept as a named helper for clarity / future drain markers.
+ */
+export function exchangeLaneSends(
+  outboundFromA: GameState["pendingSends"],
+  outboundFromB: GameState["pendingSends"],
+  laneA: GameState,
+  laneB: GameState,
+): void {
+  laneB.pendingSends.push(...outboundFromA);
+  laneA.pendingSends.push(...outboundFromB);
+  outboundFromA.length = 0;
+  outboundFromB.length = 0;
 }
 
 export type { CombatIntent };

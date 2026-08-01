@@ -6,7 +6,9 @@ import { SHOP_ITEMS } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
 import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyKind } from "../data/enemies";
 import { RARITY_LABEL, RARITY_COLOR, RARITY_ORDER, type Rarity } from "../data/rarity";
-import { utilityDraftLevelOptionsHtml } from "../data/utilities";
+import {
+  utilityDraftLevelOptionsHtml,
+} from "../data/utilities";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import type { RunOptions } from "../game/state";
@@ -81,6 +83,13 @@ import {
   type CareerStats,
 } from "../meta/careerStats";
 import { MainMenuFx } from "./mainMenuFx";
+import {
+  pickOne,
+  RUN_OPTION_DEFAULTS,
+  RUN_OPTION_POOLS,
+  runTip,
+  type RunOptionTipKey,
+} from "./runOptionsMeta";
 import { paintEnemyThumbs } from "./enemyThumbs";
 import { relicArtImg } from "../data/relicArt";
 import { itemArtImg } from "../data/itemArt";
@@ -294,11 +303,13 @@ export class MenuController {
     this.syncMenuMusic();
   }
 
-  hide(): void {
+  hide(opts?: { keepMusic?: boolean }): void {
     this.stopRebindListen();
     this.mainFx.stop();
-    stopMenuMusic();
-    this.allowMenuMusic = false;
+    if (!opts?.keepMusic) {
+      stopMenuMusic();
+      this.allowMenuMusic = false;
+    }
     this.root.classList.add("hidden");
     this.root.innerHTML = "";
   }
@@ -407,6 +418,24 @@ export class MenuController {
           sharedFriendlyFire: this.spFriendlyFire && this.spTeamSize > 1,
         });
         break;
+      case "sp-run-reset":
+        this.resetSpRunOptions();
+        this.render();
+        break;
+      case "sp-run-randomize":
+        this.randomizeSpRunOptions();
+        this.render();
+        break;
+      case "mp-run-reset":
+        this.resetMpRunOptions();
+        this.emitLobbyOpts();
+        this.render();
+        break;
+      case "mp-run-randomize":
+        this.randomizeMpRunOptions();
+        this.emitLobbyOpts();
+        this.render();
+        break;
       case "set-sp-map":
         this.spMapChoice = t.dataset.mapId as MapId | "random";
         this.render();
@@ -465,6 +494,7 @@ export class MenuController {
           reduceMotion: false,
           damageScreenFx: "full",
           autoOpenShop: false,
+          rejectPeerCustoms: false,
           keybinds: { ...DEFAULT_KEYBINDS },
           gamepadEnabled: true,
           gamepadBinds: { ...DEFAULT_GAMEPAD },
@@ -714,6 +744,9 @@ export class MenuController {
       this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "autoOpenShop") {
       this.settings.autoOpenShop = (el as HTMLInputElement).checked;
+      this.persist();
+    } else if ((el as HTMLInputElement).dataset.setting === "rejectPeerCustoms") {
+      this.settings.rejectPeerCustoms = (el as HTMLInputElement).checked;
       this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "screenShake") {
       this.settings.screenShake = (el as HTMLInputElement).checked;
@@ -1000,32 +1033,54 @@ export class MenuController {
         break;
     }
 
-    this.mainFx.stop();
     const isMain = this.screen === "main";
     const fxVar = isMain ? "main" : "sub";
     const reduceMotion = !!this.settings.reduceMotion;
     const versionHtml = isMain
       ? `<p class="menu-version" aria-hidden="true">v${escapeHtml(__APP_VERSION__)}</p>`
       : "";
-    this.root.innerHTML = `
+    const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}`;
+
+    const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
+    const existingShell = this.root.querySelector<HTMLElement>(".menu-shell");
+    const reuseFx =
+      !!backdrop &&
+      !!existingShell &&
+      backdrop.classList.contains(`fx-${fxVar}`) &&
+      !!this.root.querySelector("#menu-fx-canvas");
+
+    if (reuseFx && backdrop && existingShell) {
+      backdrop.classList.toggle("reduce-motion", reduceMotion);
+      existingShell.className = shellClass;
+      existingShell.innerHTML = `${body}${toastHtml}`;
+      const ver = this.root.querySelector(".menu-version");
+      if (isMain) {
+        if (ver) ver.textContent = `v${__APP_VERSION__}`;
+        else this.root.insertAdjacentHTML("beforeend", versionHtml);
+      } else {
+        ver?.remove();
+      }
+      existingShell.scrollTop = scroll;
+    } else {
+      this.mainFx.stop();
+      this.root.innerHTML = `
       <div class="menu-backdrop menu-fx fx-${fxVar}${reduceMotion ? " reduce-motion" : ""}">
         <div class="menu-aurora" aria-hidden="true"></div>
         <div class="menu-waves" aria-hidden="true"></div>
         <canvas id="menu-fx-canvas" aria-hidden="true"></canvas>
       </div>
-      <div class="menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}">
+      <div class="${shellClass}">
         ${body}
         ${toastHtml}
       </div>
       ${versionHtml}
     `;
-
-    const shell = this.root.querySelector(".menu-shell");
-    if (shell) shell.scrollTop = scroll;
-
-    const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
-    if (fxCanvas) {
-      this.mainFx.start(fxCanvas, { variation: fxVar, reduceMotion });
+      const shell = this.root.querySelector(".menu-shell");
+      if (shell) shell.scrollTop = scroll;
+      const fxCanvas = this.root.querySelector<HTMLCanvasElement>("#menu-fx-canvas");
+      if (fxCanvas) {
+        this.mainFx.start(fxCanvas, { variation: fxVar, reduceMotion });
+      }
     }
 
     if (this.screen === "compendium" && this.compendiumTab === "maps") {
@@ -1391,195 +1446,384 @@ export class MenuController {
     `;
   }
 
+  private applySpRunDefaults(): void {
+    const d = RUN_OPTION_DEFAULTS;
+    this.spMapChoice = d.mapChoice;
+    this.spMaxTurrets = d.maxTurrets;
+    this.spStartingGold = d.startingGold;
+    this.spWavesToWin = d.wavesToWin;
+    this.spLivesPerWave = d.livesPerWave;
+    this.spLivesPerRun = d.livesPerRun;
+    this.spUtilityDraftLevel = d.utilityDraftLevel;
+    this.spFriendlyFire = d.friendlyFire;
+    this.spAscension = d.ascension;
+    this.spTeamSize = d.teamSize;
+    this.spEndless = d.endless;
+    this.spChestOpenMul = d.chestOpenMul;
+    this.spChestDespawnSec = d.chestDespawnSec;
+    this.spChestSpawnChance = d.chestSpawnChance;
+    this.spEnemyDensity = d.enemyDensityMul;
+    this.spEnemyHp = d.enemyHpMul;
+    this.spEnemySpeed = d.enemySpeedMul;
+    this.spIncomeMul = d.incomeMul;
+    this.spRespawnMul = d.respawnMul;
+    this.spStartingBase = d.startingBaseLevel;
+    this.spLevelDraftSize = d.levelDraftSize;
+    this.spRelicDraftSize = d.relicDraftSize;
+    this.spAllyAi = d.allyAi;
+    this.spSuddenDeath = d.suddenDeathBaseHp;
+    this.spDisableArtifacts = d.disableArtifacts;
+    this.spDisableChests = d.disableChests;
+    this.spDisableElites = d.disableElites;
+    this.spDisableBosses = d.disableBosses;
+    this.spDisableShop = d.disableShop;
+    this.spDisableSends = d.disableSends;
+    this.spDisableRelics = d.disableRelics;
+    this.spFogAlways = d.fogAlways;
+    this.spDoubleElites = d.doubleElites;
+    setSelectedOpponent({ kind: "classic" });
+  }
+
+  private resetSpRunOptions(): void {
+    this.applySpRunDefaults();
+  }
+
+  private randomizeSpRunOptions(): void {
+    const meta = loadMetaStore();
+    const mapPool: Array<MapId | string | "random"> = [
+      "random",
+      ...MAP_LIST.filter((m) => isMapUnlocked(m.id)).map((m) => m.id),
+      ...listCustomMaps().map((m) => m.id),
+    ];
+    this.spMapChoice = pickOne(mapPool);
+    this.spAscension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
+    setSelectedOpponent(randomAiSelection(loadAiStore()));
+    if (Math.random() < 0.2) {
+      this.spEndless = true;
+    } else {
+      this.spEndless = false;
+      this.spTeamSize = pickOne(RUN_OPTION_POOLS.teamSize);
+    }
+    this.spMaxTurrets = pickOne(RUN_OPTION_POOLS.maxTurrets);
+    this.spStartingGold = pickOne(RUN_OPTION_POOLS.startingGold);
+    this.spWavesToWin = pickOne(RUN_OPTION_POOLS.wavesToWin);
+    this.spLivesPerWave = pickOne(RUN_OPTION_POOLS.livesPerWave);
+    this.spLivesPerRun = pickOne(RUN_OPTION_POOLS.livesPerRun);
+    this.spUtilityDraftLevel = pickOne(RUN_OPTION_POOLS.utilityDraftLevel);
+    this.spFriendlyFire = Math.random() < 0.5;
+    this.spChestOpenMul = pickOne(RUN_OPTION_POOLS.chestOpenMul);
+    this.spChestDespawnSec = pickOne(RUN_OPTION_POOLS.chestDespawnSec);
+    this.spChestSpawnChance = pickOne(RUN_OPTION_POOLS.chestSpawnChance);
+    this.spEnemyDensity = pickOne(RUN_OPTION_POOLS.enemyDensityMul);
+    this.spEnemyHp = pickOne(RUN_OPTION_POOLS.enemyHpMul);
+    this.spEnemySpeed = pickOne(RUN_OPTION_POOLS.enemySpeedMul);
+    this.spIncomeMul = pickOne(RUN_OPTION_POOLS.incomeMul);
+    this.spRespawnMul = pickOne(RUN_OPTION_POOLS.respawnMul);
+    this.spStartingBase = pickOne(RUN_OPTION_POOLS.startingBaseLevel);
+    this.spLevelDraftSize = pickOne(RUN_OPTION_POOLS.levelDraftSize);
+    this.spRelicDraftSize = pickOne(RUN_OPTION_POOLS.relicDraftSize);
+    this.spAllyAi = pickOne(RUN_OPTION_POOLS.allyAi);
+    this.spSuddenDeath = pickOne(RUN_OPTION_POOLS.suddenDeathBaseHp);
+    this.spDisableArtifacts = Math.random() < 0.5;
+    this.spDisableChests = Math.random() < 0.5;
+    this.spDisableElites = Math.random() < 0.5;
+    this.spDisableBosses = Math.random() < 0.5;
+    this.spDisableShop = Math.random() < 0.5;
+    this.spDisableSends = Math.random() < 0.5;
+    this.spDisableRelics = Math.random() < 0.5;
+    this.spFogAlways = Math.random() < 0.5;
+    this.spDoubleElites = Math.random() < 0.5;
+  }
+
+  private applyLobbyRunDefaults(): void {
+    const d = RUN_OPTION_DEFAULTS;
+    this.lobby.mapChoice = d.mapChoice;
+    this.lobby.maxTurrets = d.maxTurrets;
+    this.lobby.startingGold = d.startingGold;
+    this.lobby.wavesToWin = d.wavesToWin;
+    this.lobby.livesPerWave = d.livesPerWave;
+    this.lobby.livesPerRun = d.livesPerRun;
+    this.lobby.utilityDraftLevel = d.utilityDraftLevel;
+    this.lobby.friendlyFire = d.friendlyFire;
+    this.lobby.ascension = d.ascension;
+    this.lobby.chestOpenMul = d.chestOpenMul;
+    this.lobby.chestDespawnSec = d.chestDespawnSec;
+    this.lobby.chestSpawnChance = d.chestSpawnChance;
+    this.lobby.enemyDensityMul = d.enemyDensityMul;
+    this.lobby.enemyHpMul = d.enemyHpMul;
+    this.lobby.enemySpeedMul = d.enemySpeedMul;
+    this.lobby.incomeMul = d.incomeMul;
+    this.lobby.respawnMul = d.respawnMul;
+    this.lobby.startingBaseLevel = d.startingBaseLevel;
+    this.lobby.levelDraftSize = d.levelDraftSize;
+    this.lobby.relicDraftSize = d.relicDraftSize;
+    this.lobby.disableArtifacts = d.disableArtifacts;
+    this.lobby.disableChests = d.disableChests;
+    this.lobby.disableElites = d.disableElites;
+    this.lobby.disableBosses = d.disableBosses;
+    this.lobby.disableShop = d.disableShop;
+    this.lobby.disableSends = d.disableSends;
+    this.lobby.disableRelics = d.disableRelics;
+    this.lobby.fogAlways = d.fogAlways;
+    this.lobby.doubleElites = d.doubleElites;
+    this.lobby.suddenDeathBaseHp = d.suddenDeathBaseHp;
+  }
+
+  private resetMpRunOptions(): void {
+    this.applyLobbyRunDefaults();
+  }
+
+  private randomizeMpRunOptions(): void {
+    const meta = loadMetaStore();
+    const mapPool: Array<MapId | string | "random"> = [
+      "random",
+      ...MAP_LIST.filter((m) => isMapUnlocked(m.id)).map((m) => m.id),
+      ...listCustomMaps().map((m) => m.id),
+    ];
+    this.lobby.mapChoice = pickOne(mapPool);
+    this.lobby.ascension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
+    this.lobby.maxTurrets = pickOne(RUN_OPTION_POOLS.maxTurrets);
+    this.lobby.startingGold = pickOne(RUN_OPTION_POOLS.startingGold);
+    this.lobby.wavesToWin = pickOne(RUN_OPTION_POOLS.wavesToWin);
+    this.lobby.livesPerWave = pickOne(RUN_OPTION_POOLS.livesPerWave);
+    this.lobby.livesPerRun = pickOne(RUN_OPTION_POOLS.livesPerRun);
+    this.lobby.utilityDraftLevel = pickOne(RUN_OPTION_POOLS.utilityDraftLevel);
+    this.lobby.friendlyFire = Math.random() < 0.5;
+    this.lobby.chestOpenMul = pickOne(RUN_OPTION_POOLS.chestOpenMul);
+    this.lobby.chestDespawnSec = pickOne(RUN_OPTION_POOLS.chestDespawnSec);
+    this.lobby.chestSpawnChance = pickOne(RUN_OPTION_POOLS.chestSpawnChance);
+    this.lobby.enemyDensityMul = pickOne(RUN_OPTION_POOLS.enemyDensityMul);
+    this.lobby.enemyHpMul = pickOne(RUN_OPTION_POOLS.enemyHpMul);
+    this.lobby.enemySpeedMul = pickOne(RUN_OPTION_POOLS.enemySpeedMul);
+    this.lobby.incomeMul = pickOne(RUN_OPTION_POOLS.incomeMul);
+    this.lobby.respawnMul = pickOne(RUN_OPTION_POOLS.respawnMul);
+    this.lobby.startingBaseLevel = pickOne(RUN_OPTION_POOLS.startingBaseLevel);
+    this.lobby.levelDraftSize = pickOne(RUN_OPTION_POOLS.levelDraftSize);
+    this.lobby.relicDraftSize = pickOne(RUN_OPTION_POOLS.relicDraftSize);
+    this.lobby.suddenDeathBaseHp = pickOne(RUN_OPTION_POOLS.suddenDeathBaseHp);
+    this.lobby.disableArtifacts = Math.random() < 0.5;
+    this.lobby.disableChests = Math.random() < 0.5;
+    this.lobby.disableElites = Math.random() < 0.5;
+    this.lobby.disableBosses = Math.random() < 0.5;
+    this.lobby.disableShop = Math.random() < 0.5;
+    this.lobby.disableSends = Math.random() < 0.5;
+    this.lobby.disableRelics = Math.random() < 0.5;
+    this.lobby.fogAlways = Math.random() < 0.5;
+    this.lobby.doubleElites = Math.random() < 0.5;
+  }
+
   private runOptionsFields(scope: "sp" | "mp"): string {
+    const tip = (key: RunOptionTipKey) => ` title="${escapeHtml(runTip(key))}"`;
     const turrets = scope === "sp" ? this.spMaxTurrets : this.lobby.maxTurrets;
     const gold = scope === "sp" ? this.spStartingGold : this.lobby.startingGold;
     const waves = scope === "sp" ? this.spWavesToWin : this.lobby.wavesToWin;
     const livesWave = scope === "sp" ? this.spLivesPerWave : this.lobby.livesPerWave;
     const livesRun = scope === "sp" ? this.spLivesPerRun : this.lobby.livesPerRun;
+    const utilityLevel = scope === "sp" ? this.spUtilityDraftLevel : this.lobby.utilityDraftLevel;
     const ff = scope === "sp" ? this.spFriendlyFire : this.lobby.friendlyFire;
-    const goldOpts = [0, 10, 45, 50, 60, 80, 100, 150, 200, 500, 1000]
+    const goldOpts = RUN_OPTION_POOLS.startingGold
       .map(
         (g) =>
           `<option value="${g}" ${gold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
       )
       .join("");
-    const waveOpts = [1, 2, 3, 5, 8, 10, 12, 15, 20, 25, 50, 100, 500, 0]
+    const waveOpts = RUN_OPTION_POOLS.wavesToWin
       .map((w) => {
         const label = w === 0 ? "Unlimited" : String(w);
         const def = w === WIN_WAVES ? " (default)" : "";
         return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesWaveOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const livesWaveOpts = RUN_OPTION_POOLS.livesPerWave
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
-        const def = n === 0 ? " (default)" : "";
-        return `<option value="${n}" ${livesWave === n ? "selected" : ""}>${label}${def}</option>`;
+        return `<option value="${n}" ${livesWave === n ? "selected" : ""}>${label}</option>`;
       })
       .join("");
-    const livesRunOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100]
+    const livesRunOpts = RUN_OPTION_POOLS.livesPerRun
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
-        const def = n === 0 ? " (default)" : "";
-        return `<option value="${n}" ${livesRun === n ? "selected" : ""}>${label}${def}</option>`;
+        return `<option value="${n}" ${livesRun === n ? "selected" : ""}>${label}</option>`;
       })
       .join("");
-    const turretOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const turretOpts = RUN_OPTION_POOLS.maxTurrets
       .map(
         (n) =>
           `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
-    const livesFields = `
+    const livesUtilityRow = `
+        <div class="run-grid cols-3" style="margin-top:8px">
           <label class="run-field">
             <span>Lives / wave</span>
-            <select data-field="${scope}-lives-wave">${livesWaveOpts}</select>
+            <select data-field="${scope}-lives-wave"${tip("livesWave")}>${livesWaveOpts}</select>
           </label>
           <label class="run-field">
             <span>Lives / run</span>
-            <select data-field="${scope}-lives-run">${livesRunOpts}</select>
-          </label>`;
+            <select data-field="${scope}-lives-run"${tip("livesRun")}>${livesRunOpts}</select>
+          </label>
+          <label class="run-field">
+            <span>Utility draft Lv</span>
+            <select data-field="${scope}-utility-level"${tip("utilityDraft")}>${utilityDraftLevelOptionsHtml(utilityLevel)}</select>
+          </label>
+        </div>`;
     const showFf =
       scope === "mp" ? this.lobby.mode !== "1v1" : !this.spEndless && this.spTeamSize > 1;
     const ffField = showFf
       ? `<label class="run-field">
             <span>Friendly fire</span>
-            <select data-field="${scope}-friendly-fire">
+            <select data-field="${scope}-friendly-fire"${tip("friendlyFire")}>
               <option value="0" ${!ff ? "selected" : ""}>Off</option>
               <option value="1" ${ff ? "selected" : ""}>On</option>
             </select>
           </label>`
       : "";
+    const chestRow = (prefix: "sp" | "mp") => {
+      const open = prefix === "sp" ? this.spChestOpenMul : this.lobby.chestOpenMul;
+      const despawn = prefix === "sp" ? this.spChestDespawnSec : this.lobby.chestDespawnSec;
+      const chance = prefix === "sp" ? this.spChestSpawnChance : this.lobby.chestSpawnChance;
+      return `
+        <div class="run-grid cols-3" style="margin-top:8px">
+          <label class="run-field">
+            <span>Chest open</span>
+            <select data-field="${prefix}-chest-open"${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${open === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest despawn</span>
+            <select data-field="${prefix}-chest-despawn"${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${despawn === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
+          </label>
+          <label class="run-field">
+            <span>Chest spawn</span>
+            <select data-field="${prefix}-chest-chance"${tip("chestSpawn")}>${RUN_OPTION_POOLS.chestSpawnChance.map((n) => `<option value="${n}" ${chance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
+          </label>
+        </div>`;
+    };
+    const creativeCheckboxes = (
+      prefix: "sp" | "mp",
+      flags: {
+        noArt: boolean;
+        noChest: boolean;
+        noElite: boolean;
+        noBoss: boolean;
+        noShop: boolean;
+        noSend: boolean;
+        noRelic: boolean;
+        fog: boolean;
+        dblElite: boolean;
+      },
+    ) =>
+      [
+        [`${prefix}-no-art`, "No artifacts", flags.noArt, "noArtifacts"],
+        [`${prefix}-no-chest`, "No chests", flags.noChest, "noChests"],
+        [`${prefix}-no-elite`, "No elites", flags.noElite, "noElites"],
+        [`${prefix}-no-boss`, "No bosses", flags.noBoss, "noBosses"],
+        [`${prefix}-no-shop`, "No shop", flags.noShop, "noShop"],
+        [`${prefix}-no-send`, "No sends", flags.noSend, "noSends"],
+        [`${prefix}-no-relic`, "No relics", flags.noRelic, "noRelics"],
+        [`${prefix}-fog`, "Fog always", flags.fog, "fogAlways"],
+        [`${prefix}-dbl-elite`, "Double elites", flags.dblElite, "doubleElites"],
+      ]
+        .map(
+          ([field, label, on, tipKey]) =>
+            `<label class="setting-row" style="min-width:9rem"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
+        )
+        .join("");
+    const resetRandomBtns = `
+          <div class="run-options-actions choice-row" style="margin-top:10px;gap:0.5rem">
+            <button type="button" class="menu-btn small ghost shine-btn" data-action="${scope}-run-reset"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn" data-action="${scope}-run-randomize"><span class="btn-label">Randomize</span></button>
+          </div>`;
     if (scope === "sp") {
       const teamOpts = [
-        ...[1, 2, 3].map(
+        ...RUN_OPTION_POOLS.teamSize.map(
           (n) =>
             `<option value="${n}" ${!this.spEndless && this.spTeamSize === n ? "selected" : ""}>${n}v${n}${n === 1 ? " (classic)" : " (+ AI allies)"}</option>`,
         ),
         `<option value="endless" ${this.spEndless ? "selected" : ""}>Endless (solo survival)</option>`,
       ].join("");
-      const openOpts = [0.75, 1, 1.25, 1.5, 2]
-        .map(
-          (n) =>
-            `<option value="${n}" ${this.spChestOpenMul === n ? "selected" : ""}>${n}× open time</option>`,
-        )
-        .join("");
-      const despawnOpts = [12, 20, 28, 40, 60]
-        .map(
-          (n) =>
-            `<option value="${n}" ${this.spChestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`,
-        )
-        .join("");
-      const chanceOpts = [0.04, 0.08, 0.12, 0.2]
-        .map(
-          (n) =>
-            `<option value="${n}" ${this.spChestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`,
-        )
-        .join("");
       const wavesField = this.spEndless
         ? `<label class="run-field">
             <span>Waves to win</span>
-            <select disabled title="Endless runs until your base falls">
+            <select disabled${tip("wavesToWin")}>
               <option selected>Until you fall</option>
             </select>
           </label>`
         : `<label class="run-field">
             <span>Waves to win</span>
-            <select data-field="sp-waves-to-win">${waveOpts}</select>
+            <select data-field="sp-waves-to-win"${tip("wavesToWin")}>${waveOpts}</select>
           </label>`;
       return `
         <div class="run-grid cols-4">
           <label class="run-field">
             <span>Mode</span>
-            <select data-field="sp-team-size">${teamOpts}</select>
+            <select data-field="sp-team-size"${tip("mode")}>${teamOpts}</select>
           </label>
           <label class="run-field">
             <span>Artifacts</span>
-            <select data-field="sp-turrets">${turretOpts}</select>
+            <select data-field="sp-turrets"${tip("artifacts")}>${turretOpts}</select>
           </label>
           <label class="run-field">
             <span>Starting gold</span>
-            <select data-field="sp-starting-gold">${goldOpts}</select>
+            <select data-field="sp-starting-gold"${tip("startingGold")}>${goldOpts}</select>
           </label>
           ${wavesField}
-          ${livesFields}
           ${ffField}
         </div>
+        ${livesUtilityRow}
         ${
           this.spEndless
             ? `<p class="panel-note" style="margin:8px 0 0">Endless: no enemy lane. Sends queue into <em>your</em> next wave for income — fight what you buy.</p>`
             : ""
         }
-        <div class="run-grid cols-3" style="margin-top:8px">
-          <label class="run-field">
-            <span>Chest open</span>
-            <select data-field="sp-chest-open">${openOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest despawn</span>
-            <select data-field="sp-chest-despawn">${despawnOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest spawn</span>
-            <select data-field="sp-chest-chance">${chanceOpts}</select>
-          </label>
-        </div>
+        ${chestRow("sp")}
         <div class="muted-box" style="margin-top:10px">
           <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
           <div class="run-grid cols-4">
             <label class="run-field"><span>Enemy density</span>
-              <select data-field="sp-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spEnemyDensity === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-enemy-density"${tip("enemyDensity")}>${RUN_OPTION_POOLS.enemyDensityMul.map((n) => `<option value="${n}" ${this.spEnemyDensity === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Enemy HP</span>
-              <select data-field="sp-enemy-hp">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spEnemyHp === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-enemy-hp"${tip("enemyHp")}>${RUN_OPTION_POOLS.enemyHpMul.map((n) => `<option value="${n}" ${this.spEnemyHp === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Enemy speed</span>
-              <select data-field="sp-enemy-speed">${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.spEnemySpeed === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-enemy-speed"${tip("enemySpeed")}>${RUN_OPTION_POOLS.enemySpeedMul.map((n) => `<option value="${n}" ${this.spEnemySpeed === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Income</span>
-              <select data-field="sp-income">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.spIncomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-income"${tip("income")}>${RUN_OPTION_POOLS.incomeMul.map((n) => `<option value="${n}" ${this.spIncomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Respawn</span>
-              <select data-field="sp-respawn">${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.spRespawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-respawn"${tip("respawn")}>${RUN_OPTION_POOLS.respawnMul.map((n) => `<option value="${n}" ${this.spRespawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Start base Lv</span>
-              <select data-field="sp-start-base">${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.spStartingBase === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+              <select data-field="sp-start-base"${tip("startBase")}>${RUN_OPTION_POOLS.startingBaseLevel.map((n) => `<option value="${n}" ${this.spStartingBase === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Level draft size</span>
-              <select data-field="sp-level-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.spLevelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+              <select data-field="sp-level-draft"${tip("levelDraft")}>${RUN_OPTION_POOLS.levelDraftSize.map((n) => `<option value="${n}" ${this.spLevelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Relic draft size</span>
-              <select data-field="sp-relic-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.spRelicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Utility draft Lv</span>
-              <select data-field="sp-utility-level">${utilityDraftLevelOptionsHtml(this.spUtilityDraftLevel)}</select>
+              <select data-field="sp-relic-draft"${tip("relicDraft")}>${RUN_OPTION_POOLS.relicDraftSize.map((n) => `<option value="${n}" ${this.spRelicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Ally AI</span>
-              <select data-field="sp-ally-ai">${[0.7, 1, 1.4, 1.8].map((n) => `<option value="${n}" ${this.spAllyAi === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select data-field="sp-ally-ai"${tip("allyAi")}>${RUN_OPTION_POOLS.allyAi.map((n) => `<option value="${n}" ${this.spAllyAi === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Sudden death HP</span>
-              <select data-field="sp-sudden">${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.spSuddenDeath === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+              <select data-field="sp-sudden"${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.spSuddenDeath === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
             </label>
           </div>
           <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
-            ${[
-              ["sp-no-art", "No artifacts", this.spDisableArtifacts],
-              ["sp-no-chest", "No chests", this.spDisableChests],
-              ["sp-no-elite", "No elites", this.spDisableElites],
-              ["sp-no-boss", "No bosses", this.spDisableBosses],
-              ["sp-no-shop", "No shop", this.spDisableShop],
-              ["sp-no-send", "No sends", this.spDisableSends],
-              ["sp-no-relic", "No relics", this.spDisableRelics],
-              ["sp-fog", "Fog always", this.spFogAlways],
-              ["sp-dbl-elite", "Double elites", this.spDoubleElites],
-            ]
-              .map(
-                ([field, label, on]) =>
-                  `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
-              )
-              .join("")}
+            ${creativeCheckboxes("sp", {
+              noArt: this.spDisableArtifacts,
+              noChest: this.spDisableChests,
+              noElite: this.spDisableElites,
+              noBoss: this.spDisableBosses,
+              noShop: this.spDisableShop,
+              noSend: this.spDisableSends,
+              noRelic: this.spDisableRelics,
+              fog: this.spFogAlways,
+              dblElite: this.spDoubleElites,
+            })}
           </div>
+          ${resetRandomBtns}
         </div>
       `;
     }
@@ -1587,91 +1831,71 @@ export class MenuController {
       <div class="run-grid cols-4">
         <label class="run-field">
           <span>Artifacts</span>
-          <select data-field="${scope}-turrets">${turretOpts}</select>
+          <select data-field="${scope}-turrets"${tip("artifacts")}>${turretOpts}</select>
         </label>
         <label class="run-field">
           <span>Starting gold</span>
-          <select data-field="${scope}-starting-gold">${goldOpts}</select>
+          <select data-field="${scope}-starting-gold"${tip("startingGold")}>${goldOpts}</select>
         </label>
         <label class="run-field">
           <span>Waves to win</span>
-          <select data-field="${scope}-waves-to-win">${waveOpts}</select>
+          <select data-field="${scope}-waves-to-win"${tip("wavesToWin")}>${waveOpts}</select>
         </label>
-        ${livesFields}
         ${ffField}
       </div>
-      <div class="run-grid cols-3" style="margin-top:8px">
-        <label class="run-field">
-          <span>Chest open</span>
-          <select data-field="${scope}-chest-open">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
-        </label>
-        <label class="run-field">
-          <span>Chest despawn</span>
-          <select data-field="${scope}-chest-despawn">${[12, 20, 28, 40, 60].map((n) => `<option value="${n}" ${this.lobby.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
-        </label>
-        <label class="run-field">
-          <span>Chest spawn</span>
-          <select data-field="${scope}-chest-chance">${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.lobby.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
-        </label>
-      </div>
+      ${livesUtilityRow}
+      ${chestRow("mp")}
       <div class="muted-box" style="margin-top:10px">
         <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
         <div class="run-grid cols-4">
           <label class="run-field"><span>Enemy density</span>
-            <select data-field="${scope}-enemy-density">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            <select data-field="${scope}-enemy-density"${tip("enemyDensity")}>${RUN_OPTION_POOLS.enemyDensityMul.map((n) => `<option value="${n}" ${this.lobby.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Enemy HP</span>
-            <select data-field="${scope}-enemy-hp">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            <select data-field="${scope}-enemy-hp"${tip("enemyHp")}>${RUN_OPTION_POOLS.enemyHpMul.map((n) => `<option value="${n}" ${this.lobby.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Enemy speed</span>
-            <select data-field="${scope}-enemy-speed">${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.lobby.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            <select data-field="${scope}-enemy-speed"${tip("enemySpeed")}>${RUN_OPTION_POOLS.enemySpeedMul.map((n) => `<option value="${n}" ${this.lobby.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Income</span>
-            <select data-field="${scope}-income">${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.lobby.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            <select data-field="${scope}-income"${tip("income")}>${RUN_OPTION_POOLS.incomeMul.map((n) => `<option value="${n}" ${this.lobby.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Respawn</span>
-            <select data-field="${scope}-respawn">${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.lobby.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+            <select data-field="${scope}-respawn"${tip("respawn")}>${RUN_OPTION_POOLS.respawnMul.map((n) => `<option value="${n}" ${this.lobby.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Start base Lv</span>
-            <select data-field="${scope}-start-base">${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.lobby.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            <select data-field="${scope}-start-base"${tip("startBase")}>${RUN_OPTION_POOLS.startingBaseLevel.map((n) => `<option value="${n}" ${this.lobby.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Level draft size</span>
-            <select data-field="${scope}-level-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.lobby.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+            <select data-field="${scope}-level-draft"${tip("levelDraft")}>${RUN_OPTION_POOLS.levelDraftSize.map((n) => `<option value="${n}" ${this.lobby.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Relic draft size</span>
-            <select data-field="${scope}-relic-draft">${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.lobby.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-          </label>
-          <label class="run-field"><span>Utility draft Lv</span>
-            <select data-field="${scope}-utility-level">${utilityDraftLevelOptionsHtml(this.lobby.utilityDraftLevel)}</select>
+            <select data-field="${scope}-relic-draft"${tip("relicDraft")}>${RUN_OPTION_POOLS.relicDraftSize.map((n) => `<option value="${n}" ${this.lobby.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Sudden death HP</span>
-            <select data-field="${scope}-sudden">${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.lobby.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+            <select data-field="${scope}-sudden"${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.lobby.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
           </label>
           <label class="run-field"><span>Ascension</span>
-            <select data-field="${scope}-ascension">${Array.from({ length: loadMetaStore().ascensionUnlocked + 1 }, (_, i) => {
+            <select data-field="${scope}-ascension"${tip("ascension")}>${Array.from({ length: loadMetaStore().ascensionUnlocked + 1 }, (_, i) => {
               const def = ASCENSIONS[i]!;
               return `<option value="${i}" ${this.lobby.ascension === i ? "selected" : ""}>A${i} · ${escapeHtml(def.name)}</option>`;
             }).join("")}</select>
           </label>
         </div>
         <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
-          ${[
-            [`${scope}-no-art`, "No artifacts", this.lobby.disableArtifacts],
-            [`${scope}-no-chest`, "No chests", this.lobby.disableChests],
-            [`${scope}-no-elite`, "No elites", this.lobby.disableElites],
-            [`${scope}-no-boss`, "No bosses", this.lobby.disableBosses],
-            [`${scope}-no-shop`, "No shop", this.lobby.disableShop],
-            [`${scope}-no-send`, "No sends", this.lobby.disableSends],
-            [`${scope}-no-relic`, "No relics", this.lobby.disableRelics],
-            [`${scope}-fog`, "Fog always", this.lobby.fogAlways],
-            [`${scope}-dbl-elite`, "Double elites", this.lobby.doubleElites],
-          ]
-            .map(
-              ([field, label, on]) =>
-                `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
-            )
-            .join("")}
+          ${creativeCheckboxes("mp", {
+            noArt: this.lobby.disableArtifacts,
+            noChest: this.lobby.disableChests,
+            noElite: this.lobby.disableElites,
+            noBoss: this.lobby.disableBosses,
+            noShop: this.lobby.disableShop,
+            noSend: this.lobby.disableSends,
+            noRelic: this.lobby.disableRelics,
+            fog: this.lobby.fogAlways,
+            dblElite: this.lobby.doubleElites,
+          })}
         </div>
+        ${resetRandomBtns}
       </div>
     `;
   }
@@ -1752,17 +1976,23 @@ export class MenuController {
       }),
     ].join("");
 
-    const customMapOpts = listCustomMaps().map(
-      (m) =>
-        `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>Custom · ${escapeHtml(m.name)}</option>`,
-    );
+    const customMaps = listCustomMaps();
+    const builtinMapOpts = MAP_LIST.map((m) => {
+      const unlocked = isMapUnlocked(m.id);
+      return `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""} ${unlocked ? "" : "disabled"}>${escapeHtml(m.name)}${unlocked ? "" : " (challenge)"}</option>`;
+    }).join("");
+    const customMapOpts = customMaps.length
+      ? customMaps
+          .map(
+            (m) =>
+              `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`,
+          )
+          .join("")
+      : `<option value="" disabled>(none saved yet)</option>`;
     const mapOpts = [
       `<option value="random" ${this.spMapChoice === "random" ? "selected" : ""}>Random</option>`,
-      ...customMapOpts,
-      ...MAP_LIST.map((m) => {
-        const unlocked = isMapUnlocked(m.id);
-        return `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""} ${unlocked ? "" : "disabled"}>${escapeHtml(m.name)}${unlocked ? "" : " (challenge)"}</option>`;
-      }),
+      `<optgroup label="Built-in">${builtinMapOpts}</optgroup>`,
+      `<optgroup label="Custom library">${customMapOpts}</optgroup>`,
     ].join("");
 
     const store = loadAiStore();
@@ -1810,11 +2040,11 @@ export class MenuController {
           <div class="run-grid cols-3">
             <label class="run-field">
               <span>Map</span>
-              <select data-field="sp-map">${mapOpts}</select>
+              <select data-field="sp-map" title="${escapeHtml(runTip("map"))}">${mapOpts}</select>
             </label>
             <label class="run-field">
               <span>Ascension</span>
-              <select data-field="sp-ascension">${ascOpts}</select>
+              <select data-field="sp-ascension" title="${escapeHtml(runTip("ascension"))}">${ascOpts}</select>
             </label>
             ${
               this.spEndless
@@ -1826,7 +2056,7 @@ export class MenuController {
             </label>`
                 : `<label class="run-field">
               <span>Opponent AI</span>
-              <select data-field="sp-opponent-ai">${aiOpts}</select>
+              <select data-field="sp-opponent-ai" title="${escapeHtml(runTip("opponentAi"))}">${aiOpts}</select>
             </label>`
             }
           </div>
@@ -2334,6 +2564,10 @@ export class MenuController {
           <span>Auto-open shop<em>Open once when you step onto the shop pad</em></span>
           <input type="checkbox" data-setting="autoOpenShop" ${s.autoOpenShop ? "checked" : ""} />
         </label>
+        <label class="setting-row check">
+          <span>Reject peer custom content<em>Block MP matches that require custom maps/heroes</em></span>
+          <input type="checkbox" data-setting="rejectPeerCustoms" ${s.rejectPeerCustoms ? "checked" : ""} />
+        </label>
         <label class="setting-row">
           <span>Damage screen effects<em>Flash / vignette / shake intensity</em></span>
           <select data-field="damage-fx">${fxOpts}</select>
@@ -2634,6 +2868,16 @@ export class MenuController {
       </div>
     `;
   }
+}
+
+function randomAiSelection(store: AiStore): AiSelection {
+  const options: AiSelection[] = [{ kind: "classic" }];
+  for (const s of store.schools) {
+    for (const tier of ["rookie", "steady", "sharp", "brutal"] as const) {
+      options.push({ kind: "neural", school: s.name, tier });
+    }
+  }
+  return pickOne(options);
 }
 
 function aiSelectOptions(store: AiStore, selected: AiSelection): string {

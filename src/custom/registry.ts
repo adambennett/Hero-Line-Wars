@@ -11,6 +11,7 @@ import {
   isCustomHeroId,
   isCustomMapId,
 } from "./types";
+import { sanitizeCustomHero, sanitizeCustomMap } from "./validate";
 
 const MAP_STORE_KEY = "hlw-custom-maps-v1";
 const HERO_STORE_KEY = "hlw-custom-heroes-v1";
@@ -97,19 +98,21 @@ export function getCustomHero(id: string): CustomHeroDef | null {
 
 export function saveCustomMap(def: CustomMapDef): void {
   ensureLoaded();
-  const i = libraryMaps.findIndex((m) => m.id === def.id);
-  const copy = structuredClone(def);
-  if (i >= 0) libraryMaps[i] = copy;
-  else libraryMaps.push(copy);
+  const clean = sanitizeCustomMap(def);
+  if (!clean) return;
+  const i = libraryMaps.findIndex((m) => m.id === clean.id);
+  if (i >= 0) libraryMaps[i] = clean;
+  else libraryMaps.push(clean);
   writeMaps();
 }
 
 export function saveCustomHero(def: CustomHeroDef): void {
   ensureLoaded();
-  const i = libraryHeroes.findIndex((h) => h.id === def.id);
-  const copy = structuredClone(def);
-  if (i >= 0) libraryHeroes[i] = copy;
-  else libraryHeroes.push(copy);
+  const clean = sanitizeCustomHero(def);
+  if (!clean) return;
+  const i = libraryHeroes.findIndex((h) => h.id === clean.id);
+  if (i >= 0) libraryHeroes[i] = clean;
+  else libraryHeroes.push(clean);
   writeHeroes();
 }
 
@@ -131,10 +134,12 @@ export function registerSessionCustoms(opts: {
   heroes?: CustomHeroDef[];
 }): void {
   for (const m of opts.maps ?? []) {
-    if (m?.id) sessionMaps.set(m.id, migrateCustomMap(structuredClone(m)));
+    const clean = sanitizeCustomMap(m);
+    if (clean) sessionMaps.set(clean.id, clean);
   }
   for (const h of opts.heroes ?? []) {
-    if (h?.id) sessionHeroes.set(h.id, structuredClone(h));
+    const clean = sanitizeCustomHero(h);
+    if (clean) sessionHeroes.set(clean.id, clean);
   }
 }
 

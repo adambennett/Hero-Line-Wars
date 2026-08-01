@@ -14,6 +14,7 @@ WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends,
 - Pages: `.github/workflows/deploy-pages.yml` builds + deploys `dist/` on `master` (repo Settings → Pages → Source: GitHub Actions).
 - Art generators: `tools/generate-*-art.mjs` → `public/art/{relics,items}/`.
 - **Version:** main menu shows `package.json` `version` (Vite `define` → `__APP_VERSION__`). When shipping a build or a meaningful change set, **bump `package.json` version** if it hasn’t been since the last commit.
+- **Patch notes:** every player/agent-facing change gets an entry in `PATCHNOTES.md` (newest first, headed with the new version) — same approach as LaneBreakers. Update this rule, `README.md`, and patch notes when behavior changes.
 
 ## Where to change what
 
@@ -29,8 +30,8 @@ WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends,
 | Base upgrades / branches | `src/data/baseUpgrades.ts`, `baseBranches.ts` + `systems/baseUpgrade.ts` |
 | Meta (crests, barracks, challenges, ascension, locks) | `src/meta/*` especially `contentLocks.ts`, `challenges.ts`, `upgrades.ts` |
 | Menus / settings / HUD chrome | `src/ui/*` (`MenuController.ts`, `mainMenuFx.ts`, …) |
-| Net / lobby / MP | `src/net/*` (`types.ts`, `lobby.ts`, `MultiplayerUi.ts`, `session.ts`) |
-| Custom / editor content | `src/custom/*` |
+| Net / lobby / MP | `src/net/*` (`types.ts`, `lobby.ts`, `MultiplayerUi.ts`, `session.ts`, `mpSim.ts`, `sync.ts`, `playerBag.ts`) |
+| Custom / editor content | `src/custom/*` (always sanitize via `validate.ts` on receive/save) |
 | AI Lab | `src/ai/*` |
 
 Match existing patterns; don't invent parallel systems or one-off globals.
@@ -53,6 +54,39 @@ Creative and run extras must stay in sync across:
 
 Adding a toggle in SP only (or MP only) is a bug. Mirror fields, defaults, and apply paths.
 
+## Multiplayer authority & independence (critical)
+
+Shared **physical** lane (enemies, base HP, map, lane curses / hex zones). Independent **progression** per controller:
+
+- Gold, shop open/stock/owned, relics, XP/level drafts, utility draft, curse/chest drafts that belong to the picker, rerolls — live in `playerBags` (`src/net/playerBag.ts`), swapped onto lane fields via `withPlayerBag` when applying that seat's intents.
+- **Do not** gate shop / nearShop on the lane primary only — use the acting hero.
+- **Do not** apply every seat's UI intents against one shared gold pool.
+- Draft UI on clients **must** queue choices into `CombatIntent` (`chooseRelic`, `chooseLevel`, `chooseUtility`, `chooseCurse`, `chooseChest`, `chooseBaseBranch`, `skipRelic`, `rerollLevel`, `rerollRelic`) — never call `choose*` only on local state in MP.
+- `LaneSnap` / `applyLaneSnap` must carry every draft kind clients need (utility, curse, chest, base branch, bags) or clients softlock.
+- Host binds intents to connection `fromSlot` — **ignore** client-claimed `seat` on intent messages.
+- `viewTeam` / camera flip is **local-only** — never overwrite from host `MatchSnap` on clients.
+- Entering a match must **not** call `disconnectNet()` — tear down lobby UI with `MultiplayerUi.destroy({ disconnect: false })` and clear lobby `bindHooks(null)`; keep PeerJS until `endMultiplayer` / leave.
+- Shop vs send digit conflict: resolve against **local player's** shop-open bag, not the viewed opponent lane.
+- Cross-lane sends: capture outbound in `stepMpMatch` buffers (do not leave a stub that never moves packs).
+- Incoming `pendingSends` stay on the **lane** (not per-bag) so bag swaps cannot wipe them.
+
+## SP vs MP sim parity
+
+`src/net/mpSim.ts` must keep parity with `update()` in `game/state.ts` for:
+
+- Curse timer ticks (shop / send / upgrade block, income tax, fog, shop refresh slow)
+- Income tax applied to gold gain
+- `hexZones` DoT
+- AI allies (`controllerSlot < 0` or null): scripted/neural intents — never frozen statues
+
+When adding a lane tick to SP, mirror it in `updateLaneMp` (or extract a shared helper).
+
+## Custom content safety
+
+- Sanitize/clamp all peer and import payloads (`custom/validate.ts`): finite coords, array size caps, absurd stat clamps, ability/passive id checks.
+- Settings: `rejectPeerCustoms` — when on, refuse MP starts that require custom maps/heroes so payloads are never registered for that match.
+- Session customs are match-scoped (`registerSessionCustoms`); do not auto-write peer defs into the local library unless the player explicitly imports/saves.
+
 ## UI preferences
 
 - Prefer **panels / grids**, not giant single-column scroll menus.
@@ -67,5 +101,7 @@ Adding a toggle in SP only (or MP only) is a bug. Mirror fields, defaults, and a
 
 - **Do** extend data + the system that already applies that kind of effect.
 - **Do** keep Artifact shop entries separate from gear icon pipelines.
+- **Do** update `.cursor/rules/hero-line-wars.mdc`, `README.md`, and `PATCHNOTES.md` (+ version bump) when behavior changes.
 - **Don't** casually add new combat resources, currencies, or net message kinds without matching SP/MP and existing sync patterns.
 - **Don't** fork a second game loop for desktop or single-file builds.
+- **Don't** reintroduce shared-lane economy gating, client-side draft mutation in MP, or host-forced `viewTeam`.

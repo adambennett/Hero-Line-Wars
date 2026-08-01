@@ -5,10 +5,19 @@ import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import { utilityDraftLevelOptionsHtml } from "../data/utilities";
+import { isMapUnlocked } from "../meta/contentLocks";
+import {
+  pickOne,
+  RUN_OPTION_DEFAULTS,
+  RUN_OPTION_POOLS,
+  runTip,
+  type RunOptionTipKey,
+} from "../ui/runOptionsMeta";
 import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
 import { MainMenuFx } from "../ui/mainMenuFx";
 import { loadSettings } from "../ui/settings";
+import { startMenuMusic } from "../systems/music";
 import {
   bindHooks,
   canStartMatch,
@@ -182,16 +191,35 @@ export class MultiplayerUi {
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
     this.root.classList.remove("hidden");
     this.refresh();
+    startMenuMusic();
   }
 
-  destroy(): void {
+  /** Tear down lobby chrome. Pass `{ disconnect: false }` when entering a live match so PeerJS stays up. */
+  destroy(opts?: { disconnect?: boolean }): void {
     this.menuFx.stop();
-    disconnectNet();
+    if (opts?.disconnect !== false) disconnectNet();
     this.root.innerHTML = "";
   }
 
   private mountFxShell(body: string): void {
     const reduceMotion = !!loadSettings().reduceMotion;
+    const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
+    const reuseFx =
+      !!backdrop &&
+      backdrop.classList.contains("fx-sub") &&
+      !!this.root.querySelector("#menu-fx-canvas");
+
+    if (reuseFx && backdrop) {
+      backdrop.classList.toggle("reduce-motion", reduceMotion);
+      // Keep backdrop; replace only non-backdrop content
+      for (const child of [...this.root.children]) {
+        if (child === backdrop) continue;
+        child.remove();
+      }
+      backdrop.insertAdjacentHTML("afterend", body);
+      return;
+    }
+
     this.menuFx.stop();
     this.root.innerHTML = `
       <div class="menu-backdrop menu-fx fx-sub${reduceMotion ? " reduce-motion" : ""}">
@@ -265,50 +293,143 @@ export class MultiplayerUi {
     );
   }
 
+  private resetRunOptions(): void {
+    const d = RUN_OPTION_DEFAULTS;
+    this.mapChoice = d.mapChoice;
+    this.maxTurrets = d.maxTurrets;
+    this.startingGold = d.startingGold;
+    this.wavesToWin = d.wavesToWin;
+    this.livesPerWave = d.livesPerWave;
+    this.livesPerRun = d.livesPerRun;
+    this.utilityDraftLevel = d.utilityDraftLevel;
+    this.friendlyFire = d.friendlyFire;
+    this.ascension = d.ascension;
+    this.chestOpenMul = d.chestOpenMul;
+    this.chestDespawnSec = d.chestDespawnSec;
+    this.chestSpawnChance = d.chestSpawnChance;
+    this.enemyDensityMul = d.enemyDensityMul;
+    this.enemyHpMul = d.enemyHpMul;
+    this.enemySpeedMul = d.enemySpeedMul;
+    this.incomeMul = d.incomeMul;
+    this.respawnMul = d.respawnMul;
+    this.startingBaseLevel = d.startingBaseLevel;
+    this.levelDraftSize = d.levelDraftSize;
+    this.relicDraftSize = d.relicDraftSize;
+    this.disableArtifacts = d.disableArtifacts;
+    this.disableChests = d.disableChests;
+    this.disableElites = d.disableElites;
+    this.disableBosses = d.disableBosses;
+    this.disableShop = d.disableShop;
+    this.disableSends = d.disableSends;
+    this.disableRelics = d.disableRelics;
+    this.fogAlways = d.fogAlways;
+    this.doubleElites = d.doubleElites;
+    this.suddenDeathBaseHp = d.suddenDeathBaseHp;
+  }
+
+  private randomizeRunOptions(): void {
+    const meta = loadMetaStore();
+    const mapPool: Array<MapId | string | "random"> = [
+      "random",
+      ...MAP_LIST.filter((m) => isMapUnlocked(m.id)).map((m) => m.id),
+      ...listCustomMaps().map((m) => m.id),
+    ];
+    this.mapChoice = pickOne(mapPool);
+    this.ascension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
+    this.maxTurrets = pickOne(RUN_OPTION_POOLS.maxTurrets);
+    this.startingGold = pickOne(RUN_OPTION_POOLS.startingGold);
+    this.wavesToWin = pickOne(RUN_OPTION_POOLS.wavesToWin);
+    this.livesPerWave = pickOne(RUN_OPTION_POOLS.livesPerWave);
+    this.livesPerRun = pickOne(RUN_OPTION_POOLS.livesPerRun);
+    this.utilityDraftLevel = pickOne(RUN_OPTION_POOLS.utilityDraftLevel);
+    this.friendlyFire = Math.random() < 0.5;
+    this.chestOpenMul = pickOne(RUN_OPTION_POOLS.chestOpenMul);
+    this.chestDespawnSec = pickOne(RUN_OPTION_POOLS.chestDespawnSec);
+    this.chestSpawnChance = pickOne(RUN_OPTION_POOLS.chestSpawnChance);
+    this.enemyDensityMul = pickOne(RUN_OPTION_POOLS.enemyDensityMul);
+    this.enemyHpMul = pickOne(RUN_OPTION_POOLS.enemyHpMul);
+    this.enemySpeedMul = pickOne(RUN_OPTION_POOLS.enemySpeedMul);
+    this.incomeMul = pickOne(RUN_OPTION_POOLS.incomeMul);
+    this.respawnMul = pickOne(RUN_OPTION_POOLS.respawnMul);
+    this.startingBaseLevel = pickOne(RUN_OPTION_POOLS.startingBaseLevel);
+    this.levelDraftSize = pickOne(RUN_OPTION_POOLS.levelDraftSize);
+    this.relicDraftSize = pickOne(RUN_OPTION_POOLS.relicDraftSize);
+    this.suddenDeathBaseHp = pickOne(RUN_OPTION_POOLS.suddenDeathBaseHp);
+    this.disableArtifacts = Math.random() < 0.5;
+    this.disableChests = Math.random() < 0.5;
+    this.disableElites = Math.random() < 0.5;
+    this.disableBosses = Math.random() < 0.5;
+    this.disableShop = Math.random() < 0.5;
+    this.disableSends = Math.random() < 0.5;
+    this.disableRelics = Math.random() < 0.5;
+    this.fogAlways = Math.random() < 0.5;
+    this.doubleElites = Math.random() < 0.5;
+  }
+
+  private bindRunResetRandom(prefix: string, editable: boolean, onChange?: () => void): void {
+    if (!editable) return;
+    this.root.querySelector(`#${prefix}-run-reset`)?.addEventListener("click", () => {
+      this.resetRunOptions();
+      onChange?.();
+      this.refresh();
+    });
+    this.root.querySelector(`#${prefix}-run-randomize`)?.addEventListener("click", () => {
+      this.randomizeRunOptions();
+      onChange?.();
+      this.refresh();
+    });
+  }
+
   private runSetupHtml(prefix: string, editable: boolean): string {
     const dis = editable ? "" : "disabled";
+    const tip = (key: RunOptionTipKey) => ` title="${escapeAttr(runTip(key))}"`;
+    const customMaps = listCustomMaps();
+    const builtinMapOpts = MAP_LIST.map(
+      (m) =>
+        `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
+    ).join("");
+    const customMapOpts = customMaps.length
+      ? customMaps
+          .map(
+            (m) =>
+              `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
+          )
+          .join("")
+      : `<option value="" disabled>(none saved yet)</option>`;
     const mapOpts = [
       `<option value="random" ${this.mapChoice === "random" ? "selected" : ""}>Random</option>`,
-      ...listCustomMaps().map(
-        (m) =>
-          `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>Custom · ${escapeAttr(m.name)}</option>`,
-      ),
-      ...MAP_LIST.map(
-        (m) =>
-          `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
-      ),
+      `<optgroup label="Built-in">${builtinMapOpts}</optgroup>`,
+      `<optgroup label="Custom library">${customMapOpts}</optgroup>`,
     ].join("");
-    const turretOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const turretOpts = RUN_OPTION_POOLS.maxTurrets
       .map(
         (n) =>
           `<option value="${n}" ${this.maxTurrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
       )
       .join("");
-    const goldOpts = [0, 10, 45, 50, 60, 80, 100, 150, 200, 500, 1000]
+    const goldOpts = RUN_OPTION_POOLS.startingGold
       .map(
         (g) =>
           `<option value="${g}" ${this.startingGold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
       )
       .join("");
-    const waveOpts = [1, 2, 3, 5, 8, 10, 12, 15, 20, 25, 50, 100, 500, 0]
+    const waveOpts = RUN_OPTION_POOLS.wavesToWin
       .map((w) => {
         const label = w === 0 ? "Unlimited" : String(w);
         const def = w === WIN_WAVES ? " (default)" : "";
         return `<option value="${w}" ${this.wavesToWin === w ? "selected" : ""}>${label}${def}</option>`;
       })
       .join("");
-    const livesWaveOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const livesWaveOpts = RUN_OPTION_POOLS.livesPerWave
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
-        const def = n === 0 ? " (default)" : "";
-        return `<option value="${n}" ${this.livesPerWave === n ? "selected" : ""}>${label}${def}</option>`;
+        return `<option value="${n}" ${this.livesPerWave === n ? "selected" : ""}>${label}</option>`;
       })
       .join("");
-    const livesRunOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100]
+    const livesRunOpts = RUN_OPTION_POOLS.livesPerRun
       .map((n) => {
         const label = n === 0 ? "Unlimited" : String(n);
-        const def = n === 0 ? " (default)" : "";
-        return `<option value="${n}" ${this.livesPerRun === n ? "selected" : ""}>${label}${def}</option>`;
+        return `<option value="${n}" ${this.livesPerRun === n ? "selected" : ""}>${label}</option>`;
       })
       .join("");
     const meta = loadMetaStore();
@@ -317,8 +438,14 @@ export class MultiplayerUi {
       const def = ASCENSIONS[i]!;
       return `<option value="${i}" ${this.ascension === i ? "selected" : ""}>A${i} · ${escapeAttr(def.name)}</option>`;
     }).join("");
-
     const showFf = this.mode !== "1v1";
+    const resetRandomBtns = editable
+      ? `
+          <div class="run-options-actions choice-row" style="margin-top:10px;gap:0.5rem">
+            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-reset"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize"><span class="btn-label">Randomize</span></button>
+          </div>`
+      : "";
 
     return `
       <section class="sp-setup">
@@ -326,31 +453,31 @@ export class MultiplayerUi {
         <div class="run-grid cols-3">
           <label class="run-field">
             <span>Map</span>
-            <select id="${prefix}-map" ${dis}>${mapOpts}</select>
+            <select id="${prefix}-map" ${dis}${tip("map")}>${mapOpts}</select>
           </label>
           <label class="run-field">
             <span>Ascension</span>
-            <select id="${prefix}-ascension" ${dis}>${ascOpts}</select>
+            <select id="${prefix}-ascension" ${dis}${tip("ascension")}>${ascOpts}</select>
           </label>
           <label class="run-field">
             <span>Artifacts</span>
-            <select id="${prefix}-turrets" ${dis}>${turretOpts}</select>
+            <select id="${prefix}-turrets" ${dis}${tip("artifacts")}>${turretOpts}</select>
           </label>
         </div>
         <div class="run-grid cols-3">
           <label class="run-field">
             <span>Starting gold</span>
-            <select id="${prefix}-gold" ${dis}>${goldOpts}</select>
+            <select id="${prefix}-gold" ${dis}${tip("startingGold")}>${goldOpts}</select>
           </label>
           <label class="run-field">
             <span>Waves to win</span>
-            <select id="${prefix}-waves" ${dis}>${waveOpts}</select>
+            <select id="${prefix}-waves" ${dis}${tip("wavesToWin")}>${waveOpts}</select>
           </label>
           ${
             showFf
               ? `<label class="run-field">
             <span>Friendly fire</span>
-            <select id="${prefix}-ff" ${dis}>
+            <select id="${prefix}-ff" ${dis}${tip("friendlyFire")}>
               <option value="0" ${!this.friendlyFire ? "selected" : ""}>Off</option>
               <option value="1" ${this.friendlyFire ? "selected" : ""}>On</option>
             </select>
@@ -361,80 +488,81 @@ export class MultiplayerUi {
         <div class="run-grid cols-3">
           <label class="run-field">
             <span>Lives / wave</span>
-            <select id="${prefix}-lives-wave" ${dis}>${livesWaveOpts}</select>
+            <select id="${prefix}-lives-wave" ${dis}${tip("livesWave")}>${livesWaveOpts}</select>
           </label>
           <label class="run-field">
             <span>Lives / run</span>
-            <select id="${prefix}-lives-run" ${dis}>${livesRunOpts}</select>
+            <select id="${prefix}-lives-run" ${dis}${tip("livesRun")}>${livesRunOpts}</select>
           </label>
-          <div class="run-field"></div>
+          <label class="run-field">
+            <span>Utility draft Lv</span>
+            <select id="${prefix}-utility" ${dis}${tip("utilityDraft")}>${utilityDraftLevelOptionsHtml(this.utilityDraftLevel)}</select>
+          </label>
         </div>
         <div class="run-grid cols-3">
           <label class="run-field">
             <span>Chest open</span>
-            <select id="${prefix}-chest-open" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
+            <select id="${prefix}-chest-open" ${dis}${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${this.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
           </label>
           <label class="run-field">
             <span>Chest despawn</span>
-            <select id="${prefix}-chest-despawn" ${dis}>${[12, 20, 28, 40, 60].map((n) => `<option value="${n}" ${this.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
+            <select id="${prefix}-chest-despawn" ${dis}${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${this.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
           </label>
           <label class="run-field">
             <span>Chest spawn</span>
-            <select id="${prefix}-chest-chance" ${dis}>${[0.04, 0.08, 0.12, 0.2].map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
+            <select id="${prefix}-chest-chance" ${dis}${tip("chestSpawn")}>${RUN_OPTION_POOLS.chestSpawnChance.map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
           </label>
         </div>
         <div class="muted-box" style="margin-top:4px">
           <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
           <div class="run-grid cols-4">
             <label class="run-field"><span>Enemy density</span>
-              <select id="${prefix}-enemy-density" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select id="${prefix}-enemy-density" ${dis}${tip("enemyDensity")}>${RUN_OPTION_POOLS.enemyDensityMul.map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Enemy HP</span>
-              <select id="${prefix}-enemy-hp" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select id="${prefix}-enemy-hp" ${dis}${tip("enemyHp")}>${RUN_OPTION_POOLS.enemyHpMul.map((n) => `<option value="${n}" ${this.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Enemy speed</span>
-              <select id="${prefix}-enemy-speed" ${dis}>${[0.8, 1, 1.15, 1.3].map((n) => `<option value="${n}" ${this.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select id="${prefix}-enemy-speed" ${dis}${tip("enemySpeed")}>${RUN_OPTION_POOLS.enemySpeedMul.map((n) => `<option value="${n}" ${this.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Income</span>
-              <select id="${prefix}-income" ${dis}>${[0.75, 1, 1.25, 1.5, 2].map((n) => `<option value="${n}" ${this.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select id="${prefix}-income" ${dis}${tip("income")}>${RUN_OPTION_POOLS.incomeMul.map((n) => `<option value="${n}" ${this.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Respawn</span>
-              <select id="${prefix}-respawn" ${dis}>${[0.5, 0.75, 1, 1.25, 1.5].map((n) => `<option value="${n}" ${this.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
+              <select id="${prefix}-respawn" ${dis}${tip("respawn")}>${RUN_OPTION_POOLS.respawnMul.map((n) => `<option value="${n}" ${this.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Start base Lv</span>
-              <select id="${prefix}-start-base" ${dis}>${[0, 1, 2, 3, 4].map((n) => `<option value="${n}" ${this.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+              <select id="${prefix}-start-base" ${dis}${tip("startBase")}>${RUN_OPTION_POOLS.startingBaseLevel.map((n) => `<option value="${n}" ${this.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Level draft size</span>
-              <select id="${prefix}-level-draft" ${dis}>${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
+              <select id="${prefix}-level-draft" ${dis}${tip("levelDraft")}>${RUN_OPTION_POOLS.levelDraftSize.map((n) => `<option value="${n}" ${this.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Relic draft size</span>
-              <select id="${prefix}-relic-draft" ${dis}>${[2, 3, 4, 5].map((n) => `<option value="${n}" ${this.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Utility draft Lv</span>
-              <select id="${prefix}-utility" ${dis}>${utilityDraftLevelOptionsHtml(this.utilityDraftLevel)}</select>
+              <select id="${prefix}-relic-draft" ${dis}${tip("relicDraft")}>${RUN_OPTION_POOLS.relicDraftSize.map((n) => `<option value="${n}" ${this.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
             </label>
             <label class="run-field"><span>Sudden death HP</span>
-              <select id="${prefix}-sudden" ${dis}>${[0, 40, 60, 80].map((n) => `<option value="${n}" ${this.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
+              <select id="${prefix}-sudden" ${dis}${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
             </label>
           </div>
           <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
             ${[
-              ["no-art", "No artifacts", this.disableArtifacts],
-              ["no-chest", "No chests", this.disableChests],
-              ["no-elite", "No elites", this.disableElites],
-              ["no-boss", "No bosses", this.disableBosses],
-              ["no-shop", "No shop", this.disableShop],
-              ["no-send", "No sends", this.disableSends],
-              ["no-relic", "No relics", this.disableRelics],
-              ["fog", "Fog always", this.fogAlways],
-              ["dbl-elite", "Double elites", this.doubleElites],
+              ["no-art", "No artifacts", this.disableArtifacts, "noArtifacts"],
+              ["no-chest", "No chests", this.disableChests, "noChests"],
+              ["no-elite", "No elites", this.disableElites, "noElites"],
+              ["no-boss", "No bosses", this.disableBosses, "noBosses"],
+              ["no-shop", "No shop", this.disableShop, "noShop"],
+              ["no-send", "No sends", this.disableSends, "noSends"],
+              ["no-relic", "No relics", this.disableRelics, "noRelics"],
+              ["fog", "Fog always", this.fogAlways, "fogAlways"],
+              ["dbl-elite", "Double elites", this.doubleElites, "doubleElites"],
             ]
               .map(
-                ([id, label, on]) =>
-                  `<label class="setting-row" style="min-width:9rem"><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
+                ([id, label, on, tipKey]) =>
+                  `<label class="setting-row" style="min-width:9rem"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
               )
               .join("")}
           </div>
+          ${resetRandomBtns}
         </div>
       </section>
     `;
@@ -768,7 +896,10 @@ export class MultiplayerUi {
       this.refresh();
     });
 
-    if (this.role === "host") this.bindRunSetup("hub");
+    if (this.role === "host") {
+      this.bindRunSetup("hub");
+      this.bindRunResetRandom("hub", true);
+    }
     this.bindHeroGrid();
 
     this.root.querySelector("#mp-go")!.addEventListener("click", () => {
@@ -928,6 +1059,7 @@ export class MultiplayerUi {
       this.bindRunSetup("live", () => {
         this.pushHostOpts();
       });
+      this.bindRunResetRandom("live", true, () => this.pushHostOpts());
     }
 
     this.root.querySelector("#mp-team")?.addEventListener("click", () => {

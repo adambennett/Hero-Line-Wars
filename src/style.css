@@ -2031,25 +2031,20 @@ select.menu-input option {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  max-height: min(68vh, 820px);
-  overflow: auto;
+  overflow: visible;
 }
 
 .sp-run-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1.05fr);
   gap: 0.85rem 1rem;
-  align-items: start;
+  align-items: stretch;
   width: min(1180px, 100%);
 }
 
 @media (max-width: 960px) {
   .sp-run-layout {
     grid-template-columns: 1fr;
-  }
-
-  .sp-setup {
-    max-height: none;
   }
 }
 
@@ -2059,6 +2054,10 @@ select.menu-input option {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #7f93b5;
+}
+
+.run-options-actions {
+  justify-content: flex-start;
 }
 
 .run-grid {
@@ -2290,14 +2289,7 @@ select.menu-input option {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  max-height: min(68vh, 820px);
-  overflow: auto;
-}
-
-@media (max-width: 960px) {
-  .sp-heroes {
-    max-height: none;
-  }
+  overflow: visible;
 }
 
 .sp-heroes-title {
@@ -2522,10 +2514,14 @@ select.menu-input option {
   max-width: none;
 }
 
+/* Connection must not inherit stretch/fill from run-setup panel rules */
 .mp-shell .mp-connection {
   margin-bottom: 0.85rem;
+  height: auto;
+  min-height: 0;
   max-height: none;
   overflow: visible;
+  flex: none;
 }
 
 .compact-chips {

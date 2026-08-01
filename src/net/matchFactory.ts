@@ -5,6 +5,7 @@ import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
 import { composeRunModifiers } from "../meta/modifiers";
 import { isPveMode, type LobbyState, type MatchMode, type MpTeam } from "./types";
+import { captureBagFromState, createPlayerBag, ensureLaneBags } from "./playerBag";
 
 export type MpMatch = {
   mode: MatchMode;
@@ -75,6 +76,22 @@ function populateLane(
     state.allies.push(makeHeroRuntime(s.heroId, pad.x, pad.y + offset, nid++, s.slot));
   }
   state.nextId = Math.max(state.nextId, nid);
+
+  // Independent economy per controller on shared physical lane
+  state.playerBags = {};
+  const heroes = [state.hero, ...state.allies];
+  ensureLaneBags(state, heroes);
+  for (const h of heroes) {
+    const slot = h.controllerSlot;
+    if (slot == null) continue;
+    const key = String(slot);
+    if (h === state.hero) {
+      state.playerBags[key] = captureBagFromState(state);
+    } else {
+      state.playerBags[key] = createPlayerBag(state);
+    }
+  }
+  state.activeBagKey = String(primary.slot);
 }
 
 export function buildMpMatch(
@@ -165,7 +182,6 @@ export function buildMpMatch(
     );
   }
 
-  // Cross-link: disable abstract solo opponent; use real other lane via HUD
   lane0.viewOpponentLane = false;
   lane1.viewOpponentLane = false;
 
@@ -277,13 +293,10 @@ export function buildSoloVsAiMatch(opts: {
   lane0.mpLane = true;
   const playerSeats = [{ slot: 0, heroId: opts.playerHeroId }];
   for (let i = 1; i < teamSize; i++) {
+    // Negative slots = AI allies (scripted intents in mpSim)
     playerSeats.push({ slot: -10 - i, heroId: pickAi(i + 3) });
   }
   populateLane(lane0, playerSeats, 10);
-  // Mark ally seats as AI-driven (no controller)
-  for (const ally of lane0.allies) {
-    ally.controllerSlot = null;
-  }
 
   const lane1 = createState(aiHero, {
     ...sharedBase,
@@ -334,4 +347,10 @@ export function heroForSlot(state: GameState, slot: number): HeroRuntime | null 
 
 export function allLaneHeroes(state: GameState): HeroRuntime[] {
   return [state.hero, ...state.allies];
+}
+
+/** True when this controller is AI-driven (negative / null slot). */
+export function isAiControllerSlot(slot: number | null | undefined): boolean {
+  if (slot == null) return true;
+  return slot < 0;
 }
