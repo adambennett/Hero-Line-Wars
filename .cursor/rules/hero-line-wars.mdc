@@ -26,10 +26,10 @@ WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends,
 | Sends / wave economy | `src/data/send.ts` + `systems/send.ts` |
 | Maps / geometry / specials | `src/data/maps.ts` (flags + zone arrays on `MapDef`); runtime in `Game` / `render` / enemy pathing |
 | Enemies | `src/data/enemies.ts` + `systems/enemies.ts` |
-| XP / level drafts | `src/data/xp.ts` + `systems/xp.ts` |
+| XP / level drafts / hero perks | `src/data/xp.ts` + `systems/xp.ts` (hero-specific passives live with level drafts) |
 | Base upgrades / branches | `src/data/baseUpgrades.ts`, `baseBranches.ts` + `systems/baseUpgrade.ts` |
 | Meta (crests, barracks, challenges, ascension, locks) | `src/meta/*` especially `contentLocks.ts`, `challenges.ts`, `upgrades.ts` |
-| Menus / settings / HUD chrome | `src/ui/*` (`MenuController.ts`, `mainMenuFx.ts`, …) |
+| Menus / settings / HUD chrome | `src/ui/*` (`MenuController.ts`, `mainMenuFx.ts`, `style.css`, …) |
 | Net / lobby / MP | `src/net/*` (`types.ts`, `lobby.ts`, `MultiplayerUi.ts`, `session.ts`, `mpSim.ts`, `sync.ts`, `playerBag.ts`) |
 | Custom / editor content | `src/custom/*` (always sanitize via `validate.ts` on receive/save) |
 | AI Lab | `src/ai/*` |
@@ -40,9 +40,28 @@ Match existing patterns; don't invent parallel systems or one-off globals.
 
 - Stable **snake_case ids**; add to the typed union + def table in the same change.
 - Unlocks: challenges → barracks / War Crests via `meta/contentLocks.ts` + `challenges.ts` — don't hard-gate only in UI.
-- New maps: fill `MapDef` geometry **and** any specials (`shiftingObstacles`, `shrinkingLane`, `healSprings`, `windCurrents`, …). Wire flags must already be handled in game/render or extend those call sites — data alone is not enough.
+- New maps: fill `MapDef` geometry **and** any specials (`shiftingObstacles`, `shrinkingLane`, `healSprings`, `windCurrents`, `emberRain`, `supplyDrops`, `chronoPulse`, …). Wire flags must already be handled in game/render or extend those call sites — data alone is not enough.
 - Player-facing name **Artifact**; internal code may still say turret.
 - After new relics/items, regenerate SVG art scripts when icons are expected. Hero portraits are not used currently.
+- Hero level perks: add to `LEVEL_PASSIVES` (or hero-gated entries) with rarity; Compendium **Bonuses** tab reads the same list — keep SP drafts and Compendium in sync.
+
+## Shared policy helpers (use these — don't re-derive)
+
+| Question | Helper |
+|---|---|
+| How many humans are in this game? | `humanPlayerCount(target)` — `src/game/pause.ts` |
+| May anything pause the sim? | `canPauseSimulation(target)`; drafts use `canPauseForDraft`, future aim-freeze uses `canFreezeForAim` |
+| Are gameplay cheats live? | `gameplayCheats(state)` / `gameplayCheatsAllowed(state)` — `src/meta/cheats.ts` (never call `areCheatsEnabled()` for gameplay effects) |
+| What does this wave contain? | `planWaveSpawns` → `beginWaveFromPlan` / `spawnWaveSpecials` / `prepareLaneGeometryForWave` — `src/systems/waves.ts` |
+| Give the player a reward draft | `openOrQueueDraft(state, draft)`; after resolving one call `syncDraftFlags(state)` — `src/systems/drafts.ts` |
+| Is a remote intent safe? | `sanitizeIntent(raw)` + `IntentRateLimiter` — `src/net/intentGuard.ts` |
+
+Rules that follow from them:
+
+- **Pause is decided by human head-count only**, never by "is this mpSim". `GameState.humanPlayers` is stamped by `setMatchHumanPlayers` (`matchFactory`) and carried in `LaneSnap`. One human (incl. offline solo team / neural / AI Lab) may pause; two or more may not, anywhere.
+- **Cheats mirror the same rule.** Gameplay cheats are off with >1 human, host included. `unlockAll` stays allowed.
+- **Never assign `relicDraft` / `levelDraft` / `chestDraft` / `pausedForDraft` directly** — go through the draft queue so a second reward is queued rather than clobbered, and so the queue rides along in the bag snapshot.
+- New creative/run flags that change wave content belong in `planWaveSpawns`, not in either `startWave`.
 
 ## SP / MP run-option parity
 
@@ -54,6 +73,8 @@ Creative and run extras must stay in sync across:
 
 Adding a toggle in SP only (or MP only) is a bug. Mirror fields, defaults, and apply paths.
 
+Fog UI fields: `sp-fog-thickness` / `sp-fog-vision` (and MP equivalents). Run fog, curse fog, and map eclipse fog **stack**: strongest opacity + tightest vision wins — don't replace one source with another.
+
 ## Multiplayer authority & independence (critical)
 
 Shared **physical** lane (enemies, base HP, map, lane curses / hex zones). Independent **progression** per controller:
@@ -63,6 +84,7 @@ Shared **physical** lane (enemies, base HP, map, lane curses / hex zones). Indep
 - **Do not** apply every seat's UI intents against one shared gold pool.
 - Draft UI on clients **must** queue choices into `CombatIntent` (`chooseRelic`, `chooseLevel`, `chooseUtility`, `chooseCurse`, `chooseChest`, `chooseBaseBranch`, `skipRelic`, `rerollLevel`, `rerollRelic`) — never call `choose*` only on local state in MP.
 - `LaneSnap` / `applyLaneSnap` must carry every draft kind clients need (utility, curse, chest, base branch, bags) or clients softlock.
+- **Lane payloads are per-peer.** `buildMatchSnapFor(match, slot, viewTeam)` sends a full `LaneSnap` for the peer's own lane and the lane it is viewing, and a `LaneSummary` (wave, base, enemy count, players) for the rest. Clients announce a lane change with the `view` message; the host answers with an immediate full snapshot. Anything a client must **render or click** has to be in `LaneSnap` — audit `render/draw.ts` when adding world state. Fragile sync surfaces: fog, `mapSupplyCrates`, `laneGeometry` left/right — keep them on the snap path.
 - Host binds intents to connection `fromSlot` — **ignore** client-claimed `seat` on intent messages.
 - `viewTeam` / camera flip is **local-only** — never overwrite from host `MatchSnap` on clients.
 - Entering a match must **not** call `disconnectNet()` — tear down lobby UI with `MultiplayerUi.destroy({ disconnect: false })` and clear lobby `bindHooks(null)`; keep PeerJS until `endMultiplayer` / leave.
@@ -81,21 +103,58 @@ Shared **physical** lane (enemies, base HP, map, lane curses / hex zones). Indep
 
 When adding a lane tick to SP, mirror it in `updateLaneMp` (or extract a shared helper).
 
+## Maps & workshop (fragile)
+
+- Playable **shapes** (`rect`, circle, polygon families) live on custom map defs; shape change uses `menu-confirm-overlay` and may clamp/drop placed objects — don't bypass the confirm path.
+- Playable-edge hit-test and `playBounds` drive editor resize + in-match clamp — keep game/editor math aligned.
+- Reuse workshop chrome: `workshop-*`, `run-field` / `run-grid`, `setting-row`, `muted-box`, `special-tag`.
+- Mazing is classified Special (dual spawners) by design; Hex Bowl + Capsule Coast are the normal-shaped built-ins from that pass.
+
+## Tests
+
+`npm test` (Vitest, `tests/`) — `npm run typecheck` type-checks `src` + `tests`.
+Cover new shared rules here: `tests/parity.test.ts` is a seeded SP-vs-dual-lane
+harness, plus focused suites for pause policy, cheat gating, the draft queue,
+run-option flags, custom-map sanitizing, save import and intent clamping. Browser
+APIs are stubbed in `tests/setup.ts`; keep new logic importable without a DOM.
+
 ## Custom content safety
 
 - Sanitize/clamp all peer and import payloads (`custom/validate.ts`): finite coords, array size caps, absurd stat clamps, ability/passive id checks.
 - Settings: `rejectPeerCustoms` — when on, refuse MP starts that require custom maps/heroes so payloads are never registered for that match.
 - Session customs are match-scoped (`registerSessionCustoms`); do not auto-write peer defs into the local library unless the player explicitly imports/saves.
 
-## UI preferences
+## UI / UX design philosophy
 
-- Prefer **panels / grids**, not giant single-column scroll menus.
-- Dark styled inputs (match `style.css`); never bare native light controls in new chrome.
-- Motion: **hover shine / enter accents** — avoid idle particle spam on every submenu.
-- Vary submenu FX lightly (`mainMenuFx`); don't clone one effect everywhere.
-- Confirm with **in-game modals**, not `window.confirm`.
-- Use space; avoid cramped stacks of pills/chips.
-- When inventing menus: **no purple-on-white AI-slop**; stay in the existing dark steel / amber-teal lane-wars palette.
+Menus are a **lane-wars war room**, not a generic dashboard and not a phone list. Preserve the **dark steel / amber-teal** identity (`--hlw-*` tokens in `src/style.css`). Never purple-on-white, cream-serif-terracotta, or broadsheet chrome.
+
+### Layout
+
+- Prefer **panels and grids** that use available width. Desktop targets: 1366×768, 1920×1080, 4K / ultrawide. Shell widths use `--hlw-shell-sm|md|lg|xl` (they grow at ≥1920 / ≥2560 / ≥3840).
+- Reusable shells: `prefs-shell` + `prefs-layout` (Settings / Controls / Cheats / AI Lab / Compendium), `meta-shell` + `meta-hub` (Barracks / Challenges), `stats-shell`, `info-shell`, `workshop-shell`, `mp-shell`, `sp-run-layout`.
+- Form grids: `run-grid` + `run-field` (cols-2/3/4), `setting-row`, `creative-check-grid`, `ai-lab-layout`, `cheats-toggle-grid`, `meta-card-grid`.
+- Avoid a single skinny column of stacked cards when the viewport can fit two or more columns.
+- Confirm with **in-game modals** (`menu-confirm-overlay`), never `window.confirm`.
+
+### Copy
+
+- One short `menu-lead` under titles. Put depth in **tooltips** (`title=` / `runTip`) or `<details class="help-fold">`, not paragraphs of body text.
+- Labels stay terse; blurbs clamp on compact hero cards. Game Info stays skimmable.
+
+### Motion & buttons
+
+- Shared hover: class **`shine-btn`** (shine sweep + label nudge). Implemented once in `style.css` — do **not** re-copy `::before` rules per widget.
+- Apply `shine-btn` to primary/secondary menu CTAs and selectable hero cards. Labels that animate should wrap in `.btn-label` (or `strong` on hero cards).
+- **Do not** put `shine-btn` on: gameplay HUD, `.tiny` tools, `.danger` / destructive (Quit, Delete, Reset defaults, Stop), or `:disabled` controls (CSS also guards these).
+- Reduce motion: Settings `reduceMotion` → `syncMotionPreference()` toggles `html.reduce-motion`; also honor `prefers-reduced-motion`. Kills shine, brand idle, and aurora/waves. Menu particle FX already take `reduceMotion` in `mainMenuFx`.
+- Vary submenu FX lightly (`mainMenuFx`); don't clone one effect everywhere. Dark styled inputs only — never bare native light controls.
+
+### What not to do
+
+- Don't restyle the in-match HUD with menu shine/hover chrome.
+- Don't invent a second CSS framework or React layer for menus.
+- Don't "improve" layouts by emptying the palette or switching fonts away from Orbitron / Rajdhani on brand surfaces.
+- Don't expand every submenu into a novel one-off layout — extend tokens and shared classes first.
 
 ## Do / don't
 

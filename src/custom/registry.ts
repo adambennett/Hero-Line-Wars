@@ -31,7 +31,7 @@ function ensureLoaded(): void {
   libraryHeroes = readList<CustomHeroDef>(HERO_STORE_KEY);
 }
 
-/** Upgrade older custom map saves (single `shop`, missing `respawn`). */
+/** Upgrade older custom map saves (single `shop`, missing `respawn` / shape). */
 function migrateCustomMap(raw: CustomMapDef): CustomMapDef {
   const legacy = raw as CustomMapDef & { shop?: CustomMapDef["shops"][number] };
   const shops =
@@ -46,7 +46,17 @@ function migrateCustomMap(raw: CustomMapDef): CustomMapDef {
     legacy.respawn ??
     ({ x: legacy.base.x + 120, y: legacy.base.y, radius: 28 } as CustomMapDef["respawn"]);
   const { shop: _drop, ...rest } = legacy;
-  return { ...rest, shops, respawn };
+  return {
+    ...rest,
+    shape: rest.shape ?? "rectangle",
+    laneLeft: rest.laneLeft ?? 0,
+    laneRight: rest.laneRight ?? MAP_W,
+    shops,
+    respawn,
+    bouncePads: rest.bouncePads ?? [],
+    mapPortals: rest.mapPortals ?? [],
+    relayBeacons: rest.relayBeacons ?? [],
+  };
 }
 
 function readList<T>(key: string): T[] {
@@ -151,14 +161,21 @@ export function clearSessionCustoms(): void {
 /** Convert custom map → runtime MapDef (includes zone fields). */
 export function customMapToMapDef(c: CustomMapDef): MapDef {
   const s = c.specials ?? {};
+  const laneLeft = c.laneLeft ?? 0;
+  const laneRight = c.laneRight ?? MAP_W;
   return {
     id: c.id as MapId,
     name: c.name,
     blurb: c.blurb,
+    shape: c.shape ?? "rectangle",
     laneTop: c.laneTop,
     laneBottom: c.laneBottom,
+    laneLeft,
+    laneRight,
     baseLaneTop: c.laneTop,
     baseLaneBottom: c.laneBottom,
+    baseLaneLeft: laneLeft,
+    baseLaneRight: laneRight,
     base: structuredClone(c.base),
     shops: structuredClone(c.shops ?? []),
     respawn: structuredClone(
@@ -177,12 +194,18 @@ export function customMapToMapDef(c: CustomMapDef): MapDef {
     chestMagnet: !!s.chestMagnet,
     riftSurges: !!s.riftSurges,
     volatileOrbs: !!s.volatileOrbs,
+    emberRain: !!s.emberRain,
+    supplyDrops: !!s.supplyDrops,
+    chronoPulse: !!s.chronoPulse,
     healSprings: structuredClone(c.healSprings ?? []),
     slowMires: structuredClone(c.slowMires ?? []),
     hastePads: structuredClone(c.hastePads ?? []),
     goldVents: structuredClone(c.goldVents ?? []),
     windCurrents: structuredClone(c.windCurrents ?? []),
     spikePulses: structuredClone(c.spikePulses ?? []),
+    bouncePads: structuredClone(c.bouncePads ?? []),
+    mapPortals: structuredClone(c.mapPortals ?? []),
+    relayBeacons: structuredClone(c.relayBeacons ?? []),
   };
 }
 
@@ -252,6 +275,30 @@ export function heroUsesWarpKit(heroId: string): boolean {
   );
 }
 
+export function heroUsesGunnerKit(heroId: string): boolean {
+  const h = resolveHero(heroId);
+  return (
+    h.attackStyle === "machinegun" ||
+    h.abilities.some((a) => a.id === "gunfire" || a.id === "gunswap")
+  );
+}
+
+export function heroUsesSapperKit(heroId: string): boolean {
+  const h = resolveHero(heroId);
+  return (
+    h.attackStyle === "grenade" ||
+    h.abilities.some((a) => a.id === "plantmine" || a.id === "detonate")
+  );
+}
+
+export function heroUsesVectorKit(heroId: string): boolean {
+  const h = resolveHero(heroId);
+  return (
+    h.attackStyle === "kinetic" ||
+    h.abilities.some((a) => a.id === "momentumdash" || a.id === "kineticburst")
+  );
+}
+
 export function defaultCustomMap(partial?: Partial<CustomMapDef>): CustomMapDef {
   const midY = MAP_H / 2;
   const base = partial?.base ?? { x: 52, y: midY, radius: 46, maxHp: 120 };
@@ -259,8 +306,11 @@ export function defaultCustomMap(partial?: Partial<CustomMapDef>): CustomMapDef 
     id: partial?.id ?? "",
     name: partial?.name ?? "My Custom Map",
     blurb: partial?.blurb ?? "A player-authored lane.",
+    shape: partial?.shape ?? "rectangle",
     laneTop: partial?.laneTop ?? 100,
     laneBottom: partial?.laneBottom ?? MAP_H - 100,
+    laneLeft: partial?.laneLeft ?? 0,
+    laneRight: partial?.laneRight ?? MAP_W,
     base,
     shops: partial?.shops ?? [{ x: 148, y: midY + 100, radius: 38, interactRange: 58 }],
     respawn: partial?.respawn ?? { x: base.x + 120, y: base.y, radius: 28 },
@@ -285,6 +335,9 @@ export function defaultCustomMap(partial?: Partial<CustomMapDef>): CustomMapDef 
     goldVents: partial?.goldVents ?? [],
     windCurrents: partial?.windCurrents ?? [],
     spikePulses: partial?.spikePulses ?? [],
+    bouncePads: partial?.bouncePads ?? [],
+    mapPortals: partial?.mapPortals ?? [],
+    relayBeacons: partial?.relayBeacons ?? [],
   };
 }
 

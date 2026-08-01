@@ -3,6 +3,7 @@ import { HERO_LIST, type HeroId } from "../data/heroes";
 import { resolveMapChoice, type MapId, mapRespawn } from "../data/maps";
 import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
+import { gunnerWeaponAt } from "../data/gunnerWeapons";
 import { composeRunModifiers } from "../meta/modifiers";
 import { isPveMode, type LobbyState, type MatchMode, type MpTeam } from "./types";
 import { captureBagFromState, createPlayerBag, ensureLaneBags } from "./playerBag";
@@ -56,6 +57,18 @@ function makeHeroRuntime(
     marksmanTimer: 0,
     chaosIndex: 0,
     controllerSlot: slot,
+    hiveDrones: heroId === "hive" ? 0 : undefined,
+    gunnerWeaponIndex: heroId === "gunner" ? 0 : undefined,
+    gunnerAmmo: heroId === "gunner" ? gunnerWeaponAt(0).clip : undefined,
+    gunnerReload: 0,
+    gunnerWeaponCd: 0,
+    gunnerAiming: false,
+    gunnerAimTime: 0,
+    gunnerSpin: 0,
+    gunnerCharge: 0,
+    gunnerSwapCd: 0,
+    gunnerSelfDamageFlash: 0,
+    momentum: heroId === "vector" ? 0 : undefined,
   };
 }
 
@@ -112,7 +125,9 @@ export function buildMpMatch(
   const team1Human = lobby.slots.filter((s) => s.team === 1).sort((a, b) => a.slot - b.slot);
 
   const ascension = lobby.ascension ?? 0;
+  const humanPlayers = Math.max(1, lobby.slots.length);
   const sharedOpts = {
+    humanPlayers,
     mapId: resolved,
     maxTurrets,
     startingGold: runOpts?.startingGold ?? lobby.startingGold,
@@ -142,10 +157,16 @@ export function buildMpMatch(
     disableSends: lobby.disableSends,
     disableRelics: lobby.disableRelics,
     fogAlways: lobby.fogAlways,
+    fogThicknessPct: lobby.fogThicknessPct,
+    fogVisionRadius: lobby.fogVisionRadius,
     doubleElites: lobby.doubleElites,
     suddenDeathBaseHp: lobby.suddenDeathBaseHp && lobby.suddenDeathBaseHp > 0
       ? lobby.suddenDeathBaseHp
       : undefined,
+    glassCannon: lobby.glassCannon,
+    goldRush: lobby.goldRush,
+    wildChests: lobby.wildChests,
+    crampedLane: lobby.crampedLane,
   };
 
   const lane0 = createState(team0[0]?.heroId ?? "ranger", {
@@ -184,6 +205,8 @@ export function buildMpMatch(
 
   lane0.viewOpponentLane = false;
   lane1.viewOpponentLane = false;
+  // Every lobby seat is a human; AI lanes/allies never take a seat.
+  setMatchHumanPlayers([lane0, lane1], humanPlayers);
 
   const mySeat = lobby.slots.find((s) => s.slot === mySlot);
   const myTeam = (mySeat?.team ?? 0) as MpTeam;
@@ -240,8 +263,14 @@ export function buildSoloVsAiMatch(opts: {
   disableSends?: boolean;
   disableRelics?: boolean;
   fogAlways?: boolean;
+  fogThicknessPct?: number;
+  fogVisionRadius?: number;
   doubleElites?: boolean;
   suddenDeathBaseHp?: number;
+  glassCannon?: boolean;
+  goldRush?: boolean;
+  wildChests?: boolean;
+  crampedLane?: boolean;
 }): MpMatch {
   const resolved = resolveMapChoice(opts.mapId);
   const teamSize = opts.teamSize ?? 1;
@@ -279,10 +308,16 @@ export function buildSoloVsAiMatch(opts: {
     disableSends: opts.disableSends,
     disableRelics: opts.disableRelics,
     fogAlways: opts.fogAlways,
+    fogThicknessPct: opts.fogThicknessPct,
+    fogVisionRadius: opts.fogVisionRadius,
     doubleElites: opts.doubleElites,
     suddenDeathBaseHp: opts.suddenDeathBaseHp && opts.suddenDeathBaseHp > 0
       ? opts.suddenDeathBaseHp
       : undefined,
+    glassCannon: opts.glassCannon,
+    goldRush: opts.goldRush,
+    wildChests: opts.wildChests,
+    crampedLane: opts.crampedLane,
   };
 
   const lane0 = createState(opts.playerHeroId, {
@@ -313,6 +348,8 @@ export function buildSoloVsAiMatch(opts: {
 
   lane0.viewOpponentLane = false;
   lane1.viewOpponentLane = false;
+  // Offline solo run — pausing and cheats stay legal even though it uses mpSim.
+  setMatchHumanPlayers([lane0, lane1], 1);
 
   return {
     mode: teamSize >= 3 ? "3v3" : teamSize === 2 ? "2v2" : "1v1",
@@ -329,6 +366,15 @@ export function buildSoloVsAiMatch(opts: {
     soloOffline: true,
     opponentLabel: opts.opponentLabel,
   };
+}
+
+/**
+ * Stamp the human head-count onto both lanes. `game/pause.ts` reads it, so this
+ * is what decides whether the match may pause and whether cheats apply.
+ */
+export function setMatchHumanPlayers(lanes: GameState[], humans: number): void {
+  const n = Math.max(1, Math.floor(humans));
+  for (const lane of lanes) lane.humanPlayers = n;
 }
 
 export function laneForSlot(match: MpMatch, slot: number): { team: MpTeam; state: GameState } | null {

@@ -11,7 +11,22 @@ import {
   saveCustomMap,
 } from "../custom/registry";
 import { exportCustomMap, importCustomMapFromFile } from "../custom/io";
+import {
+  applyShapeChange,
+  countShapeAffectedObjects,
+  resetLaneBoundsToShapeDefault,
+} from "../custom/shapeEdit";
 import { newCustomMapId, type CustomMapDef, type RectZone } from "../custom/types";
+import {
+  MAP_SHAPES,
+  clampToPlayable,
+  fillPlayablePath,
+  playBounds,
+  resolveMapShape,
+  shapeLabel,
+  strokePlayablePath,
+  type MapShapeId,
+} from "../game/playBounds";
 
 export type MapEditorTool =
   | "select"
@@ -29,7 +44,10 @@ export type MapEditorTool =
   | "haste"
   | "gold"
   | "wind"
-  | "spike";
+  | "spike"
+  | "bounce"
+  | "portal"
+  | "relay";
 
 type SelKind =
   | { k: "base" }
@@ -46,15 +64,17 @@ type SelKind =
   | { k: "gold"; i: number }
   | { k: "wind"; i: number }
   | { k: "spike"; i: number }
-  | { k: "laneTop" }
-  | { k: "laneBottom" };
+  | { k: "bounce"; i: number }
+  | { k: "portal"; i: number }
+  | { k: "relay"; i: number }
+  | { k: "laneEdge"; edge: "top" | "bottom" | "left" | "right" };
 
-type PendingConfirm = "reset" | "reset-lane" | "load-template";
+type PendingConfirm = "reset" | "reset-lane" | "load-template" | "shape";
 
 type DragMode =
   | { kind: "move"; ox: number; oy: number }
   | { kind: "resize"; handle: ResizeHandle; ox: number; oy: number; start: RectZone | { radius: number } }
-  | { kind: "lane"; which: "top" | "bottom"; oy: number };
+  | { kind: "lane"; which: "top" | "bottom" | "left" | "right"; oy: number; ox: number };
 
 type ResizeHandle = "nw" | "ne" | "sw" | "se" | "radius";
 
@@ -67,10 +87,13 @@ const SPECIAL_TOOLTIPS: Record<string, string> = {
   chestMagnet: "Boosts the chance for chests to spawn.",
   riftSurges: "Periodic horizontal rifts yank units toward lane mid-X during waves.",
   volatileOrbs: "Spawns delayed explosive orbs in the lane during waves.",
+  emberRain: "Periodic ember rain AoE drops across the lane during waves.",
+  supplyDrops: "Free gold supply crates drop during waves — walk over to collect.",
+  chronoPulse: "Every few seconds: freeze creeps briefly and haste heroes.",
 };
 
 const TOOL_TOOLTIPS: Record<MapEditorTool, string> = {
-  select: "Select and drag objects. Drag corners to resize zones. Drag lane edges to adjust bounds.",
+  select: "Select and drag objects. Drag corners to resize zones. Drag playable edges to adjust bounds.",
   erase: "Click to delete placeable objects. Base, primary spawner, and respawn cannot be removed.",
   base: "Move the player base pad (required).",
   shop: "Place a shop pad (optional — 0 or many). Click existing shops with Delete to remove.",
@@ -86,6 +109,9 @@ const TOOL_TOOLTIPS: Record<MapEditorTool, string> = {
   gold: "Place a gold vent zone. Resize with corner handles when selected.",
   wind: "Place a wind current zone. Resize with corner handles when selected.",
   spike: "Place a spike pulse (circular). Drag the edge handle to resize radius.",
+  bounce: "Place a bounce pad — launches heroes with an impulse on contact.",
+  portal: "Place a one-way portal (enter here, exit nearby). Drag to reposition.",
+  relay: "Place a relay beacon — standing nearby grants temporary damage.",
 };
 
 const HANDLE = 10;
@@ -102,6 +128,7 @@ export class MapEditorPanel {
   private pendingConfirm: PendingConfirm | null = null;
   /** `builtin:<id>` or `custom:<id>` awaiting confirm. */
   private pendingTemplateKey: string | null = null;
+  private pendingShape: MapShapeId | null = null;
   status = "";
   private bindRoot: HTMLElement | null = null;
 
@@ -181,12 +208,20 @@ export class MapEditorPanel {
       { id: "gold", label: "Gold vent" },
       { id: "wind", label: "Wind" },
       { id: "spike", label: "Spike" },
+      { id: "bounce", label: "Bounce" },
+      { id: "portal", label: "Portal" },
+      { id: "relay", label: "Relay" },
     ];
+    const shape = resolveMapShape(this.draft);
+    const shapeOpts = MAP_SHAPES.map(
+      (id) =>
+        `<option value="${id}" ${shape === id ? "selected" : ""}>${shapeLabel(id)}</option>`,
+    ).join("");
     return `
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Map Editor</h1>
-        <p class="menu-lead">Place geometry &amp; specials. Export JSON to share — MP syncs defs at match start.</p>
+        <p class="menu-lead">Paint geometry &amp; specials. Drag playable edges to resize. Export JSON · MP syncs at start.</p>
       </header>
       <div class="workshop-layout">
         <aside class="workshop-side">
@@ -196,11 +231,8 @@ export class MapEditorPanel {
           <label class="run-field"><span>Blurb</span>
             <input type="text" data-me="blurb" value="${escape(this.draft.blurb)}" />
           </label>
-          <label class="run-field"><span>Lane top / bottom</span>
-            <div class="run-inline">
-              <input type="number" data-me="laneTop" value="${this.draft.laneTop}" />
-              <input type="number" data-me="laneBottom" value="${this.draft.laneBottom}" />
-            </div>
+          <label class="run-field"><span>Shape</span>
+            <select data-me-shape>${shapeOpts}</select>
           </label>
           <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane">Reset lane bounds</button>
           <h3 class="workshop-section-label">Tools</h3>
@@ -222,21 +254,24 @@ export class MapEditorPanel {
             ${this.specialFlagHtml("chestMagnet", "Chest magnet", s.chestMagnet)}
             ${this.specialFlagHtml("riftSurges", "Rift surges", s.riftSurges)}
             ${this.specialFlagHtml("volatileOrbs", "Volatile orbs", s.volatileOrbs)}
+            ${this.specialFlagHtml("emberRain", "Ember rain", s.emberRain)}
+            ${this.specialFlagHtml("supplyDrops", "Supply drops", s.supplyDrops)}
+            ${this.specialFlagHtml("chronoPulse", "Chrono pulse", s.chronoPulse)}
           </details>
           ${this.templatePickerHtml()}
           <div class="workshop-actions">
             <div class="workshop-actions-row primary">
-              <button type="button" class="menu-btn primary" data-action="me-save">Save</button>
-              <button type="button" class="menu-btn" data-action="me-new">New</button>
+              <button type="button" class="menu-btn primary shine-btn" data-action="me-save"><span class="btn-label">Save</span></button>
+              <button type="button" class="menu-btn shine-btn" data-action="me-new"><span class="btn-label">New</span></button>
             </div>
             <div class="workshop-actions-row io">
-              <button type="button" class="menu-btn" data-action="me-export">Export JSON</button>
-              <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="me-import" hidden /></label>
+              <button type="button" class="menu-btn shine-btn" data-action="me-export"><span class="btn-label">Export JSON</span></button>
+              <label class="menu-btn ghost file-btn shine-btn"><span class="btn-label">Import</span><input type="file" accept="application/json,.json" data-action="me-import" hidden /></label>
             </div>
             <div class="workshop-actions-row danger">
               <button type="button" class="menu-btn ghost" data-action="me-reset">Reset</button>
-              <button type="button" class="menu-btn ghost" data-action="me-delete">Delete</button>
-              <button type="button" class="menu-btn ghost" data-action="me-del-sel">Delete selected</button>
+              <button type="button" class="menu-btn ghost danger" data-action="me-delete">Delete</button>
+              <button type="button" class="menu-btn ghost danger" data-action="me-del-sel">Delete selected</button>
             </div>
           </div>
           <p class="panel-note">${escape(this.status)}</p>
@@ -253,6 +288,7 @@ export class MapEditorPanel {
 
   private confirmOverlayHtml(): string {
     if (!this.pendingConfirm) return "";
+    const affected = countShapeAffectedObjects(this.draft);
     const copy =
       this.pendingConfirm === "reset"
         ? {
@@ -263,14 +299,20 @@ export class MapEditorPanel {
         : this.pendingConfirm === "reset-lane"
           ? {
               title: "Reset lane bounds?",
-              body: "Lane top and bottom will return to the default values.",
+              body: "Playable bounds return to this shape’s default size. Placed objects are clamped or removed if they no longer fit.",
               confirm: "Reset",
             }
-          : {
-              title: "Load map as template?",
-              body: "Your current draft will be replaced with a copy of the selected map. The new draft gets a fresh id — the original is unchanged.",
-              confirm: "Load template",
-            };
+          : this.pendingConfirm === "shape"
+            ? {
+                title: "Change map shape?",
+                body: `Switching to ${shapeLabel(this.pendingShape ?? "rectangle")} resets playable bounds and may reposition required pads. Up to ${affected} placed object${affected === 1 ? "" : "s"} may be moved or removed.`,
+                confirm: "Change shape",
+              }
+            : {
+                title: "Load map as template?",
+                body: "Your current draft will be replaced with a copy of the selected map. The new draft gets a fresh id — the original is unchanged.",
+                confirm: "Load template",
+              };
     return `
       <div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="me-confirm-title" aria-describedby="me-confirm-body">
         <div class="menu-confirm-card">
@@ -291,12 +333,19 @@ export class MapEditorPanel {
       el.addEventListener("change", () => {
         const key = el.dataset.me!;
         if (key === "name" || key === "blurb") (this.draft as Record<string, unknown>)[key] = el.value;
-        else if (key === "laneTop" || key === "laneBottom") {
-          (this.draft as Record<string, unknown>)[key] = Number(el.value) || 0;
-          clampAllObjectsInLane(this.draft);
-        }
         this.paintCanvas();
       });
+    });
+    root.querySelector<HTMLSelectElement>("[data-me-shape]")?.addEventListener("change", (ev) => {
+      const el = ev.target as HTMLSelectElement;
+      const next = el.value as MapShapeId;
+      const cur = resolveMapShape(this.draft);
+      if (next === cur) return;
+      this.pendingShape = next;
+      this.pendingConfirm = "shape";
+      // Revert select until confirmed — render will restore.
+      el.value = cur;
+      this.renderConfirmOnly();
     });
     root.querySelectorAll<HTMLInputElement>("[data-me-flag]").forEach((el) => {
       el.addEventListener("change", () => {
@@ -309,6 +358,15 @@ export class MapEditorPanel {
     const canvas = root.querySelector<HTMLCanvasElement>("#map-editor-canvas");
     if (canvas) this.wireCanvas(canvas);
     this.paintCanvas();
+  }
+
+  /** Re-paint only the confirm overlay without rebuilding the whole workshop. */
+  private renderConfirmOnly(): void {
+    const root = this.bindRoot;
+    if (!root) return;
+    root.querySelector(".menu-confirm-overlay")?.remove();
+    if (!this.pendingConfirm) return;
+    root.insertAdjacentHTML("beforeend", this.confirmOverlayHtml());
   }
 
   handleAction(action: string, el: HTMLElement): boolean {
@@ -349,13 +407,16 @@ export class MapEditorPanel {
     if (action === "me-confirm-no") {
       this.pendingConfirm = null;
       this.pendingTemplateKey = null;
+      this.pendingShape = null;
       return true;
     }
     if (action === "me-confirm-yes") {
       const kind = this.pendingConfirm;
       const templateKey = this.pendingTemplateKey;
+      const shape = this.pendingShape;
       this.pendingConfirm = null;
       this.pendingTemplateKey = null;
+      this.pendingShape = null;
       if (kind === "reset") {
         const id = this.draft.id || newCustomMapId();
         this.draft = defaultCustomMap({ id });
@@ -363,12 +424,17 @@ export class MapEditorPanel {
         this.tool = "select";
         this.status = "Reset to defaults.";
       } else if (kind === "reset-lane") {
-        const defaults = defaultCustomMap();
-        this.draft.laneTop = defaults.laneTop;
-        this.draft.laneBottom = defaults.laneBottom;
+        resetLaneBoundsToShapeDefault(this.draft);
         clampAllObjectsInLane(this.draft);
-        this.syncLaneInputs();
         this.status = "Lane bounds reset.";
+      } else if (kind === "shape" && shape) {
+        const removed = applyShapeChange(this.draft, shape);
+        clampAllObjectsInLane(this.draft);
+        this.selected = null;
+        this.status =
+          removed > 0
+            ? `Shape → ${shapeLabel(shape)}. Removed ${removed} object${removed === 1 ? "" : "s"} that no longer fit.`
+            : `Shape → ${shapeLabel(shape)}.`;
       } else if (kind === "load-template") {
         this.applyTemplate(templateKey);
       }
@@ -422,13 +488,7 @@ export class MapEditorPanel {
   /** Returns false when selection is missing or protected. */
   private deleteSelection(s: SelKind | null): boolean {
     if (!s) return false;
-    if (
-      s.k === "base" ||
-      s.k === "spawner" ||
-      s.k === "respawn" ||
-      s.k === "laneTop" ||
-      s.k === "laneBottom"
-    ) {
+    if (s.k === "base" || s.k === "spawner" || s.k === "respawn" || s.k === "laneEdge") {
       return false;
     }
     if (s.k === "shop") this.draft.shops.splice(s.i, 1);
@@ -441,6 +501,9 @@ export class MapEditorPanel {
     else if (s.k === "gold") this.draft.goldVents!.splice(s.i, 1);
     else if (s.k === "wind") this.draft.windCurrents!.splice(s.i, 1);
     else if (s.k === "spike") this.draft.spikePulses!.splice(s.i, 1);
+    else if (s.k === "bounce") this.draft.bouncePads!.splice(s.i, 1);
+    else if (s.k === "portal") this.draft.mapPortals!.splice(s.i, 1);
+    else if (s.k === "relay") this.draft.relayBeacons!.splice(s.i, 1);
     else if (s.k === "spawnerAlt") {
       this.draft.spawnerAlt = undefined;
       this.draft.specials.dualSpawners = false;
@@ -511,15 +574,6 @@ export class MapEditorPanel {
     this.status = `Loaded “${draft.name}” as a new draft.`;
   }
 
-  private syncLaneInputs(): void {
-    const root = this.bindRoot;
-    if (!root) return;
-    const top = root.querySelector<HTMLInputElement>('[data-me="laneTop"]');
-    const bot = root.querySelector<HTMLInputElement>('[data-me="laneBottom"]');
-    if (top) top.value = String(Math.round(this.draft.laneTop));
-    if (bot) bot.value = String(Math.round(this.draft.laneBottom));
-  }
-
   private wireCanvas(canvas: HTMLCanvasElement): void {
     const toWorld = (ev: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -543,9 +597,13 @@ export class MapEditorPanel {
         canvas.style.cursor = handle === "radius" ? "nwse-resize" : `${handle}-resize`;
         return;
       }
-      const lane = hitLaneEdge(this.draft, p.y);
-      if (lane) {
+      const lane = hitLaneEdge(this.draft, p.x, p.y);
+      if (lane === "top" || lane === "bottom") {
         canvas.style.cursor = "ns-resize";
+        return;
+      }
+      if (lane === "left" || lane === "right") {
+        canvas.style.cursor = "ew-resize";
         return;
       }
       canvas.style.cursor = hitTest(this.draft, p.x, p.y) ? "move" : "default";
@@ -579,10 +637,10 @@ export class MapEditorPanel {
             return;
           }
         }
-        const lane = hitLaneEdge(this.draft, p.y);
+        const lane = hitLaneEdge(this.draft, p.x, p.y);
         if (lane) {
-          this.selected = lane === "top" ? { k: "laneTop" } : { k: "laneBottom" };
-          this.drag = { kind: "lane", which: lane, oy: p.y };
+          this.selected = { k: "laneEdge", edge: lane };
+          this.drag = { kind: "lane", which: lane, oy: p.y, ox: p.x };
           this.paintCanvas();
           return;
         }
@@ -614,13 +672,18 @@ export class MapEditorPanel {
       }
       if (this.drag.kind === "lane") {
         const minGap = 60;
+        const left = this.draft.laneLeft ?? 0;
+        const right = this.draft.laneRight ?? MAP_W;
         if (this.drag.which === "top") {
           this.draft.laneTop = Math.max(0, Math.min(p.y, this.draft.laneBottom - minGap));
-        } else {
+        } else if (this.drag.which === "bottom") {
           this.draft.laneBottom = Math.min(MAP_H, Math.max(p.y, this.draft.laneTop + minGap));
+        } else if (this.drag.which === "left") {
+          this.draft.laneLeft = Math.max(0, Math.min(p.x, right - minGap));
+        } else {
+          this.draft.laneRight = Math.min(MAP_W, Math.max(p.x, left + minGap));
         }
         clampAllObjectsInLane(this.draft);
-        this.syncLaneInputs();
         this.paintCanvas();
       }
     });
@@ -721,6 +784,26 @@ export class MapEditorPanel {
         clampSpikeInLane(this.draft, this.draft.spikePulses[this.draft.spikePulses.length - 1]!);
         break;
       }
+      case "bounce":
+        (this.draft.bouncePads ??= []).push({ ...rect(), impulseX: 200, impulseY: 0 });
+        break;
+      case "portal": {
+        const p = clampPointInLane(this.draft, x, y, 28);
+        const exit = clampPointInLane(this.draft, p.x + 160, p.y + 40, 12);
+        (this.draft.mapPortals ??= []).push({
+          x: p.x,
+          y: p.y,
+          radius: 28,
+          exitX: exit.x,
+          exitY: exit.y,
+        });
+        break;
+      }
+      case "relay": {
+        const p = clampPointInLane(this.draft, x, y, 40);
+        (this.draft.relayBeacons ??= []).push({ x: p.x, y: p.y, radius: 42, damageBonus: 0.15 });
+        break;
+      }
       default:
         break;
     }
@@ -736,29 +819,27 @@ export class MapEditorPanel {
     ctx.fillStyle = "#0e1624";
     ctx.fillRect(0, 0, MAP_W, MAP_H);
     ctx.fillStyle = "#152033";
-    ctx.fillRect(0, m.laneTop, MAP_W, m.laneBottom - m.laneTop);
+    fillPlayablePath(ctx, m);
     ctx.strokeStyle = "#2a3d60";
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, m.laneTop);
-    ctx.lineTo(MAP_W, m.laneTop);
-    ctx.moveTo(0, m.laneBottom);
-    ctx.lineTo(MAP_W, m.laneBottom);
+    strokePlayablePath(ctx, m);
     ctx.stroke();
-    // Lane edge affordance when selected / select tool
-    if (this.selected?.k === "laneTop" || this.selected?.k === "laneBottom" || this.tool === "select") {
-      ctx.strokeStyle = this.selected?.k === "laneTop" ? "#5ef0c8" : "#3a5a80";
-      ctx.lineWidth = this.selected?.k === "laneTop" ? 3 : 1;
-      ctx.beginPath();
-      ctx.moveTo(0, m.laneTop);
-      ctx.lineTo(MAP_W, m.laneTop);
-      ctx.stroke();
-      ctx.strokeStyle = this.selected?.k === "laneBottom" ? "#5ef0c8" : "#3a5a80";
-      ctx.lineWidth = this.selected?.k === "laneBottom" ? 3 : 1;
-      ctx.beginPath();
-      ctx.moveTo(0, m.laneBottom);
-      ctx.lineTo(MAP_W, m.laneBottom);
-      ctx.stroke();
+    // AABB edge affordances for resizing playable portion
+    if (this.tool === "select" || this.selected?.k === "laneEdge") {
+      const b = playBounds(m);
+      const edge = this.selected?.k === "laneEdge" ? this.selected.edge : null;
+      const strokeEdge = (which: "top" | "bottom" | "left" | "right", x1: number, y1: number, x2: number, y2: number) => {
+        ctx.strokeStyle = edge === which ? "#5ef0c8" : "#3a5a80";
+        ctx.lineWidth = edge === which ? 3 : 1;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      };
+      strokeEdge("top", b.left, b.top, b.right, b.top);
+      strokeEdge("bottom", b.left, b.bottom, b.right, b.bottom);
+      strokeEdge("left", b.left, b.top, b.left, b.bottom);
+      strokeEdge("right", b.right, b.top, b.right, b.bottom);
     }
 
     const fillR = (list: RectZone[] | undefined, fill: string, label: string) => {
@@ -776,6 +857,30 @@ export class MapEditorPanel {
     fillR(m.hastePads, "#e0c04044", "HASTE");
     fillR(m.goldVents, "#e0c02044", "GOLD");
     fillR(m.windCurrents, "#60c0e044", "WIND");
+    fillR(m.bouncePads, "#80e0ff44", "BOUNCE");
+    for (const p of m.mapPortals ?? []) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fillStyle = "#c080ff55";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.exitX, p.exitY);
+      ctx.strokeStyle = "#c080ff88";
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const r of m.relayBeacons ?? []) {
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+      ctx.fillStyle = "#f0c06044";
+      ctx.fill();
+      ctx.fillStyle = "#fff8";
+      ctx.font = "11px Segoe UI";
+      ctx.textAlign = "center";
+      ctx.fillText("RELAY", r.x, r.y + 4);
+    }
     for (const hg of m.highGrounds) {
       ctx.fillStyle = "#3d5a8844";
       ctx.strokeStyle = "#7eb0ff";
@@ -837,8 +942,11 @@ function mapDefToCustomDraft(m: MapDef): CustomMapDef {
     id: newCustomMapId(),
     name: `${m.name} (copy)`,
     blurb: m.blurb,
+    shape: m.shape ?? "rectangle",
     laneTop: m.laneTop,
     laneBottom: m.laneBottom,
+    laneLeft: m.laneLeft ?? 0,
+    laneRight: m.laneRight ?? MAP_W,
     base: structuredClone(m.base),
     shops: structuredClone(mapShops(m)),
     respawn: structuredClone(mapRespawn(m)),
@@ -856,6 +964,9 @@ function mapDefToCustomDraft(m: MapDef): CustomMapDef {
       chestMagnet: !!m.chestMagnet,
       riftSurges: !!m.riftSurges,
       volatileOrbs: !!m.volatileOrbs,
+      emberRain: !!m.emberRain,
+      supplyDrops: !!m.supplyDrops,
+      chronoPulse: !!m.chronoPulse,
     },
     healSprings: structuredClone(m.healSprings ?? []),
     slowMires: structuredClone(m.slowMires ?? []),
@@ -863,18 +974,22 @@ function mapDefToCustomDraft(m: MapDef): CustomMapDef {
     goldVents: structuredClone(m.goldVents ?? []),
     windCurrents: structuredClone(m.windCurrents ?? []),
     spikePulses: structuredClone(m.spikePulses ?? []),
+    bouncePads: structuredClone(m.bouncePads ?? []),
+    mapPortals: structuredClone(m.mapPortals ?? []),
+    relayBeacons: structuredClone(m.relayBeacons ?? []),
   };
 }
 
-/** Keep placeables inset a few pixels inside the lane so nothing sits OOB. */
+/** Keep placeables inset a few pixels inside the playable AABB. */
 const LANE_INSET = 8;
 
 function laneInnerBounds(m: CustomMapDef): { minX: number; maxX: number; minY: number; maxY: number } {
+  const b = playBounds(m);
   return {
-    minX: LANE_INSET,
-    maxX: MAP_W - LANE_INSET,
-    minY: m.laneTop + LANE_INSET,
-    maxY: m.laneBottom - LANE_INSET,
+    minX: b.left + LANE_INSET,
+    maxX: b.right - LANE_INSET,
+    minY: b.top + LANE_INSET,
+    maxY: b.bottom - LANE_INSET,
   };
 }
 
@@ -884,14 +999,7 @@ function clampPointInLane(
   y: number,
   radius = 0,
 ): { x: number; y: number } {
-  const b = laneInnerBounds(m);
-  const r = Math.max(0, radius);
-  const maxX = Math.max(b.minX + r, b.maxX - r);
-  const maxY = Math.max(b.minY + r, b.maxY - r);
-  return {
-    x: Math.max(b.minX + r, Math.min(maxX, x)),
-    y: Math.max(b.minY + r, Math.min(maxY, y)),
-  };
+  return clampToPlayable(m, x, y, radius);
 }
 
 function clampRectInLane(m: CustomMapDef, r: RectZone): void {
@@ -902,6 +1010,9 @@ function clampRectInLane(m: CustomMapDef, r: RectZone): void {
   r.h = Math.min(Math.max(MIN_RECT, r.h), maxH);
   r.x = Math.max(b.minX, Math.min(b.maxX - r.w, r.x));
   r.y = Math.max(b.minY, Math.min(b.maxY - r.h, r.y));
+  const c = clampToPlayable(m, r.x + r.w / 2, r.y + r.h / 2, 0);
+  r.x = c.x - r.w / 2;
+  r.y = c.y - r.h / 2;
 }
 
 function clampSpikeInLane(m: CustomMapDef, s: { x: number; y: number; radius: number }): void {
@@ -914,10 +1025,6 @@ function clampSpikeInLane(m: CustomMapDef, s: { x: number; y: number; radius: nu
   const p = clampPointInLane(m, s.x, s.y, s.radius);
   s.x = p.x;
   s.y = p.y;
-  s.radius = Math.max(
-    MIN_SPIKE_R,
-    Math.min(s.radius, s.x - b.minX, b.maxX - s.x, s.y - b.minY, b.maxY - s.y, MAX_SPIKE_R),
-  );
 }
 
 function clampPadInLane(m: CustomMapDef, p: { x: number; y: number; radius?: number }, fallbackR: number): void {
@@ -944,24 +1051,53 @@ function clampAllObjectsInLane(m: CustomMapDef): void {
   for (const r of m.hastePads ?? []) clampRectInLane(m, r);
   for (const r of m.goldVents ?? []) clampRectInLane(m, r);
   for (const r of m.windCurrents ?? []) clampRectInLane(m, r);
+  for (const r of m.bouncePads ?? []) clampRectInLane(m, r);
   for (const s of m.spikePulses ?? []) clampSpikeInLane(m, s);
+  for (const p of m.mapPortals ?? []) {
+    const a = clampPointInLane(m, p.x, p.y, p.radius);
+    p.x = a.x;
+    p.y = a.y;
+    const e = clampPointInLane(m, p.exitX, p.exitY, 8);
+    p.exitX = e.x;
+    p.exitY = e.y;
+  }
+  for (const r of m.relayBeacons ?? []) {
+    const c = clampPointInLane(m, r.x, r.y, r.radius);
+    r.x = c.x;
+    r.y = c.y;
+  }
 }
 
 /** Second spawner default: same X as primary, offset below (or above if clamped). */
 function defaultSpawnerAlt(m: CustomMapDef): { x: number; y: number; radius: number } {
   const radius = m.spawner.radius || 28;
   const yOff = 80;
-  const minY = m.laneTop + radius;
-  const maxY = m.laneBottom - radius;
   let y = m.spawner.y + yOff;
-  if (y > maxY) y = m.spawner.y - yOff;
-  y = Math.max(minY, Math.min(maxY, y));
-  return { x: m.spawner.x, y, radius };
+  const c = clampPointInLane(m, m.spawner.x, y, radius);
+  if (Math.abs(c.y - m.spawner.y) < 10) {
+    return { ...clampPointInLane(m, m.spawner.x, m.spawner.y - yOff, radius), radius };
+  }
+  return { x: c.x, y: c.y, radius };
 }
 
-function hitLaneEdge(m: CustomMapDef, y: number): "top" | "bottom" | null {
-  if (Math.abs(y - m.laneTop) <= LANE_HIT) return "top";
-  if (Math.abs(y - m.laneBottom) <= LANE_HIT) return "bottom";
+function hitLaneEdge(
+  m: CustomMapDef,
+  x: number,
+  y: number,
+): "top" | "bottom" | "left" | "right" | null {
+  const b = playBounds(m);
+  if (Math.abs(y - b.top) <= LANE_HIT && x >= b.left - LANE_HIT && x <= b.right + LANE_HIT) {
+    return "top";
+  }
+  if (Math.abs(y - b.bottom) <= LANE_HIT && x >= b.left - LANE_HIT && x <= b.right + LANE_HIT) {
+    return "bottom";
+  }
+  if (Math.abs(x - b.left) <= LANE_HIT && y >= b.top - LANE_HIT && y <= b.bottom + LANE_HIT) {
+    return "left";
+  }
+  if (Math.abs(x - b.right) <= LANE_HIT && y >= b.top - LANE_HIT && y <= b.bottom + LANE_HIT) {
+    return "right";
+  }
   return null;
 }
 
@@ -981,6 +1117,8 @@ function getSelectedRect(m: CustomMapDef, sel: SelKind): RectZone | null {
       return m.goldVents?.[sel.i] ?? null;
     case "wind":
       return m.windCurrents?.[sel.i] ?? null;
+    case "bounce":
+      return m.bouncePads?.[sel.i] ?? null;
     default:
       return null;
   }
@@ -1131,6 +1269,7 @@ function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
     [m.hastePads, "haste"],
     [m.goldVents, "gold"],
     [m.windCurrents, "wind"],
+    [m.bouncePads, "bounce"],
   ] as const) {
     const arr = list ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
@@ -1142,6 +1281,14 @@ function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
     const s = m.spikePulses![i]!;
     if ((x - s.x) ** 2 + (y - s.y) ** 2 <= s.radius ** 2) return { k: "spike", i };
   }
+  for (let i = (m.mapPortals ?? []).length - 1; i >= 0; i--) {
+    const p = m.mapPortals![i]!;
+    if ((x - p.x) ** 2 + (y - p.y) ** 2 <= p.radius ** 2) return { k: "portal", i };
+  }
+  for (let i = (m.relayBeacons ?? []).length - 1; i >= 0; i--) {
+    const p = m.relayBeacons![i]!;
+    if ((x - p.x) ** 2 + (y - p.y) ** 2 <= p.radius ** 2) return { k: "relay", i };
+  }
   for (let i = m.turretSlots.length - 1; i >= 0; i--) {
     const t = m.turretSlots[i]!;
     if ((x - t.x) ** 2 + (y - t.y) ** 2 <= 12 ** 2) return { k: "turret", i };
@@ -1150,7 +1297,7 @@ function hitTest(m: CustomMapDef, x: number, y: number): SelKind | null {
 }
 
 function moveSelection(m: CustomMapDef, sel: SelKind, dx: number, dy: number): void {
-  if (sel.k === "laneTop" || sel.k === "laneBottom") return;
+  if (sel.k === "laneEdge") return;
   const movePad = (p: { x: number; y: number }, radius: number) => {
     p.x += dx;
     p.y += dy;
@@ -1210,6 +1357,26 @@ function moveSelection(m: CustomMapDef, sel: SelKind, dx: number, dy: number): v
       clampSpikeInLane(m, s);
       break;
     }
+    case "bounce":
+      moveR(m.bouncePads![sel.i]!);
+      break;
+    case "portal": {
+      const p = m.mapPortals![sel.i]!;
+      p.x += dx;
+      p.y += dy;
+      p.exitX += dx;
+      p.exitY += dy;
+      const a = clampPointInLane(m, p.x, p.y, p.radius);
+      p.x = a.x;
+      p.y = a.y;
+      const e = clampPointInLane(m, p.exitX, p.exitY, 8);
+      p.exitX = e.x;
+      p.exitY = e.y;
+      break;
+    }
+    case "relay":
+      movePad(m.relayBeacons![sel.i]!, m.relayBeacons![sel.i]!.radius || 40);
+      break;
   }
 }
 

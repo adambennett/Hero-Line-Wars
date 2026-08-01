@@ -16,7 +16,7 @@ import {
 import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
 import { MainMenuFx } from "../ui/mainMenuFx";
-import { loadSettings } from "../ui/settings";
+import { loadSettings, syncMotionPreference } from "../ui/settings";
 import { startMenuMusic } from "../systems/music";
 import {
   bindHooks,
@@ -90,8 +90,14 @@ export class MultiplayerUi {
   private disableSends = false;
   private disableRelics = false;
   private fogAlways = false;
+  private fogThicknessPct = 55;
+  private fogVisionRadius = 120;
   private doubleElites = false;
   private suddenDeathBaseHp = 0;
+  private glassCannon = false;
+  private goldRush = false;
+  private wildChests = false;
+  private crampedLane = false;
   private preferredCode = randomMpCode();
   private busy = false;
   private readonly menuFx = new MainMenuFx();
@@ -147,8 +153,14 @@ export class MultiplayerUi {
     disableSends?: boolean;
     disableRelics?: boolean;
     fogAlways?: boolean;
+    fogThicknessPct?: number;
+    fogVisionRadius?: number;
     doubleElites?: boolean;
     suddenDeathBaseHp?: number;
+    glassCannon?: boolean;
+    goldRush?: boolean;
+    wildChests?: boolean;
+    crampedLane?: boolean;
     heroId?: HeroId;
     preferredCode?: string;
     joinCode?: string;
@@ -184,8 +196,14 @@ export class MultiplayerUi {
     if (opts?.disableSends != null) this.disableSends = opts.disableSends;
     if (opts?.disableRelics != null) this.disableRelics = opts.disableRelics;
     if (opts?.fogAlways != null) this.fogAlways = opts.fogAlways;
+    if (opts?.fogThicknessPct != null) this.fogThicknessPct = opts.fogThicknessPct;
+    if (opts?.fogVisionRadius != null) this.fogVisionRadius = opts.fogVisionRadius;
     if (opts?.doubleElites != null) this.doubleElites = opts.doubleElites;
     if (opts?.suddenDeathBaseHp != null) this.suddenDeathBaseHp = opts.suddenDeathBaseHp;
+    if (opts?.glassCannon != null) this.glassCannon = opts.glassCannon;
+    if (opts?.goldRush != null) this.goldRush = opts.goldRush;
+    if (opts?.wildChests != null) this.wildChests = opts.wildChests;
+    if (opts?.crampedLane != null) this.crampedLane = opts.crampedLane;
     if (opts?.heroId) this.heroId = opts.heroId;
     if (opts?.preferredCode) this.preferredCode = opts.preferredCode.toUpperCase();
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
@@ -202,7 +220,9 @@ export class MultiplayerUi {
   }
 
   private mountFxShell(body: string): void {
-    const reduceMotion = !!loadSettings().reduceMotion;
+    const settings = loadSettings();
+    const reduceMotion = !!settings.reduceMotion;
+    syncMotionPreference(settings);
     const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
     const reuseFx =
       !!backdrop &&
@@ -276,8 +296,14 @@ export class MultiplayerUi {
       disableSends: this.disableSends,
       disableRelics: this.disableRelics,
       fogAlways: this.fogAlways,
+      fogThicknessPct: this.fogThicknessPct,
+      fogVisionRadius: this.fogVisionRadius,
       doubleElites: this.doubleElites,
       suddenDeathBaseHp: this.suddenDeathBaseHp,
+      glassCannon: this.glassCannon,
+      goldRush: this.goldRush,
+      wildChests: this.wildChests,
+      crampedLane: this.crampedLane,
     };
   }
 
@@ -323,8 +349,14 @@ export class MultiplayerUi {
     this.disableSends = d.disableSends;
     this.disableRelics = d.disableRelics;
     this.fogAlways = d.fogAlways;
+    this.fogThicknessPct = d.fogThicknessPct;
+    this.fogVisionRadius = d.fogVisionRadius;
     this.doubleElites = d.doubleElites;
     this.suddenDeathBaseHp = d.suddenDeathBaseHp;
+    this.glassCannon = d.glassCannon;
+    this.goldRush = d.goldRush;
+    this.wildChests = d.wildChests;
+    this.crampedLane = d.crampedLane;
   }
 
   private randomizeRunOptions(): void {
@@ -363,7 +395,13 @@ export class MultiplayerUi {
     this.disableSends = Math.random() < 0.5;
     this.disableRelics = Math.random() < 0.5;
     this.fogAlways = Math.random() < 0.5;
+    this.fogThicknessPct = pickOne(RUN_OPTION_POOLS.fogThicknessPct);
+    this.fogVisionRadius = pickOne(RUN_OPTION_POOLS.fogVisionRadius);
     this.doubleElites = Math.random() < 0.5;
+    this.glassCannon = Math.random() < 0.35;
+    this.goldRush = Math.random() < 0.35;
+    this.wildChests = Math.random() < 0.35;
+    this.crampedLane = Math.random() < 0.35;
   }
 
   private bindRunResetRandom(prefix: string, editable: boolean, onChange?: () => void): void {
@@ -442,7 +480,7 @@ export class MultiplayerUi {
     const resetRandomBtns = editable
       ? `
           <div class="run-options-actions choice-row" style="margin-top:10px;gap:0.5rem">
-            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-reset"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset"><span class="btn-label">Reset</span></button>
             <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize"><span class="btn-label">Randomize</span></button>
           </div>`
       : "";
@@ -544,7 +582,7 @@ export class MultiplayerUi {
               <select id="${prefix}-sudden" ${dis}${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
             </label>
           </div>
-          <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+          <div class="creative-check-grid">
             ${[
               ["no-art", "No artifacts", this.disableArtifacts, "noArtifacts"],
               ["no-chest", "No chests", this.disableChests, "noChests"],
@@ -555,12 +593,24 @@ export class MultiplayerUi {
               ["no-relic", "No relics", this.disableRelics, "noRelics"],
               ["fog", "Fog always", this.fogAlways, "fogAlways"],
               ["dbl-elite", "Double elites", this.doubleElites, "doubleElites"],
+              ["glass", "Glass cannon", this.glassCannon, "glassCannon"],
+              ["gold-rush", "Gold rush", this.goldRush, "goldRush"],
+              ["wild-chests", "Wild chests", this.wildChests, "wildChests"],
+              ["cramped", "Cramped lane", this.crampedLane, "crampedLane"],
             ]
               .map(
                 ([id, label, on, tipKey]) =>
-                  `<label class="setting-row" style="min-width:9rem"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
+                  `<label class="setting-row"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
               )
               .join("")}
+          </div>
+          <div class="run-grid cols-2" style="margin-top:8px">
+            <label class="run-field"><span>Fog thickness</span>
+              <select id="${prefix}-fog-thickness" ${dis}${tip("fogThickness")}>${RUN_OPTION_POOLS.fogThicknessPct.map((n) => `<option value="${n}" ${this.fogThicknessPct === n ? "selected" : ""}>${n}%</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Fog vision</span>
+              <select id="${prefix}-fog-vision" ${dis}${tip("fogVision")}>${RUN_OPTION_POOLS.fogVisionRadius.map((n) => `<option value="${n}" ${this.fogVisionRadius === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
+            </label>
           </div>
           ${resetRandomBtns}
         </div>
@@ -612,7 +662,13 @@ export class MultiplayerUi {
       this.disableSends = chk("no-send");
       this.disableRelics = chk("no-relic");
       this.fogAlways = chk("fog");
+      this.fogThicknessPct = num("fog-thickness", 55);
+      this.fogVisionRadius = num("fog-vision", 120);
       this.doubleElites = chk("dbl-elite");
+      this.glassCannon = chk("glass");
+      this.goldRush = chk("gold-rush");
+      this.wildChests = chk("wild-chests");
+      this.crampedLane = chk("cramped");
       onChange?.();
     };
     const ids = [
@@ -645,7 +701,13 @@ export class MultiplayerUi {
       "no-send",
       "no-relic",
       "fog",
+      "fog-thickness",
+      "fog-vision",
       "dbl-elite",
+      "glass",
+      "gold-rush",
+      "wild-chests",
+      "cramped",
     ];
     for (const id of ids) {
       this.root.querySelector(`#${prefix}-${id}`)?.addEventListener("change", read);
@@ -681,8 +743,14 @@ export class MultiplayerUi {
     if (lobby.disableSends != null) this.disableSends = lobby.disableSends;
     if (lobby.disableRelics != null) this.disableRelics = lobby.disableRelics;
     if (lobby.fogAlways != null) this.fogAlways = lobby.fogAlways;
+    if (lobby.fogThicknessPct != null) this.fogThicknessPct = lobby.fogThicknessPct;
+    if (lobby.fogVisionRadius != null) this.fogVisionRadius = lobby.fogVisionRadius;
     if (lobby.doubleElites != null) this.doubleElites = lobby.doubleElites;
     if (lobby.suddenDeathBaseHp != null) this.suddenDeathBaseHp = lobby.suddenDeathBaseHp;
+    if (lobby.glassCannon != null) this.glassCannon = lobby.glassCannon;
+    if (lobby.goldRush != null) this.goldRush = lobby.goldRush;
+    if (lobby.wildChests != null) this.wildChests = lobby.wildChests;
+    if (lobby.crampedLane != null) this.crampedLane = lobby.crampedLane;
   }
 
   private heroGridHtml(): string {
@@ -768,7 +836,7 @@ export class MultiplayerUi {
             <button type="button" class="menu-btn small" id="mp-copy-code">Copy</button>
             <button type="button" class="menu-btn small ghost" id="mp-regen-code">New</button>
           </div>
-          <p class="menu-note">Friends join with this code after you create the lobby.</p>
+          <p class="menu-note">Share this code after you create the lobby.</p>
         </div>
       `;
     }
@@ -806,7 +874,7 @@ export class MultiplayerUi {
               <h1 class="menu-title">Online Lobby</h1>
             </div>
           </div>
-          <p class="menu-lead">PeerJS P2P · host-authoritative</p>
+          <p class="menu-lead">PeerJS · host-authoritative</p>
         </header>
 
         <section class="sp-setup mp-connection">

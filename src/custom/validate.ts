@@ -5,13 +5,21 @@ import { abilityTemplate, passiveTemplate } from "./catalog";
 import {
   CUSTOM_HERO_PREFIX,
   CUSTOM_MAP_PREFIX,
+  type BouncePadZone,
   type CustomHeroDef,
   type CustomMapDef,
+  type CustomMapSpecials,
+  type MapPortalPad,
+  type RectZone,
+  type RelayBeaconPad,
+  type SpikePoint,
+  type WindZone,
   isCustomHeroId,
   isCustomMapId,
 } from "./types";
 import { MAP_H, MAP_W } from "../data/constants";
 import type { AbilityKind } from "../data/heroes";
+import { isMapShapeId, type MapShapeId } from "../game/playBounds";
 
 const MAX_NAME = 48;
 const MAX_BLURB = 280;
@@ -24,6 +32,41 @@ const MAX_SPIKES = 40;
 
 function fin(n: unknown, fallback: number): number {
   return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Peer / import payloads are untrusted: a field typed as a list can arrive as a
+ * string, object, or null. Everything that is not an array of objects becomes
+ * an empty list instead of throwing (a throw here would kill the lobby).
+ */
+function arr<T>(v: unknown, cap: number): T[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((e): e is T => !!e && typeof e === "object").slice(0, cap);
+}
+
+/** Specials are pure feature switches — accept nothing but real booleans. */
+const SPECIAL_KEYS: (keyof CustomMapSpecials)[] = [
+  "shiftingObstacles",
+  "shrinkingLane",
+  "movingHazards",
+  "eclipseFog",
+  "dualSpawners",
+  "chestMagnet",
+  "riftSurges",
+  "volatileOrbs",
+  "emberRain",
+  "supplyDrops",
+  "chronoPulse",
+];
+
+function clampSpecials(v: unknown): CustomMapSpecials {
+  const out: CustomMapSpecials = {};
+  if (!v || typeof v !== "object") return out;
+  const src = v as Record<string, unknown>;
+  for (const key of SPECIAL_KEYS) {
+    if (src[key] === true) out[key] = true;
+  }
+  return out;
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -73,39 +116,52 @@ export function sanitizeCustomMap(raw: unknown): CustomMapDef | null {
 
   const laneTop = clamp(fin(m.laneTop, 80), 20, MAP_H - 80);
   const laneBottom = clamp(fin(m.laneBottom, MAP_H - 80), laneTop + 40, MAP_H - 20);
+  // Legacy maps omit shape / X extents — treat as full-width rectangle.
+  const shape: MapShapeId = isMapShapeId(m.shape) ? m.shape : "rectangle";
+  const laneLeft = clamp(fin(m.laneLeft, 0), 0, MAP_W - 40);
+  const laneRight = clamp(fin(m.laneRight, MAP_W), laneLeft + 40, MAP_W);
   const base = clampPoint(m.base, { x: 52, y: (laneTop + laneBottom) / 2, radius: 36, maxHp: 400 }) as {
     x: number;
     y: number;
     radius: number;
     maxHp: number;
   };
-  const shops = (Array.isArray(m.shops) ? m.shops : [])
-    .slice(0, MAX_SHOPS)
-    .map((s) => {
-      const p = clampPoint(s, { x: base.x + 100, y: base.y, radius: 28 });
-      return {
-        ...p,
-        interactRange: clamp(fin((s as { interactRange?: number }).interactRange, 56), 20, 120),
-      };
-    });
+  const shops = arr<{
+    x?: number;
+    y?: number;
+    radius?: number;
+    interactRange?: number;
+  }>(m.shops, MAX_SHOPS).map((s) => {
+    const p = clampPoint(s, { x: base.x + 100, y: base.y, radius: 28 });
+    return {
+      ...p,
+      interactRange: clamp(fin(s.interactRange, 56), 20, 120),
+    };
+  });
   const respawn = clampPoint(m.respawn, { x: base.x + 120, y: base.y, radius: 28 });
   const spawner = clampPoint(m.spawner, { x: MAP_W - 60, y: (laneTop + laneBottom) / 2, radius: 20 });
 
-  const obstacles = (Array.isArray(m.obstacles) ? m.obstacles : []).slice(0, MAX_OBSTACLES).map((o) => ({
+  const obstacles = arr<{ x?: number; y?: number; w?: number; h?: number }>(
+    m.obstacles,
+    MAX_OBSTACLES,
+  ).map((o) => ({
     x: clamp(fin(o.x, 200), -20, MAP_W + 20),
     y: clamp(fin(o.y, 200), -20, MAP_H + 20),
     w: clamp(fin(o.w, 40), 8, 400),
     h: clamp(fin(o.h, 40), 8, 400),
   }));
-  const turretSlots = (Array.isArray(m.turretSlots) ? m.turretSlots : [])
-    .slice(0, MAX_TURRET_SLOTS)
-    .map((t) => ({
-      x: clamp(fin(t.x, 100), 0, MAP_W),
-      y: clamp(fin(t.y, 200), 0, MAP_H),
-    }));
-  const highGrounds = (Array.isArray(m.highGrounds) ? m.highGrounds : [])
-    .slice(0, MAX_HIGH_GROUNDS)
-    .map((h) => ({
+  const turretSlots = arr<{ x?: number; y?: number }>(m.turretSlots, MAX_TURRET_SLOTS).map((t) => ({
+    x: clamp(fin(t.x, 100), 0, MAP_W),
+    y: clamp(fin(t.y, 200), 0, MAP_H),
+  }));
+  const highGrounds = arr<{
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    damageBonus?: number;
+    oathDamageBonus?: number;
+  }>(m.highGrounds, MAX_HIGH_GROUNDS).map((h) => ({
       x: clamp(fin(h.x, 0), -50, MAP_W + 50),
       y: clamp(fin(h.y, 0), -50, MAP_H + 50),
       w: clamp(fin(h.w, 40), 8, MAP_W),
@@ -114,39 +170,61 @@ export function sanitizeCustomMap(raw: unknown): CustomMapDef | null {
       oathDamageBonus: clamp(fin(h.oathDamageBonus, 0), 0, 2),
     }));
 
-  const specials = m.specials && typeof m.specials === "object" ? { ...m.specials } : {};
+  const specials = clampSpecials(m.specials);
 
   return {
     id,
     name: clampStr(m.name, MAX_NAME, "Custom Map"),
     blurb: clampStr(m.blurb, MAX_BLURB, ""),
+    shape,
     laneTop,
     laneBottom,
+    laneLeft,
+    laneRight,
     base,
     shops,
     respawn,
     spawner,
-    spawnerAlt: m.spawnerAlt
-      ? clampPoint(m.spawnerAlt, { x: spawner.x, y: spawner.y + 40, radius: 20 })
-      : undefined,
+    spawnerAlt:
+      m.spawnerAlt && typeof m.spawnerAlt === "object"
+        ? clampPoint(m.spawnerAlt, { x: spawner.x, y: spawner.y + 40, radius: 20 })
+        : undefined,
     highGrounds,
     obstacles,
     turretSlots,
     specials,
-    healSprings: (m.healSprings ?? []).slice(0, MAX_ZONE_LIST).map(clampRect),
-    slowMires: (m.slowMires ?? []).slice(0, MAX_ZONE_LIST).map(clampRect),
-    hastePads: (m.hastePads ?? []).slice(0, MAX_ZONE_LIST).map(clampRect),
-    goldVents: (m.goldVents ?? []).slice(0, MAX_ZONE_LIST).map(clampRect),
-    windCurrents: (m.windCurrents ?? []).slice(0, MAX_ZONE_LIST).map((w) => ({
+    healSprings: arr<RectZone>(m.healSprings, MAX_ZONE_LIST).map(clampRect),
+    slowMires: arr<RectZone>(m.slowMires, MAX_ZONE_LIST).map(clampRect),
+    hastePads: arr<RectZone>(m.hastePads, MAX_ZONE_LIST).map(clampRect),
+    goldVents: arr<RectZone>(m.goldVents, MAX_ZONE_LIST).map(clampRect),
+    windCurrents: arr<WindZone>(m.windCurrents, MAX_ZONE_LIST).map((w) => ({
       ...clampRect(w),
       vx: clamp(fin(w.vx, 0), -200, 200),
       vy: clamp(fin(w.vy, 0), -200, 200),
     })),
-    spikePulses: (m.spikePulses ?? []).slice(0, MAX_SPIKES).map((s) => ({
+    spikePulses: arr<SpikePoint>(m.spikePulses, MAX_SPIKES).map((s) => ({
       x: clamp(fin(s.x, 200), 0, MAP_W),
       y: clamp(fin(s.y, 200), 0, MAP_H),
       radius: clamp(fin(s.radius, 24), 8, 80),
       damage: clamp(fin(s.damage, 8), 1, 80),
+    })),
+    bouncePads: arr<BouncePadZone>(m.bouncePads, MAX_ZONE_LIST).map((z) => ({
+      ...clampRect(z),
+      impulseX: clamp(fin(z.impulseX, 180), -400, 400),
+      impulseY: clamp(fin(z.impulseY, 0), -400, 400),
+    })),
+    mapPortals: arr<MapPortalPad>(m.mapPortals, MAX_ZONE_LIST).map((p) => ({
+      x: clamp(fin(p.x, 200), 0, MAP_W),
+      y: clamp(fin(p.y, 200), 0, MAP_H),
+      radius: clamp(fin(p.radius, 28), 12, 64),
+      exitX: clamp(fin(p.exitX, 400), 0, MAP_W),
+      exitY: clamp(fin(p.exitY, 400), 0, MAP_H),
+    })),
+    relayBeacons: arr<RelayBeaconPad>(m.relayBeacons, MAX_ZONE_LIST).map((p) => ({
+      x: clamp(fin(p.x, 200), 0, MAP_W),
+      y: clamp(fin(p.y, 200), 0, MAP_H),
+      radius: clamp(fin(p.radius, 40), 16, 100),
+      damageBonus: clamp(fin(p.damageBonus, 0.15), 0.05, 0.5),
     })),
   };
 }
@@ -162,7 +240,12 @@ export function sanitizeCustomHero(raw: unknown): CustomHeroDef | null {
   }
   if (!isCustomHeroId(id)) return null;
 
-  const abilitiesRaw = Array.isArray(h.abilities) ? h.abilities.slice(0, 2) : [];
+  const abilitiesRaw = arr<{
+    id?: unknown;
+    name?: unknown;
+    cooldown?: unknown;
+    hint?: unknown;
+  }>(h.abilities, 2);
   if (abilitiesRaw.length < 2) return null;
   const abilities = abilitiesRaw.map((a, i) => {
     const kind = a?.id as AbilityKind;

@@ -1,4 +1,5 @@
-﻿import { HERO_LIST, type HeroId } from "../data/heroes";
+﻿import { HEROES, HERO_LIST, type HeroId } from "../data/heroes";
+import { LEVEL_PASSIVE_LIST } from "../data/xp";
 import { MAP_LIST, mapRespawn, mapShops, type MapId } from "../data/maps";
 import { MAP_H, MAP_W } from "../data/constants";
 import { RELIC_LIST } from "../data/relics";
@@ -27,6 +28,7 @@ import {
   formatBinding,
   loadSettings,
   saveSettings,
+  syncMotionPreference,
   type Binding,
   type BindableAction,
   type ClientSettingsFull,
@@ -113,6 +115,25 @@ export type MenuScreen =
   | "hero-editor"
   | "stats";
 
+/** Human names for back-button targets (see `backButton`). */
+const SCREEN_LABELS: Record<MenuScreen, string> = {
+  main: "Main Menu",
+  singleplayer: "Singleplayer",
+  multiplayer: "Multiplayer",
+  "mp-options": "Match Options",
+  compendium: "Compendium",
+  "game-info": "Game Info",
+  settings: "Settings",
+  controls: "Controls",
+  "ai-lab": "AI Lab",
+  barracks: "Barracks",
+  challenges: "Challenges",
+  cheats: "Cheats",
+  "map-editor": "Map Editor",
+  "hero-editor": "Hero Editor",
+  stats: "Stats",
+};
+
 type StatsTab = "overview" | "combat" | "economy" | "progress" | "favorites";
 
 export type MatchRole = "host" | "join";
@@ -155,8 +176,14 @@ export type LobbyDraft = {
   disableSends: boolean;
   disableRelics: boolean;
   fogAlways: boolean;
+  fogThicknessPct: number;
+  fogVisionRadius: number;
   doubleElites: boolean;
   suddenDeathBaseHp: number;
+  glassCannon: boolean;
+  goldRush: boolean;
+  wildChests: boolean;
+  crampedLane: boolean;
 };
 
 export type MenuCallbacks = {
@@ -166,7 +193,16 @@ export type MenuCallbacks = {
   onRunOptionsChanged?: (opts: Partial<RunOptions>) => void;
 };
 
-type CompTab = "heroes" | "items" | "artifacts" | "relics" | "enemies" | "sends" | "maps" | "ascensions";
+type CompTab =
+  | "heroes"
+  | "bonuses"
+  | "items"
+  | "artifacts"
+  | "relics"
+  | "enemies"
+  | "sends"
+  | "maps"
+  | "ascensions";
 
 const MODE_OPTIONS: { id: MatchMode; label: string; hint: string }[] = [
   { id: "1v1", label: "1v1 PvP", hint: "One hero per side" },
@@ -189,6 +225,8 @@ export class MenuController {
   private readonly root: HTMLElement;
   private readonly callbacks: MenuCallbacks;
   private screen: MenuScreen = "main";
+  /** Screen we navigated from — decides whether "Back" is an honest label. */
+  private prevScreen: MenuScreen = "main";
   private selectedHero: HeroId = HERO_LIST[0]!.id;
   private lobby: LobbyDraft = {
     mode: "1v1",
@@ -224,8 +262,14 @@ export class MenuController {
     disableSends: false,
     disableRelics: false,
     fogAlways: false,
+    fogThicknessPct: 55,
+    fogVisionRadius: 120,
     doubleElites: false,
     suddenDeathBaseHp: 0,
+    glassCannon: false,
+    goldRush: false,
+    wildChests: false,
+    crampedLane: false,
   };
   private spMapChoice: MapId | string | "random" = "random";
   private spMaxTurrets = DEFAULT_MAX_TURRETS;
@@ -257,8 +301,14 @@ export class MenuController {
   private spDisableSends = false;
   private spDisableRelics = false;
   private spFogAlways = false;
+  private spFogThicknessPct = 55;
+  private spFogVisionRadius = 120;
   private spDoubleElites = false;
   private spSuddenDeath = 0;
+  private spGlassCannon = false;
+  private spGoldRush = false;
+  private spWildChests = false;
+  private spCrampedLane = false;
   private spAllyAi = 1;
   private settings: ClientSettingsFull = loadSettings();
   private compendiumTab: CompTab = "heroes";
@@ -296,6 +346,7 @@ export class MenuController {
 
   show(screen: MenuScreen = "main", opts?: { allowMenuMusic?: boolean }): void {
     this.settings = loadSettings();
+    syncMotionPreference(this.settings);
     this.allowMenuMusic = opts?.allowMenuMusic ?? true;
     this.stopRebindListen();
     this.root.classList.remove("hidden");
@@ -324,8 +375,20 @@ export class MenuController {
 
   go(screen: MenuScreen): void {
     if (screen !== "controls") this.stopRebindListen();
+    if (screen !== this.screen) this.prevScreen = this.screen;
     this.screen = screen;
     this.render();
+  }
+
+  /**
+   * Shared header button. Sub-screens all jump to a fixed target (usually the
+   * main menu), so the label only says "Back" when that target really is the
+   * screen the player came from — otherwise it names where it goes.
+   */
+  private backButton(target: MenuScreen): string {
+    const label =
+      target === this.prevScreen ? "← Back" : `← ${SCREEN_LABELS[target] ?? "Main Menu"}`;
+    return `<button type="button" class="menu-back" data-action="goto" data-screen="${target}">${label}</button>`;
   }
 
   private persist(): void {
@@ -412,8 +475,14 @@ export class MenuController {
           disableSends: this.spDisableSends,
           disableRelics: this.spDisableRelics,
           fogAlways: this.spFogAlways,
+          fogThicknessPct: this.spFogThicknessPct,
+          fogVisionRadius: this.spFogVisionRadius,
           doubleElites: this.spDoubleElites,
           suddenDeathBaseHp: this.spSuddenDeath > 0 ? this.spSuddenDeath : undefined,
+          glassCannon: this.spGlassCannon,
+          goldRush: this.spGoldRush,
+          wildChests: this.spWildChests,
+          crampedLane: this.spCrampedLane,
           allyAiAggression: this.spAllyAi,
           sharedFriendlyFire: this.spFriendlyFire && this.spTeamSize > 1,
         });
@@ -732,8 +801,14 @@ export class MenuController {
       disableSends: this.lobby.disableSends,
       disableRelics: this.lobby.disableRelics,
       fogAlways: this.lobby.fogAlways,
+      fogThicknessPct: this.lobby.fogThicknessPct,
+      fogVisionRadius: this.lobby.fogVisionRadius,
       doubleElites: this.lobby.doubleElites,
       suddenDeathBaseHp: this.lobby.suddenDeathBaseHp > 0 ? this.lobby.suddenDeathBaseHp : undefined,
+      glassCannon: this.lobby.glassCannon,
+      goldRush: this.lobby.goldRush,
+      wildChests: this.lobby.wildChests,
+      crampedLane: this.lobby.crampedLane,
     });
   }
 
@@ -848,8 +923,26 @@ export class MenuController {
     } else if (el.dataset.field === "mp-fog") {
       this.lobby.fogAlways = (el as HTMLInputElement).checked;
       this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-fog-thickness") {
+      this.lobby.fogThicknessPct = Number(el.value) || 55;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-fog-vision") {
+      this.lobby.fogVisionRadius = Number(el.value) || 120;
+      this.emitLobbyOpts();
     } else if (el.dataset.field === "mp-dbl-elite") {
       this.lobby.doubleElites = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-glass") {
+      this.lobby.glassCannon = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-gold-rush") {
+      this.lobby.goldRush = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-wild-chests") {
+      this.lobby.wildChests = (el as HTMLInputElement).checked;
+      this.emitLobbyOpts();
+    } else if (el.dataset.field === "mp-cramped") {
+      this.lobby.crampedLane = (el as HTMLInputElement).checked;
       this.emitLobbyOpts();
     } else if (el.dataset.field === "sp-starting-gold") {
       this.spStartingGold = Number(el.value) || STARTING_GOLD;
@@ -921,8 +1014,20 @@ export class MenuController {
       this.spDisableRelics = (el as HTMLInputElement).checked;
     } else if (el.dataset.field === "sp-fog") {
       this.spFogAlways = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-fog-thickness") {
+      this.spFogThicknessPct = Number(el.value) || 55;
+    } else if (el.dataset.field === "sp-fog-vision") {
+      this.spFogVisionRadius = Number(el.value) || 120;
     } else if (el.dataset.field === "sp-dbl-elite") {
       this.spDoubleElites = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-glass") {
+      this.spGlassCannon = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-gold-rush") {
+      this.spGoldRush = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-wild-chests") {
+      this.spWildChests = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "sp-cramped") {
+      this.spCrampedLane = (el as HTMLInputElement).checked;
     } else if ((el as HTMLInputElement).dataset.setting === "gamepadEnabled") {
       this.settings.gamepadEnabled = (el as HTMLInputElement).checked;
       this.persist();
@@ -1039,7 +1144,13 @@ export class MenuController {
     const versionHtml = isMain
       ? `<p class="menu-version" aria-hidden="true">v${escapeHtml(__APP_VERSION__)}</p>`
       : "";
-    const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}`;
+    const prefsScreen =
+      this.screen === "settings" ||
+      this.screen === "controls" ||
+      this.screen === "cheats" ||
+      this.screen === "ai-lab" ||
+      this.screen === "compendium";
+    const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}${prefsScreen ? " prefs-shell" : ""}`;
 
     const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
     const existingShell = this.root.querySelector<HTMLElement>(".menu-shell");
@@ -1191,9 +1302,9 @@ export class MenuController {
     return `
       <div class="stats-layout">
         <header class="menu-header compact stats-header">
-          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          ${this.backButton("main")}
           <h1 class="menu-title">Career Stats</h1>
-          <p class="menu-lead">Lifetime record across every finished run.</p>
+          <p class="menu-lead">Lifetime totals from finished runs.</p>
         </header>
         <div class="stats-hero-strip">
           <article class="stats-hero-card tone-win">
@@ -1439,7 +1550,7 @@ export class MenuController {
           <div class="main-group-btns system-btns">
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="settings"><span class="btn-label">Settings</span></button>
             <button type="button" class="menu-btn ghost shine-btn" data-action="goto" data-screen="cheats"><span class="btn-label">Cheats</span></button>
-            <button type="button" class="menu-btn ghost shine-btn" data-action="quit"><span class="btn-label">Quit</span></button>
+            <button type="button" class="menu-btn ghost danger" data-action="quit"><span class="btn-label">Quit</span></button>
           </div>
         </section>
       </nav>
@@ -1480,7 +1591,13 @@ export class MenuController {
     this.spDisableSends = d.disableSends;
     this.spDisableRelics = d.disableRelics;
     this.spFogAlways = d.fogAlways;
+    this.spFogThicknessPct = d.fogThicknessPct;
+    this.spFogVisionRadius = d.fogVisionRadius;
     this.spDoubleElites = d.doubleElites;
+    this.spGlassCannon = d.glassCannon;
+    this.spGoldRush = d.goldRush;
+    this.spWildChests = d.wildChests;
+    this.spCrampedLane = d.crampedLane;
     setSelectedOpponent({ kind: "classic" });
   }
 
@@ -1532,7 +1649,13 @@ export class MenuController {
     this.spDisableSends = Math.random() < 0.5;
     this.spDisableRelics = Math.random() < 0.5;
     this.spFogAlways = Math.random() < 0.5;
+    this.spFogThicknessPct = pickOne(RUN_OPTION_POOLS.fogThicknessPct);
+    this.spFogVisionRadius = pickOne(RUN_OPTION_POOLS.fogVisionRadius);
     this.spDoubleElites = Math.random() < 0.5;
+    this.spGlassCannon = Math.random() < 0.35;
+    this.spGoldRush = Math.random() < 0.35;
+    this.spWildChests = Math.random() < 0.35;
+    this.spCrampedLane = Math.random() < 0.35;
   }
 
   private applyLobbyRunDefaults(): void {
@@ -1565,8 +1688,14 @@ export class MenuController {
     this.lobby.disableSends = d.disableSends;
     this.lobby.disableRelics = d.disableRelics;
     this.lobby.fogAlways = d.fogAlways;
+    this.lobby.fogThicknessPct = d.fogThicknessPct;
+    this.lobby.fogVisionRadius = d.fogVisionRadius;
     this.lobby.doubleElites = d.doubleElites;
     this.lobby.suddenDeathBaseHp = d.suddenDeathBaseHp;
+    this.lobby.glassCannon = d.glassCannon;
+    this.lobby.goldRush = d.goldRush;
+    this.lobby.wildChests = d.wildChests;
+    this.lobby.crampedLane = d.crampedLane;
   }
 
   private resetMpRunOptions(): void {
@@ -1609,7 +1738,13 @@ export class MenuController {
     this.lobby.disableSends = Math.random() < 0.5;
     this.lobby.disableRelics = Math.random() < 0.5;
     this.lobby.fogAlways = Math.random() < 0.5;
+    this.lobby.fogThicknessPct = pickOne(RUN_OPTION_POOLS.fogThicknessPct);
+    this.lobby.fogVisionRadius = pickOne(RUN_OPTION_POOLS.fogVisionRadius);
     this.lobby.doubleElites = Math.random() < 0.5;
+    this.lobby.glassCannon = Math.random() < 0.35;
+    this.lobby.goldRush = Math.random() < 0.35;
+    this.lobby.wildChests = Math.random() < 0.35;
+    this.lobby.crampedLane = Math.random() < 0.35;
   }
 
   private runOptionsFields(scope: "sp" | "mp"): string {
@@ -1710,6 +1845,10 @@ export class MenuController {
         noRelic: boolean;
         fog: boolean;
         dblElite: boolean;
+        glass: boolean;
+        goldRush: boolean;
+        wildChests: boolean;
+        cramped: boolean;
       },
     ) =>
       [
@@ -1722,15 +1861,28 @@ export class MenuController {
         [`${prefix}-no-relic`, "No relics", flags.noRelic, "noRelics"],
         [`${prefix}-fog`, "Fog always", flags.fog, "fogAlways"],
         [`${prefix}-dbl-elite`, "Double elites", flags.dblElite, "doubleElites"],
+        [`${prefix}-glass`, "Glass cannon", flags.glass, "glassCannon"],
+        [`${prefix}-gold-rush`, "Gold rush", flags.goldRush, "goldRush"],
+        [`${prefix}-wild-chests`, "Wild chests", flags.wildChests, "wildChests"],
+        [`${prefix}-cramped`, "Cramped lane", flags.cramped, "crampedLane"],
       ]
         .map(
           ([field, label, on, tipKey]) =>
-            `<label class="setting-row" style="min-width:9rem"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
+            `<label class="setting-row"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
         )
         .join("");
+    const fogSliders = (prefix: "sp" | "mp", thickness: number, vision: number) => `
+          <div class="run-grid cols-2" style="margin-top:8px">
+            <label class="run-field"><span>Fog thickness</span>
+              <select data-field="${prefix}-fog-thickness"${tip("fogThickness")}>${RUN_OPTION_POOLS.fogThicknessPct.map((n) => `<option value="${n}" ${thickness === n ? "selected" : ""}>${n}%</option>`).join("")}</select>
+            </label>
+            <label class="run-field"><span>Fog vision</span>
+              <select data-field="${prefix}-fog-vision"${tip("fogVision")}>${RUN_OPTION_POOLS.fogVisionRadius.map((n) => `<option value="${n}" ${vision === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
+            </label>
+          </div>`;
     const resetRandomBtns = `
           <div class="run-options-actions choice-row" style="margin-top:10px;gap:0.5rem">
-            <button type="button" class="menu-btn small ghost shine-btn" data-action="${scope}-run-reset"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost" data-action="${scope}-run-reset"><span class="btn-label">Reset</span></button>
             <button type="button" class="menu-btn small ghost shine-btn" data-action="${scope}-run-randomize"><span class="btn-label">Randomize</span></button>
           </div>`;
     if (scope === "sp") {
@@ -1810,7 +1962,7 @@ export class MenuController {
               <select data-field="sp-sudden"${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.spSuddenDeath === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
             </label>
           </div>
-          <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+          <div class="creative-check-grid">
             ${creativeCheckboxes("sp", {
               noArt: this.spDisableArtifacts,
               noChest: this.spDisableChests,
@@ -1821,8 +1973,13 @@ export class MenuController {
               noRelic: this.spDisableRelics,
               fog: this.spFogAlways,
               dblElite: this.spDoubleElites,
+              glass: this.spGlassCannon,
+              goldRush: this.spGoldRush,
+              wildChests: this.spWildChests,
+              cramped: this.spCrampedLane,
             })}
           </div>
+          ${fogSliders("sp", this.spFogThicknessPct, this.spFogVisionRadius)}
           ${resetRandomBtns}
         </div>
       `;
@@ -1882,7 +2039,7 @@ export class MenuController {
             }).join("")}</select>
           </label>
         </div>
-        <div class="choice-row wrap" style="margin-top:8px;gap:0.75rem">
+        <div class="creative-check-grid">
           ${creativeCheckboxes("mp", {
             noArt: this.lobby.disableArtifacts,
             noChest: this.lobby.disableChests,
@@ -1893,8 +2050,13 @@ export class MenuController {
             noRelic: this.lobby.disableRelics,
             fog: this.lobby.fogAlways,
             dblElite: this.lobby.doubleElites,
+            glass: this.lobby.glassCannon,
+            goldRush: this.lobby.goldRush,
+            wildChests: this.lobby.wildChests,
+            cramped: this.lobby.crampedLane,
           })}
         </div>
+        ${fogSliders("mp", this.lobby.fogThicknessPct, this.lobby.fogVisionRadius)}
         ${resetRandomBtns}
       </div>
     `;
@@ -2006,12 +2168,12 @@ export class MenuController {
       <header class="menu-header compact sp-header">
         <div class="sp-header-row">
           <div class="sp-header-titles">
-            <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+            ${this.backButton("main")}
             <h1 class="menu-title">Singleplayer</h1>
           </div>
           <div class="sp-header-links">
-            <button type="button" class="menu-btn small ghost" data-action="goto" data-screen="barracks">Barracks</button>
-            <button type="button" class="menu-btn small ghost" data-action="goto" data-screen="ai-lab">AI Lab</button>
+            <button type="button" class="menu-btn small ghost shine-btn" data-action="goto" data-screen="barracks"><span class="btn-label">Barracks</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn" data-action="goto" data-screen="ai-lab"><span class="btn-label">AI Lab</span></button>
           </div>
         </div>
         <div class="sp-stat-strip" aria-label="Progress">
@@ -2089,7 +2251,7 @@ export class MenuController {
 
     return `
       <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+        ${this.backButton("main")}
         <h1 class="menu-title">Multiplayer</h1>
         <p class="menu-lead">PeerJS lobbies — private codes or public find-match.</p>
       </header>
@@ -2172,7 +2334,7 @@ export class MenuController {
 
     return `
       <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="multiplayer">← Back</button>
+        ${this.backButton("multiplayer")}
         <h1 class="menu-title">Lobby</h1>
         <p class="menu-lead">Confirm mode and run options, then go online.</p>
       </header>
@@ -2231,6 +2393,43 @@ export class MenuController {
         })
         .join("");
       return `<div class="comp-grid heroes">${cards || emptyComp()}</div>`;
+    }
+    if (this.compendiumTab === "bonuses") {
+      let list = LEVEL_PASSIVE_LIST.filter((b) =>
+        this.matchesFilter(
+          b.name,
+          `${b.blurb} ${b.tag} ${b.heroId ? HEROES[b.heroId]?.name ?? "" : "all"}`,
+          b.rarity,
+        ),
+      );
+      if (this.compSort === "rarity") {
+        list = [...list].sort(
+          (a, b) => RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity) || a.name.localeCompare(b.name),
+        );
+      } else {
+        list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+      }
+      const cards = list
+        .map((b) => {
+          const heroName = b.heroId ? HEROES[b.heroId]?.name ?? b.heroId : null;
+          return `
+        <article class="comp-card">
+          <div class="comp-card-top">
+            <div>
+              <h3>${escapeHtml(b.name)}</h3>
+              <p class="comp-meta">${this.rarityBadge(b.rarity)}${
+                heroName
+                  ? ` · <span class="comp-hero-tag">${escapeHtml(heroName)}</span>`
+                  : " · All heroes"
+              }</p>
+            </div>
+          </div>
+          <p>${escapeHtml(b.blurb)}</p>
+          <p class="comp-meta">${escapeHtml(b.tag)}</p>
+        </article>`;
+        })
+        .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
     if (this.compendiumTab === "items") {
       let items = SHOP_ITEMS.filter(
@@ -2370,7 +2569,10 @@ export class MenuController {
         m.dualSpawners ||
         m.riftSurges ||
         m.volatileOrbs ||
-        m.chestMagnet
+        m.chestMagnet ||
+        m.emberRain ||
+        m.supplyDrops ||
+        m.chronoPulse
       );
     const cards = MAP_LIST.filter((m) => this.matchesFilter(m.name, m.blurb))
       .slice()
@@ -2389,7 +2591,9 @@ export class MenuController {
   }
 
   private renderCompendium(): string {
-    const tabs = (["heroes", "items", "artifacts", "relics", "enemies", "sends", "maps", "ascensions"] as const)
+    const tabs = (
+      ["heroes", "bonuses", "items", "artifacts", "relics", "enemies", "sends", "maps", "ascensions"] as const
+    )
       .map(
         (tab) => `
         <button type="button" class="chip ${this.compendiumTab === tab ? "selected" : ""}" data-action="comp-tab" data-tab="${tab}">
@@ -2399,6 +2603,7 @@ export class MenuController {
       .join("");
 
     const showRarity =
+      this.compendiumTab === "bonuses" ||
       this.compendiumTab === "items" ||
       this.compendiumTab === "artifacts" ||
       this.compendiumTab === "relics";
@@ -2411,25 +2616,27 @@ export class MenuController {
     ].join("");
 
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Compendium</h1>
-        <p class="menu-lead">Browse heroes, items, relics, enemies, and maps.</p>
-      </header>
-      <div class="choice-row">${tabs}</div>
-      <div class="comp-toolbar">
-        <input class="comp-search" data-field="comp-search" placeholder="Search…" value="${escapeHtml(this.compSearch)}" />
-        ${
-          showRarity
-            ? `<select class="comp-select" data-field="comp-rarity">${rarityOpts}</select>
-               <select class="comp-select" data-field="comp-sort">
-                 <option value="rarity"${this.compSort === "rarity" ? " selected" : ""}>Sort: rarity</option>
-                 <option value="name"${this.compSort === "name" ? " selected" : ""}>Sort: name</option>
-               </select>`
-            : ""
-        }
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${this.backButton("main")}
+          <h1 class="menu-title">Compendium</h1>
+          <p class="menu-lead">Reference for heroes, bonuses, gear, relics, enemies, and maps.</p>
+        </header>
+        <div class="choice-row">${tabs}</div>
+        <div class="comp-toolbar">
+          <input class="comp-search" data-field="comp-search" placeholder="Search…" value="${escapeHtml(this.compSearch)}" />
+          ${
+            showRarity
+              ? `<select class="comp-select" data-field="comp-rarity">${rarityOpts}</select>
+                 <select class="comp-select" data-field="comp-sort">
+                   <option value="rarity"${this.compSort === "rarity" ? " selected" : ""}>Sort: rarity</option>
+                   <option value="name"${this.compSort === "name" ? " selected" : ""}>Sort: name</option>
+                 </select>`
+              : ""
+          }
+        </div>
+        <div class="comp-list">${this.compendiumContent()}</div>
       </div>
-      <div class="comp-list">${this.compendiumContent()}</div>
     `;
   }
 
@@ -2437,46 +2644,45 @@ export class MenuController {
     return `
       <div class="info-layout">
         <header class="menu-header compact info-header">
-          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          ${this.backButton("main")}
           <h1 class="menu-title">Game Info</h1>
-          <p class="menu-lead">How the lane, sends, and progression loop work.</p>
+          <p class="menu-lead">Lane wars loop — send, spend, survive.</p>
         </header>
 
         <section class="info-hero">
           <p class="info-kicker">Core loop</p>
-          <h2>Sending enemies</h2>
-          <p>Passive gold ticks in. Spend it on <strong>send packs</strong> (keys 1–6, or the send bar). Sending does two things:</p>
-          <ul>
-            <li><strong>Raises your income</strong> permanently for the run (+gold/sec).</li>
-            <li><strong>Queues those creeps into the enemy's next wave</strong> — pressuring their hero and base.</li>
-          </ul>
-          <p>The rival lane sends back at you. Snowball economy <em>and</em> attack with the same gold. In <strong>Endless</strong>, there is no rival lane — sends queue into <em>your</em> next wave for income, and you fight what you buy.</p>
+          <h2>Send to grow</h2>
+          <p>Passive gold → buy <strong>send packs</strong> (1–6). Sending raises your income, then queues those creeps into the rival's next wave. Same gold snowballs economy and pressure.</p>
+          <details class="help-fold">
+            <summary>Endless &amp; lives</summary>
+            <p><strong>Endless</strong> has no rival lane — sends feed <em>your</em> next wave. Optional <strong>Lives / wave</strong> and <strong>Lives / run</strong> change respawn rules; out of run lives loses the side.</p>
+          </details>
         </section>
 
         <div class="info-grid">
           <section class="info-block">
             <h2>The line</h2>
-            <p>Hold your <strong>base</strong> on the left. Creeps spawn on the right and march toward you. By default you respawn when downed — only a destroyed base (or clearing the wave goal) ends the run. Run options can set <strong>Lives / wave</strong> (no mid-wave respawn after they're spent) and <strong>Lives / run</strong> (out of lives = no respawn; if every ally is out, that side loses). High ground grants bonus damage. Default win is a wave count (configurable); Unlimited / Endless fight until a base falls.</p>
+            <p>Base left, spawns right. Base death (or wave goal) ends the run. High ground = bonus damage. Win wave count is configurable; Unlimited fights until a base falls.</p>
           </section>
           <section class="info-block">
-            <h2>Shop, base &amp; artifacts</h2>
-            <p>Stand on the SHOP pad and press <strong>F</strong> (during or between waves). Optional Settings toggle <strong>Auto Open Shop</strong> opens the panel when you touch the pad. Buy gear with keys while the shop is open. <strong>Artifacts</strong> are placeable auto-turrets (own Compendium tab) that occupy free slots near your base — including the legendary <strong>Sovereign Nexus</strong>, which crowns a tough foe then commands every other artifact to fire. <strong>Upgrade Base (U)</strong> unlocks stronger send packs and scales cost/power; at certain levels you draft a <strong>base branch</strong>.</p>
+            <h2>Shop &amp; Artifacts</h2>
+            <p><strong>F</strong> on the SHOP pad. <strong>Artifacts</strong> auto-place near base. <strong>U</strong> upgrades send packs; some levels draft a base branch.</p>
           </section>
           <section class="info-block">
-            <h2>Heroes, abilities &amp; utility</h2>
-            <p>Starting roster is six heroes (2×3). Others unlock via Barracks commissions — some also need a challenge first (Lodestone, Chrona, Hive, Hex). Chaos unlocks barracks-only like Coil and Thorn. Each hero has a basic, mobility, ultimate, and passive. At a chosen level (default 10; configurable — including <strong>Run Start</strong>), draft a global <strong>Utility</strong> for the Spacebar slot. Full kits are in the Compendium.</p>
+            <h2>Heroes &amp; drafts</h2>
+            <p>Starter six free; others via Barracks / challenges. Level &amp; relic drafts support Skip + rerolls. Utility drafts into Space at a chosen level.</p>
           </section>
           <section class="info-block">
-            <h2>Relics &amp; level drafts</h2>
-            <p>Level-ups pause for a passive draft. Elite/boss clearances offer a relic draft. A few relics and items boost XP (Level Torrent, Mentor Sigil, XP Primer, etc.) — XP stays precious overall. Both drafts support <strong>Skip</strong> and <strong>reroll tokens</strong>. Open the Bag to inspect owned relics, items, and your passive.</p>
-          </section>
-          <section class="info-block">
-            <h2>Combat &amp; controls</h2>
-            <p>WASD / arrows to move. Hold attack and <strong>aim with the mouse</strong> (some heroes auto-aim). Defaults: LMB attack, RMB mobility, MMB ultimate, Space utility, 1–6 sends. Remap keyboard/mouse and Xbox pad under Settings → Controls.</p>
+            <h2>Controls</h2>
+            <p>WASD move · LMB attack · RMB mobility · MMB ult · Space utility · 1–6 sends. Remap in Settings → Controls.</p>
           </section>
           <section class="info-block">
             <h2>Maps &amp; Ascension</h2>
-            <p>Built-in layouts include cover, high ground, dual spawners, shifting obstacles, shrinking lanes, fog, hazards, rift surges, volatile orbs, and more. Some unlock via Barracks / challenges. Ascension stacks through <strong>A15</strong>. The Workshop <strong>Map Editor</strong> builds custom maps (base, respawn, optional shops, spawners, specials + tooltips, load template, export JSON).</p>
+            <p>Special layouts + A0–A15 modifiers. Custom maps/heroes in Workshop. Full kits in the Compendium.</p>
+          </section>
+          <section class="info-block">
+            <h2>Meta</h2>
+            <p><strong>War Crests</strong> → Barracks. Challenges unlock purchases (not free). Export/import saves in Settings.</p>
           </section>
         </div>
 
@@ -2485,38 +2691,23 @@ export class MenuController {
           <div class="info-band-cols">
             <div>
               <h3>Singleplayer</h3>
-              <p>Classic AI or a trained neural school (Rookie→Brutal). Team size 1v1–3v3 with AI allies, or Endless solo survival. Run options include map, Ascension, starting gold, draft sizes, and creative toggles.</p>
+              <p>Classic or neural AI · 1v1–3v3 · Endless. Map, Ascension, creative toggles.</p>
             </div>
             <div>
               <h3>Multiplayer</h3>
-              <p>PeerJS lobbies (private code or public find-match). 1v1 / 2v2 / 3v3 PvP and 2p / 3p PvE. Host sets options; allies share a lane.</p>
+              <p>PeerJS lobbies · 1v1 / 2v2 / 3v3 · 2p/3p PvE. Host sets run options; allies share a lane.</p>
             </div>
           </div>
         </section>
 
-        <div class="info-grid info-grid-meta">
-          <section class="info-block">
-            <h2>Meta progression</h2>
-            <p><strong>War Crests</strong> pay out at run end. Spend them in the <strong>Barracks</strong> on permanent ranks and hero unlocks. <strong>Ascension</strong> (A0–A15) stacks modifiers; win at your highest unlocked level to open the next — Crests scale with it. <strong>Challenges</strong> unlock Barracks purchases (rewards are not free). <strong>Stats</strong> tracks career numbers. Export/import save JSON from Settings.</p>
-          </section>
-          <section class="info-block">
-            <h2>Workshop</h2>
-            <p><strong>Map Editor</strong> and <strong>Hero Editor</strong> for custom content. <strong>AI Lab</strong> trains brains on unlimited-wave duels; checkpoints become difficulty tiers for solo / PvE. Compendium lists heroes, maps, and more.</p>
-          </section>
-          <section class="info-block">
-            <h2>Enemy lane panel</h2>
-            <p>Top-right shows opponent HP, level, income, fight status, and whether they are sending — without leaving your lane. <strong>View lane</strong> flips the camera to their lane; toggle again to return.</p>
-          </section>
-          <section class="info-block">
-            <h2>Audio &amp; settings</h2>
-            <p>Master, music, and SFX volumes live in Settings. Menu music shuffles on title screens (toggleable). Combat SFX are procedural; in-battle music is not wired yet.</p>
-          </section>
-        </div>
-
-        <section class="info-footnote">
-          <h2>Online note</h2>
-          <p>Multiplayer runs over PeerJS with a host-authoritative sim. Lobbies and matches work, but expect ongoing polish — desync edge cases and deeper PvP feel are still being tightened.</p>
-        </section>
+        <details class="help-fold">
+          <summary>More detail</summary>
+          <ul>
+            <li><strong>Enemy panel</strong> — top-right HP / income / send status; View lane flips camera.</li>
+            <li><strong>AI Lab</strong> — train schools for Rookie→Brutal solo / PvE opponents.</li>
+            <li><strong>Online</strong> — host-authoritative PeerJS; expect ongoing sync polish.</li>
+          </ul>
+        </details>
       </div>
     `;
   }
@@ -2530,61 +2721,63 @@ export class MenuController {
       )
       .join("");
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Settings</h1>
-        <p class="menu-lead">Client preferences — saved in this browser.</p>
-      </header>
-      <section class="menu-section settings-list">
-        <button type="button" class="setting-row setting-nav" data-action="goto" data-screen="controls">
-          <span>Controls<em>Remap mouse / keys</em></span>
-          <span class="chevron">›</span>
-        </button>
-        <label class="setting-row">
-          <span>Master volume <em id="volume-label">${Math.round(s.masterVolume * 100)}%</em></span>
-          <input type="range" min="0" max="1" step="0.05" value="${s.masterVolume}" data-field="volume" />
-        </label>
-        <label class="setting-row">
-          <span>Music volume <em id="music-volume-label">${Math.round(s.musicVolume * 100)}%</em></span>
-          <input type="range" min="0" max="1" step="0.05" value="${s.musicVolume}" data-field="music-volume" />
-        </label>
-        <label class="setting-row">
-          <span>SFX volume <em id="sfx-volume-label">${Math.round(s.sfxVolume * 100)}%</em></span>
-          <input type="range" min="0" max="1" step="0.05" value="${s.sfxVolume}" data-field="sfx-volume" />
-        </label>
-        <label class="setting-row check">
-          <span>Main menu music<em>Shuffle playlist on the title screens</em></span>
-          <input type="checkbox" data-setting="menuMusicEnabled" ${s.menuMusicEnabled ? "checked" : ""} />
-        </label>
-        <label class="setting-row check">
-          <span>Show damage numbers</span>
-          <input type="checkbox" data-setting="showDamageNumbers" ${s.showDamageNumbers ? "checked" : ""} />
-        </label>
-        <label class="setting-row check">
-          <span>Auto-open shop<em>Open once when you step onto the shop pad</em></span>
-          <input type="checkbox" data-setting="autoOpenShop" ${s.autoOpenShop ? "checked" : ""} />
-        </label>
-        <label class="setting-row check">
-          <span>Reject peer custom content<em>Block MP matches that require custom maps/heroes</em></span>
-          <input type="checkbox" data-setting="rejectPeerCustoms" ${s.rejectPeerCustoms ? "checked" : ""} />
-        </label>
-        <label class="setting-row">
-          <span>Damage screen effects<em>Flash / vignette / shake intensity</em></span>
-          <select data-field="damage-fx">${fxOpts}</select>
-        </label>
-        <label class="setting-row check">
-          <span>Screen shake</span>
-          <input type="checkbox" data-setting="screenShake" ${s.screenShake ? "checked" : ""} />
-        </label>
-        <label class="setting-row check">
-          <span>Reduce motion</span>
-          <input type="checkbox" data-setting="reduceMotion" ${s.reduceMotion ? "checked" : ""} />
-        </label>
-      </section>
-      <div class="menu-footer">
-        <button type="button" class="menu-btn" data-action="export-save">Export save JSON</button>
-        <button type="button" class="menu-btn" data-action="import-save">Import save JSON</button>
-        <button type="button" class="menu-btn ghost" data-action="reset-settings">Reset to defaults</button>
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${this.backButton("main")}
+          <h1 class="menu-title">Settings</h1>
+          <p class="menu-lead">Local client prefs — saved in this browser.</p>
+        </header>
+        <section class="menu-section settings-list prefs-grid">
+          <button type="button" class="setting-row setting-nav" data-action="goto" data-screen="controls">
+            <span>Controls<em>Keyboard, mouse, Xbox pad</em></span>
+            <span class="chevron">›</span>
+          </button>
+          <label class="setting-row">
+            <span>Master volume <em id="volume-label">${Math.round(s.masterVolume * 100)}%</em></span>
+            <input type="range" min="0" max="1" step="0.05" value="${s.masterVolume}" data-field="volume" />
+          </label>
+          <label class="setting-row">
+            <span>Music volume <em id="music-volume-label">${Math.round(s.musicVolume * 100)}%</em></span>
+            <input type="range" min="0" max="1" step="0.05" value="${s.musicVolume}" data-field="music-volume" />
+          </label>
+          <label class="setting-row">
+            <span>SFX volume <em id="sfx-volume-label">${Math.round(s.sfxVolume * 100)}%</em></span>
+            <input type="range" min="0" max="1" step="0.05" value="${s.sfxVolume}" data-field="sfx-volume" />
+          </label>
+          <label class="setting-row check">
+            <span>Main menu music<em>Shuffle on title screens</em></span>
+            <input type="checkbox" data-setting="menuMusicEnabled" ${s.menuMusicEnabled ? "checked" : ""} />
+          </label>
+          <label class="setting-row check">
+            <span>Show damage numbers</span>
+            <input type="checkbox" data-setting="showDamageNumbers" ${s.showDamageNumbers ? "checked" : ""} />
+          </label>
+          <label class="setting-row check">
+            <span>Auto-open shop<em>Once on shop pad</em></span>
+            <input type="checkbox" data-setting="autoOpenShop" ${s.autoOpenShop ? "checked" : ""} />
+          </label>
+          <label class="setting-row check">
+            <span>Reject peer customs<em>Block MP custom maps/heroes</em></span>
+            <input type="checkbox" data-setting="rejectPeerCustoms" ${s.rejectPeerCustoms ? "checked" : ""} />
+          </label>
+          <label class="setting-row">
+            <span>Damage screen FX<em>Flash / vignette</em></span>
+            <select data-field="damage-fx">${fxOpts}</select>
+          </label>
+          <label class="setting-row check">
+            <span>Screen shake</span>
+            <input type="checkbox" data-setting="screenShake" ${s.screenShake ? "checked" : ""} />
+          </label>
+          <label class="setting-row check">
+            <span>Reduce motion<em>Disables shine &amp; idle FX</em></span>
+            <input type="checkbox" data-setting="reduceMotion" ${s.reduceMotion ? "checked" : ""} />
+          </label>
+        </section>
+        <div class="menu-footer">
+          <button type="button" class="menu-btn shine-btn" data-action="export-save"><span class="btn-label">Export save</span></button>
+          <button type="button" class="menu-btn shine-btn" data-action="import-save"><span class="btn-label">Import save</span></button>
+          <button type="button" class="menu-btn ghost danger" data-action="reset-settings"><span class="btn-label">Reset defaults</span></button>
+        </div>
       </div>
     `;
   }
@@ -2618,25 +2811,27 @@ export class MenuController {
     };
 
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="settings">← Back</button>
-        <h1 class="menu-title">Controls</h1>
-        <p class="menu-lead">Keyboard/mouse + Xbox pad. Left stick always moves. Remap keys and pad buttons separately.</p>
-      </header>
-      <section class="menu-section settings-list">
-        <label class="setting-row">
-          <span>Enable gamepad</span>
-          <input type="checkbox" data-setting="gamepadEnabled" ${this.settings.gamepadEnabled ? "checked" : ""} />
-        </label>
-        ${section("Combat", COMBAT_ACTIONS)}
-        ${section("Movement", MOVE_ACTIONS)}
-        ${section("Utility / Sends", UTILITY_ACTIONS)}
-      </section>
-      ${
-        this.rebinding
-          ? `<p class="menu-footnote">Listening… Esc to cancel.</p>`
-          : `<div class="menu-footer"><button type="button" class="menu-btn ghost" data-action="reset-binds">Reset defaults</button></div>`
-      }
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${this.backButton("settings")}
+          <h1 class="menu-title">Controls</h1>
+          <p class="menu-lead">Remap keyboard/mouse and Xbox pad separately. Left stick always moves.</p>
+        </header>
+        <section class="menu-section settings-list">
+          <label class="setting-row">
+            <span>Enable gamepad</span>
+            <input type="checkbox" data-setting="gamepadEnabled" ${this.settings.gamepadEnabled ? "checked" : ""} />
+          </label>
+          ${section("Combat", COMBAT_ACTIONS)}
+          ${section("Movement", MOVE_ACTIONS)}
+          ${section("Utility / Sends", UTILITY_ACTIONS)}
+        </section>
+        ${
+          this.rebinding
+            ? `<p class="menu-footnote">Listening… Esc to cancel.</p>`
+            : `<div class="menu-footer"><button type="button" class="menu-btn ghost danger" data-action="reset-binds"><span class="btn-label">Reset defaults</span></button></div>`
+        }
+      </div>
     `;
   }
 
@@ -2659,13 +2854,13 @@ export class MenuController {
     return `
       <div class="meta-hub">
         <header class="menu-header compact">
-          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          ${this.backButton("main")}
           <h1 class="menu-title">Challenges</h1>
-          <p class="menu-lead">Complete mid/end-run goals to unlock Barracks purchases — rewards are not free.</p>
+          <p class="menu-lead">Unlock Barracks purchases — rewards still cost Crests.</p>
         </header>
         <div class="meta-card-grid">${cards}</div>
         <div class="menu-footer">
-          <button type="button" class="menu-btn" data-action="goto" data-screen="barracks">Open Barracks</button>
+          <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="barracks"><span class="btn-label">Open Barracks</span></button>
         </div>
       </div>
     `;
@@ -2681,33 +2876,35 @@ export class MenuController {
       { key: "skipWaves", label: "Skip waves (N)" },
       { key: "forceChest", label: "Force chest (C)" },
       { key: "infiniteRerolls", label: "Infinite rerolls" },
-      { key: "oneShot", label: "One-shot (reserved)" },
+      { key: "oneShot", label: "One-shot" },
       { key: "freeShop", label: "Free shop" },
       { key: "revealFog", label: "Reveal fog" },
     ];
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">Cheats</h1>
-        <p class="menu-lead" style="color:#e08060">Sandbox profile only. Enabling caches your real Barracks save and swaps a separate cheater profile so normal progress is not polluted.</p>
-      </header>
-      <section class="menu-section muted-box">
-        <button type="button" class="menu-btn ${on ? "" : "primary"}" data-action="toggle-cheats">
-          ${on ? "Disable cheats (restore real profile)" : "Enable cheats (enter sandbox)"}
-        </button>
-        <p class="menu-note">${on ? "CHEATS ACTIVE — sandbox profile" : "Cheats off — real profile"}</p>
-      </section>
-      <section class="menu-section settings-list">
-        ${toggles
-          .map(
-            (t) => `
-          <label class="setting-row">
-            <span>${t.label}</span>
-            <input type="checkbox" data-cheat="${t.key}" ${o[t.key] ? "checked" : ""} ${on ? "" : "disabled"} />
-          </label>`,
-          )
-          .join("")}
-      </section>
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${this.backButton("main")}
+          <h1 class="menu-title">Cheats</h1>
+          <p class="menu-lead" style="color:#e08060">Sandbox profile — real Barracks progress stays cached.</p>
+        </header>
+        <section class="menu-section muted-box">
+          <button type="button" class="menu-btn ${on ? "danger" : "primary shine-btn"}" data-action="toggle-cheats">
+            <span class="btn-label">${on ? "Disable cheats · restore profile" : "Enable cheats · enter sandbox"}</span>
+          </button>
+          <p class="menu-note">${on ? "ACTIVE — sandbox profile" : "Off — real profile"} · Solo-only gameplay cheats; Unlock All always applies.</p>
+        </section>
+        <section class="menu-section cheats-toggle-grid">
+          ${toggles
+            .map(
+              (t) => `
+            <label class="setting-row">
+              <span>${t.label}${t.key === "unlockAll" ? "" : " <em>(solo)</em>"}</span>
+              <input type="checkbox" data-cheat="${t.key}" ${o[t.key] ? "checked" : ""} ${on ? "" : "disabled"} />
+            </label>`,
+            )
+            .join("")}
+        </section>
+      </div>
     `;
   }
 
@@ -2734,72 +2931,77 @@ export class MenuController {
             <div class="history-row">
               <strong>${escapeHtml(s.name)}</strong>
               <span>${escapeHtml(s.recipe)} · gen ${escapeHtml(gen)} · ${escapeHtml(new Date(s.trainedAt).toLocaleDateString())}
-                <button type="button" class="menu-btn ghost" data-action="ai-del-school" data-school="${escapeHtml(s.name)}" style="padding:0.2rem 0.5rem;margin-left:0.5rem">Delete</button>
+                <button type="button" class="menu-btn tiny ghost danger" data-action="ai-del-school" data-school="${escapeHtml(s.name)}">Delete</button>
               </span>
             </div>`;
             })
             .join("");
 
     return `
-      <header class="menu-header compact">
-        <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
-        <h1 class="menu-title">AI Lab</h1>
-        <p class="menu-lead">Train brains on unlimited-wave duels. Checkpoints become difficulty tiers.</p>
-      </header>
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${this.backButton("main")}
+          <h1 class="menu-title">AI Lab</h1>
+          <p class="menu-lead">Train duel brains → Rookie–Brutal solo / PvE tiers.</p>
+        </header>
 
-      <section class="menu-section muted-box">
-        <h2>Opponent for matches</h2>
-        <label class="setting-row">
-          <span>Selected AI</span>
-          <select data-field="ai-opponent">${oppOpts}</select>
-        </label>
-      </section>
+        <div class="ai-lab-layout">
+          <section class="menu-section muted-box">
+            <h2>Train</h2>
+            <label class="setting-row">
+              <span>Recipe</span>
+              <select id="ai-recipe">${recipeOpts}</select>
+            </label>
+            <div class="ai-train-params">
+              <label class="setting-row">
+                <span>Gens</span>
+                <input type="number" id="ai-gens" min="3" max="40" value="10" />
+              </label>
+              <label class="setting-row">
+                <span>Pop</span>
+                <input type="number" id="ai-pop" min="4" max="24" value="8" />
+              </label>
+              <label class="setting-row">
+                <span>Trials</span>
+                <input type="number" id="ai-trials" min="1" max="6" value="2" />
+              </label>
+              <label class="setting-row">
+                <span>Duel cap (s)</span>
+                <input type="number" id="ai-seconds" min="60" max="400" value="180" />
+              </label>
+            </div>
+            <label class="setting-row">
+              <span>School name</span>
+              <input id="ai-name" maxlength="24" value="balanced" />
+            </label>
+            <p class="menu-note" id="ai-status">${escapeHtml(
+              prog
+                ? prog.message
+                : store.schools.length
+                  ? `${store.schools.length} school(s) saved.`
+                  : "No schools yet — Classic AI is used.",
+            )}</p>
+            <div class="choice-row">
+              <button type="button" class="menu-btn primary shine-btn" id="ai-start" data-action="ai-start" ${isTraining() ? "disabled" : ""}><span class="btn-label">Start training</span></button>
+              <button type="button" class="menu-btn danger" id="ai-stop" data-action="ai-stop" ${isTraining() ? "" : "disabled"}><span class="btn-label">Stop</span></button>
+            </div>
+          </section>
 
-      <section class="menu-section muted-box">
-        <h2>Train</h2>
-        <label class="setting-row">
-          <span>Recipe</span>
-          <select id="ai-recipe">${recipeOpts}</select>
-        </label>
-        <div class="choice-row wrap" style="gap:0.75rem">
-          <label class="setting-row" style="flex:1;min-width:5rem">
-            <span>Gens</span>
-            <input type="number" id="ai-gens" min="3" max="40" value="10" />
-          </label>
-          <label class="setting-row" style="flex:1;min-width:5rem">
-            <span>Pop</span>
-            <input type="number" id="ai-pop" min="4" max="24" value="8" />
-          </label>
-          <label class="setting-row" style="flex:1;min-width:5rem">
-            <span>Trials</span>
-            <input type="number" id="ai-trials" min="1" max="6" value="2" />
-          </label>
-          <label class="setting-row" style="flex:1;min-width:5rem">
-            <span>Duel cap (s)</span>
-            <input type="number" id="ai-seconds" min="60" max="400" value="180" />
-          </label>
+          <div class="ai-lab-side">
+            <section class="menu-section muted-box">
+              <h2>Match opponent</h2>
+              <label class="setting-row">
+                <span>Selected AI</span>
+                <select data-field="ai-opponent">${oppOpts}</select>
+              </label>
+            </section>
+            <section class="menu-section">
+              <h2>Schools</h2>
+              <div class="history-list">${schools}</div>
+            </section>
+          </div>
         </div>
-        <label class="setting-row">
-          <span>School name</span>
-          <input id="ai-name" maxlength="24" value="balanced" />
-        </label>
-        <p class="menu-note" id="ai-status">${escapeHtml(
-          prog
-            ? prog.message
-            : store.schools.length
-              ? `${store.schools.length} school(s) saved.`
-              : "No trained schools yet — Classic AI will be used.",
-        )}</p>
-        <div class="choice-row">
-          <button type="button" class="menu-btn primary" id="ai-start" data-action="ai-start" ${isTraining() ? "disabled" : ""}>Start training</button>
-          <button type="button" class="menu-btn" id="ai-stop" data-action="ai-stop" ${isTraining() ? "" : "disabled"}>Stop</button>
-        </div>
-      </section>
-
-      <section class="menu-section">
-        <h2>Schools</h2>
-        <div class="history-list">${schools}</div>
-      </section>
+      </div>
     `;
   }
 
@@ -2825,8 +3027,8 @@ export class MenuController {
             <em>${escapeHtml(rankLabel)}</em>
           </div>
           <span class="stat-hint">${escapeHtml(u.blurb)}${escapeHtml(challengeNote)}</span>
-          <button type="button" class="menu-btn ${canBuy ? "primary" : ""}" data-action="buy-meta" data-upgrade-id="${u.id}" ${maxed || !canBuy ? "disabled" : ""}>
-            ${maxed ? "Max" : challengeBlocked ? "Challenge" : `${cost} crests`}
+          <button type="button" class="menu-btn ${canBuy ? "primary shine-btn" : ""}" data-action="buy-meta" data-upgrade-id="${u.id}" ${maxed || !canBuy ? "disabled" : ""}>
+            <span class="btn-label">${maxed ? "Max" : challengeBlocked ? "Challenge" : `${cost} crests`}</span>
           </button>
         </article>`;
     }).join("");
@@ -2836,35 +3038,35 @@ export class MenuController {
     return `
       <div class="meta-hub">
         <header class="menu-header compact">
-          <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
+          ${this.backButton("main")}
           <h1 class="menu-title">Barracks</h1>
-          <p class="menu-lead">Permanent upgrades bought with War Crests.</p>
+          <p class="menu-lead">Spend War Crests on permanent ranks &amp; unlocks.</p>
         </header>
         <div class="menu-hero-stats" aria-label="Progression summary">
           <div class="stat-tile stat-crest">
             <p class="stat-label">War Crests</p>
             <p class="stat-value">${store.crests}</p>
-            <p class="stat-hint">Spend below · earn on run end</p>
+            <p class="stat-hint">Earn at run end</p>
           </div>
           <div class="stat-tile">
             <p class="stat-label">Wins</p>
             <p class="stat-value">${store.totalWins}</p>
-            <p class="stat-hint">${store.totalRuns} runs total</p>
+            <p class="stat-hint">${store.totalRuns} runs</p>
           </div>
           <div class="stat-tile">
             <p class="stat-label">Best wave</p>
             <p class="stat-value">${store.bestWave}</p>
-            <p class="stat-hint">Highest reached</p>
+            <p class="stat-hint">Career peak</p>
           </div>
           <div class="stat-tile">
             <p class="stat-label">Ascension</p>
             <p class="stat-value">A${store.ascensionUnlocked}</p>
-            <p class="stat-hint">${escapeHtml(ascName)} unlocked</p>
+            <p class="stat-hint">${escapeHtml(ascName)}</p>
           </div>
         </div>
         <h2 class="meta-section-title">Upgrades</h2>
         <div class="meta-card-grid">${cards}</div>
-        <p class="menu-note">Win at your highest Ascension to unlock the next. Crest payouts scale with waves, sends, and Ascension.</p>
+        <p class="menu-note">Win at max Ascension to unlock the next. Crests scale with waves, sends, and Ascension.</p>
       </div>
     `;
   }

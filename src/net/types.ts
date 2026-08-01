@@ -55,8 +55,14 @@ export type LobbyState = {
   disableSends?: boolean;
   disableRelics?: boolean;
   fogAlways?: boolean;
+  fogThicknessPct?: number;
+  fogVisionRadius?: number;
   doubleElites?: boolean;
   suddenDeathBaseHp?: number;
+  glassCannon?: boolean;
+  goldRush?: boolean;
+  wildChests?: boolean;
+  crampedLane?: boolean;
 };
 
 /** Host-synced creative / run extras carried on lobby + start. */
@@ -84,8 +90,14 @@ export type MpRunExtras = {
   disableSends?: boolean;
   disableRelics?: boolean;
   fogAlways?: boolean;
+  fogThicknessPct?: number;
+  fogVisionRadius?: number;
   doubleElites?: boolean;
   suddenDeathBaseHp?: number;
+  glassCannon?: boolean;
+  goldRush?: boolean;
+  wildChests?: boolean;
+  crampedLane?: boolean;
 };
 
 export type NetMode = "host" | "client" | null;
@@ -113,7 +125,7 @@ export type CombatIntent = {
   rerollLevel: boolean;
   rerollRelic: boolean;
   viewOpponent: boolean | null;
-  /** Gyro: hold mobility to charge hook (AI / net). */
+  /** Gyro / Gunner: hold mobility to charge hook or fire arsenal. */
   mobilityHeld?: boolean;
 };
 
@@ -154,6 +166,8 @@ export type NetMsg =
     }
   | { k: "intent"; seat: number; intent: CombatIntent; seq: number }
   | { k: "state"; snap: MatchSnap; seq: number }
+  /** Client tells the host which lane it is watching (full snapshots follow). */
+  | { k: "view"; t: MpTeam }
   | { k: "full" }
   | { k: "ping"; t: number }
   | { k: "pong"; t: number };
@@ -170,6 +184,26 @@ export type HeroSnap = {
   abilityCds: number[];
   barrierTimer: number;
   whirlwindTimer: number;
+  radius?: number;
+  /** Gyro kit VFX state — clients cannot derive it. */
+  bladeMode?: string;
+  bladeSpin?: number;
+  bladeAngle?: number;
+  bladeTipX?: number;
+  bladeTipY?: number;
+  bladeHookCharging?: boolean;
+  bladeHookCharge?: number;
+  /** Gunner arsenal VFX / HUD. */
+  gunnerWeaponIndex?: number;
+  gunnerAmmo?: number;
+  gunnerReload?: number;
+  gunnerAiming?: boolean;
+  gunnerAimTime?: number;
+  gunnerSpin?: number;
+  gunnerCharge?: number;
+  gunnerSelfDamageFlash?: number;
+  /** Vector momentum meter. */
+  momentum?: number;
 };
 
 export type EnemySnap = {
@@ -242,12 +276,21 @@ export type LaneSnap = {
     hostile?: boolean;
   }[];
   fx: { x: number; y: number; radius: number; color: string; life: number; maxLife: number }[];
-  beam: { x1: number; y1: number; x2: number; y2: number; life: number } | null;
+  beam: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    life: number;
+    color?: string;
+    width?: number;
+  } | null;
   pendingSends: { enemies: number; hpScale: number }[];
   mapId: MapId | string;
   utilityDraft: import("../data/utilities").UtilityId[] | null;
   curseDraft: import("../data/curses").CurseId[] | null;
-  chestDraft: { label: string; blurb: string }[] | null;
+  /** Display payload only — the host keeps the authoritative reward per index. */
+  chestDraft: { label: string; blurb: string; kind?: string; amount?: number }[] | null;
   baseBranchDraft: import("../data/baseBranches").BaseBranchId[] | null;
   utilityId: import("../data/utilities").UtilityId | null;
   levelPassives: LevelPassiveId[];
@@ -260,13 +303,92 @@ export type LaneSnap = {
   curseIncomeTaxTimer: number;
   curseIncomeTaxMul: number;
   curseFogTimer: number;
+  /* --- world state (added v0.9: clients could not render these) --- */
+  curseShopRefreshSlowTimer?: number;
+  curseShopRefreshSlowMul?: number;
+  shopRefreshTimer?: number;
+  chests?: {
+    id: number;
+    x: number;
+    y: number;
+    radius: number;
+    rarity: string;
+    openProgress: number;
+    openDuration: number;
+    life: number;
+  }[];
+  hexZones?: { x: number; y: number; radius: number; life: number }[];
+  mapOrbs?: { x: number; y: number; radius: number; fuse: number }[];
+  teleporters?: {
+    a: { x: number; y: number } | null;
+    b: { x: number; y: number } | null;
+    linked: boolean;
+  };
+  mines?: { id: number; x: number; y: number; radius: number; armTimer: number }[];
+  mapFogActive?: boolean;
+  fogOpacity?: number;
+  fogVisionRadiusResolved?: number;
+  mapEclipseActive?: boolean;
+  mapHazardX?: number;
+  mapSupplyCrates?: {
+    id: number;
+    x: number;
+    y: number;
+    radius: number;
+    life: number;
+    gold: number;
+  }[];
+  /** Only sent for maps whose geometry moves (shifting obstacles / shrinking lane). */
+  laneGeometry?: {
+    laneTop: number;
+    laneBottom: number;
+    laneLeft?: number;
+    laneRight?: number;
+    obstacles: { x: number; y: number; w: number; h: number }[];
+  };
+  /** Humans in the match — drives the client's pause / cheat policy. */
+  humanPlayers?: number;
+  /** Rewards queued behind the open draft (kinds only; host keeps payloads). */
+  draftQueueKinds?: string[];
 };
+
+/**
+ * HUD-only view of a lane the player is NOT looking at. Cheap enough to send
+ * every frame; upgraded to a full `LaneSnap` the moment the player looks over.
+ */
+export type LaneSummary = {
+  summary: true;
+  status: string;
+  wave: number;
+  waveTier: string;
+  waveTimer: number;
+  spawning: boolean;
+  baseHp: number;
+  baseMaxHp: number;
+  baseLevel: number;
+  enemyCount: number;
+  sentIncoming: number;
+  players: {
+    slot: number | null;
+    heroId: HeroId;
+    alive: boolean;
+    hp: number;
+    maxHp: number;
+    level: number;
+  }[];
+};
+
+export type LanePayload = LaneSnap | LaneSummary;
+
+export function isLaneSummary(p: LanePayload): p is LaneSummary {
+  return (p as LaneSummary).summary === true;
+}
 
 export type MatchSnap = {
   mode: MatchMode;
   myTeam: MpTeam;
   viewTeam: MpTeam;
-  lanes: [LaneSnap, LaneSnap];
+  lanes: [LanePayload, LanePayload];
   ended: boolean;
   winnerTeam: MpTeam | null;
 };

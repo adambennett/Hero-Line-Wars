@@ -9,23 +9,25 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, **AI Lab**, Compendium, Game Info, Settings, and Quit.
+Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, Barracks / Stats / Challenges, Workshop editors, **AI Lab**, Compendium, Game Info, Settings, and Quit. Menus use a shared dark steel / amber-teal layout system (grids + `.shine-btn` hover); Reduce motion in Settings turns hover shine and idle FX off.
 
 | Control | Action |
 |---------|--------|
 | WASD / arrows | Move |
 | LMB (hold) | Basic attack (unique per hero; mouse-aimed except Prism auto-beam) |
-| RMB | Mobility ability |
-| MMB | Ultimate |
+| RMB | Mobility ability (Gunner: fire equipped heavy weapon) |
+| MMB | Ultimate (Gunner: cycle arsenal) |
 | 1–6 | Send packs (upgrade base to unlock & strengthen) |
 | U / Upgrade Base | Spend gold — unlocks packs and raises cost/power of existing ones |
 | F | Open/close shop (stand on the SHOP pad near base) |
 | 4–6 | Buy offered shop items while the shop is open |
-| Esc / Pause | Pause (Continue, Settings, abandon with confirm) |
+| Esc / Pause | Pause (Continue, Settings, abandon with confirm). With two or more human players it opens the same menu **without** pausing — the match keeps running |
 | Bag | Inspect owned relics/items + passive |
 | View lane | Flip the camera to the opponent’s lane |
 
 Remap Attack / Mobility / Ultimate under **Settings → Controls**. Master volume scales procedural Web Audio SFX. **Reject peer custom content** (Settings) refuses multiplayer matches that require workshop maps/heroes so those payloads are never loaded for that match.
+
+Anything that would stop the clock — pause, bag, shop, reward drafts — only pauses when exactly **one** human is playing (offline solo runs still pause, even the dual-lane and AI Lab ones). In multi-human matches reward drafts appear in a compact panel, queue up if you earn several, and never freeze the wave. Gameplay cheats are likewise ignored whenever more than one human is in the game.
 
 Default win condition is **10 waves** (configurable; **Unlimited** = base death only). High ground grants bonus damage. You **respawn** if downed — only a destroyed **base** (or clearing the wave goal) ends the run.
 
@@ -39,8 +41,8 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 
 ## Systems
 
-- **Maps** — Classic Lane, Split Ridge, Narrow Pass, Open Flank, Twin Gates, Serpentine, Fortress Approach, Crossfire, Island Hop, Shifting Grounds.
-- **Heroes** — Ranger, Warden, Scatter, Arbalest, Prism, Frost, RNG Wizard, Coil, Thorn — each with aim mode (free / engage / auto), passive, and abilities (see Compendium).
+- **Maps** — Classic Lane through Orb Foundry, plus **Mazing**, **Hex Bowl**, and **Capsule Coast**. Workshop editor supports non-rect playable shapes, new specials (ember rain / supply drops / chrono pulse), and bounce / portal / relay tools.
+- **Heroes** — Full roster including signature kits (Warp, Gyro, Gunner, Sapper, Vector, …). Each has aim mode, passive, and abilities (see Compendium). Hero-specific level bonuses appear as rare draft picks.
 - **Sends & income** — Passive gold/sec; spend gold to queue enemies into the **opponent’s** next wave (and raise your income).
 - **Base upgrades** — Unlock stronger send packs and scale cost/income/HP of already-unlocked packs.
 - **XP / relics** — Level drafts and relic drafts (Skip supported); Inventory shows descriptions.
@@ -58,6 +60,8 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 | `npm run desktop:dist` | `dist-desktop/` | **itch / Steam** Windows packages |
 | `npm run desktop:dist:win` | `dist-desktop/` | Windows-only desktop package |
 | `npm run preview` | — | Preview the Pages build |
+| `npm test` | — | Vitest suite (sim parity, pause/cheat policy, drafts, save + custom-map validation) |
+| `npm run typecheck` | — | Type-check `src` **and** `tests` |
 
 **GitHub Pages:** pushes to `master` run [`.github/workflows/deploy-pages.yml`](./.github/workflows/deploy-pages.yml), which builds `dist/` and deploys it. One-time: **Settings → Pages → Source: GitHub Actions**. URL is `https://<owner>.github.io/<repo>/`.
 

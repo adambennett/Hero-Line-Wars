@@ -11,7 +11,7 @@ import type { GameState } from "../game/state";
 import { placeTurret } from "./turrets";
 import { playSfx } from "./audio";
 import { isItemUnlocked } from "../meta/contentLocks";
-import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { gameplayCheats } from "../meta/cheats";
 
 export function refreshShopOffer(state: GameState): void {
   state.shopOffer = rollShopOffer(state.shopOffer);
@@ -48,7 +48,7 @@ export function toggleShopFreeze(state: GameState): void {
 }
 
 export function shopItemCost(state: GameState, baseCost: number): number {
-  if (areCheatsEnabled() && loadCheatOptions().freeShop) return 0;
+  if (gameplayCheats(state)?.freeShop) return 0;
   return Math.max(
     1,
     Math.round(baseCost * state.modifiers.shopPriceMul * (state.baseBranchMods?.shopPriceMul ?? 1)),

@@ -71,7 +71,7 @@ export class HeroEditorPanel {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Hero Editor</h1>
-        <p class="menu-lead">Remix existing abilities &amp; passives. Export JSON to share — MP syncs kits at match start.</p>
+        <p class="menu-lead">Remix abilities &amp; passives. Export JSON · MP syncs kits at start.</p>
       </header>
       <div class="workshop-layout hero-editor">
         <div class="workshop-form-cols">
@@ -110,11 +110,11 @@ export class HeroEditorPanel {
             <label class="run-field"><span>Ultimate</span><select data-he="ultimate">${ultOpts}</select></label>
             <label class="run-field"><span>Ultimate CD</span><input type="number" step="0.1" data-he="ultCd" value="${d.abilities[1].cooldown}" /></label>
             <div class="workshop-actions">
-              <button type="button" class="menu-btn primary" data-action="he-save">Save</button>
-              <button type="button" class="menu-btn" data-action="he-new">New</button>
-              <button type="button" class="menu-btn" data-action="he-export">Export JSON</button>
-              <label class="menu-btn ghost file-btn">Import<input type="file" accept="application/json,.json" data-action="he-import" hidden /></label>
-              <button type="button" class="menu-btn ghost" data-action="he-delete">Delete</button>
+              <button type="button" class="menu-btn primary shine-btn" data-action="he-save"><span class="btn-label">Save</span></button>
+              <button type="button" class="menu-btn shine-btn" data-action="he-new"><span class="btn-label">New</span></button>
+              <button type="button" class="menu-btn shine-btn" data-action="he-export"><span class="btn-label">Export JSON</span></button>
+              <label class="menu-btn ghost file-btn shine-btn"><span class="btn-label">Import</span><input type="file" accept="application/json,.json" data-action="he-import" hidden /></label>
+              <button type="button" class="menu-btn ghost danger" data-action="he-delete">Delete</button>
             </div>
             <p class="panel-note">${escape(this.status)}</p>
           </section>

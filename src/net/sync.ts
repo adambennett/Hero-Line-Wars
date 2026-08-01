@@ -1,5 +1,14 @@
 import type { GameState, HeroRuntime } from "../game/state";
-import type { CombatIntent, HeroSnap, LaneSnap, MatchSnap, MpTeam } from "./types";
+import type {
+  CombatIntent,
+  HeroSnap,
+  LanePayload,
+  LaneSnap,
+  LaneSummary,
+  MatchSnap,
+  MpTeam,
+} from "./types";
+import { isLaneSummary } from "./types";
 import type { MpMatch } from "./matchFactory";
 import { allLaneHeroes } from "./matchFactory";
 import { applyBags, serializeBags, type PlayerBag } from "./playerBag";
@@ -17,6 +26,23 @@ function heroSnap(h: HeroRuntime): HeroSnap {
     abilityCds: [...h.abilityCds],
     barrierTimer: h.barrierTimer,
     whirlwindTimer: h.whirlwindTimer,
+    radius: h.radius,
+    bladeMode: h.bladeMode,
+    bladeSpin: h.bladeSpin,
+    bladeAngle: h.bladeAngle,
+    bladeTipX: h.bladeTipX,
+    bladeTipY: h.bladeTipY,
+    bladeHookCharging: h.bladeHookCharging,
+    bladeHookCharge: h.bladeHookCharge,
+    gunnerWeaponIndex: h.gunnerWeaponIndex,
+    gunnerAmmo: h.gunnerAmmo,
+    gunnerReload: h.gunnerReload,
+    gunnerAiming: h.gunnerAiming,
+    gunnerAimTime: h.gunnerAimTime,
+    gunnerSpin: h.gunnerSpin,
+    gunnerCharge: h.gunnerCharge,
+    gunnerSelfDamageFlash: h.gunnerSelfDamageFlash,
+    momentum: h.momentum,
   };
 }
 
@@ -95,7 +121,12 @@ export function buildLaneSnap(state: GameState): LaneSnap {
     utilityDraft: state.utilityDraft ? [...state.utilityDraft] : null,
     curseDraft: state.curseDraft ? [...state.curseDraft] : null,
     chestDraft: state.chestDraft
-      ? state.chestDraft.map((c) => ({ label: c.label, blurb: c.blurb }))
+      ? state.chestDraft.map((c) => ({
+          label: c.label,
+          blurb: c.blurb,
+          kind: c.kind,
+          amount: c.kind === "gold" ? c.amount : undefined,
+        }))
       : null,
     baseBranchDraft: state.baseBranchDraft ? [...state.baseBranchDraft] : null,
     utilityId: state.utilityId,
@@ -108,18 +139,136 @@ export function buildLaneSnap(state: GameState): LaneSnap {
     curseIncomeTaxTimer: state.curseIncomeTaxTimer,
     curseIncomeTaxMul: state.curseIncomeTaxMul,
     curseFogTimer: state.curseFogTimer,
+    curseShopRefreshSlowTimer: state.curseShopRefreshSlowTimer,
+    curseShopRefreshSlowMul: state.curseShopRefreshSlowMul,
+    shopRefreshTimer: state.shopRefreshTimer,
+    chests: state.chests.map((c) => ({
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      radius: c.radius,
+      rarity: c.rarity,
+      openProgress: c.openProgress,
+      openDuration: c.openDuration,
+      life: c.life,
+    })),
+    hexZones: state.hexZones.map((z) => ({ x: z.x, y: z.y, radius: z.radius, life: z.life })),
+    mapOrbs: (state.mapOrbs ?? []).map((o) => ({
+      x: o.x,
+      y: o.y,
+      radius: o.radius,
+      fuse: o.fuse,
+    })),
+    teleporters: {
+      a: state.teleporters.a ? { x: state.teleporters.a.x, y: state.teleporters.a.y } : null,
+      b: state.teleporters.b ? { x: state.teleporters.b.x, y: state.teleporters.b.y } : null,
+      linked: state.teleporters.linked,
+    },
+    mines: (state.mines ?? []).map((m) => ({
+      id: m.id,
+      x: m.x,
+      y: m.y,
+      radius: m.radius,
+      armTimer: m.armTimer,
+    })),
+    mapFogActive: state.mapFogActive,
+    fogOpacity: state.fogOpacity,
+    fogVisionRadiusResolved: state.fogVisionRadiusResolved,
+    mapEclipseActive: state.mapEclipseActive,
+    mapHazardX: state.mapHazardX,
+    mapSupplyCrates: (state.mapSupplyCrates ?? []).map((c) => ({
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      radius: c.radius,
+      life: c.life,
+      gold: c.gold,
+    })),
+    laneGeometry: laneGeometrySnap(state),
+    humanPlayers: state.humanPlayers,
+    draftQueueKinds: (state.draftQueue ?? []).map((d) => d.kind),
+  };
+}
+
+/** Only maps that move geometry mid-run need to ship it (shift / shrink). */
+function laneGeometrySnap(state: GameState): LaneSnap["laneGeometry"] {
+  const map = state.map;
+  if (!map.shiftingObstacles && !map.shrinkingLane) return undefined;
+  return {
+    laneTop: map.laneTop,
+    laneBottom: map.laneBottom,
+    laneLeft: map.laneLeft,
+    laneRight: map.laneRight,
+    obstacles: map.obstacles.map((o) => ({ x: o.x, y: o.y, w: o.w, h: o.h })),
+  };
+}
+
+/**
+ * HUD-only digest of a lane nobody is watching. Deliberately excludes enemies,
+ * projectiles, effects, map objects, and bags — see `buildMatchSnapFor`.
+ */
+export function buildLaneSummary(state: GameState): LaneSummary {
+  return {
+    summary: true,
+    status: state.status,
+    wave: state.wave,
+    waveTier: state.waveTier,
+    waveTimer: state.waveTimer,
+    spawning: state.spawning,
+    baseHp: state.baseHp,
+    baseMaxHp: state.map.base.maxHp,
+    baseLevel: state.baseLevel,
+    enemyCount: state.enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0),
+    sentIncoming: state.pendingSends.reduce((n, s) => n + s.enemies, 0),
+    players: allLaneHeroes(state).map((h) => ({
+      slot: h.controllerSlot ?? null,
+      heroId: h.heroId,
+      alive: h.alive,
+      hp: h.hp,
+      maxHp: h.maxHp,
+      level: state.level,
+    })),
   };
 }
 
 export function buildMatchSnap(match: MpMatch, viewTeam: MpTeam): MatchSnap {
+  return buildMatchSnapFor(match, viewTeam, [true, true]);
+}
+
+/**
+ * Per-viewer snapshot. `full[t]` decides whether lane `t` ships as a complete
+ * `LaneSnap` (own lane + actively-viewed lane) or as a cheap `LaneSummary`.
+ * Callers may pass a cache so one built lane snap is reused across peers.
+ */
+export function buildMatchSnapFor(
+  match: MpMatch,
+  viewTeam: MpTeam,
+  full: [boolean, boolean],
+  cache?: { snaps: (LaneSnap | null)[]; summaries: (LaneSummary | null)[] },
+): MatchSnap {
+  const lane = (t: MpTeam): LanePayload => {
+    if (full[t]) {
+      if (cache) return (cache.snaps[t] ??= buildLaneSnap(match.lanes[t]));
+      return buildLaneSnap(match.lanes[t]);
+    }
+    if (cache) return (cache.summaries[t] ??= buildLaneSummary(match.lanes[t]));
+    return buildLaneSummary(match.lanes[t]);
+  };
   return {
     mode: match.mode,
     myTeam: match.myTeam,
     viewTeam,
-    lanes: [buildLaneSnap(match.lanes[0]), buildLaneSnap(match.lanes[1])],
+    lanes: [lane(0), lane(1)],
     ended: match.ended,
     winnerTeam: match.winnerTeam,
   };
+}
+
+export function newSnapCache(): {
+  snaps: (LaneSnap | null)[];
+  summaries: (LaneSummary | null)[];
+} {
+  return { snaps: [null, null], summaries: [null, null] };
 }
 
 function applyHeroSnap(h: HeroRuntime, snap: HeroSnap): void {
@@ -134,6 +283,23 @@ function applyHeroSnap(h: HeroRuntime, snap: HeroSnap): void {
   h.barrierTimer = snap.barrierTimer;
   h.whirlwindTimer = snap.whirlwindTimer;
   h.controllerSlot = snap.slot;
+  if (snap.radius != null) h.radius = snap.radius;
+  h.bladeMode = snap.bladeMode as HeroRuntime["bladeMode"];
+  h.bladeSpin = snap.bladeSpin;
+  h.bladeAngle = snap.bladeAngle;
+  h.bladeTipX = snap.bladeTipX;
+  h.bladeTipY = snap.bladeTipY;
+  h.bladeHookCharging = snap.bladeHookCharging;
+  h.bladeHookCharge = snap.bladeHookCharge;
+  h.gunnerWeaponIndex = snap.gunnerWeaponIndex;
+  h.gunnerAmmo = snap.gunnerAmmo;
+  h.gunnerReload = snap.gunnerReload;
+  h.gunnerAiming = snap.gunnerAiming;
+  h.gunnerAimTime = snap.gunnerAimTime;
+  h.gunnerSpin = snap.gunnerSpin;
+  h.gunnerCharge = snap.gunnerCharge;
+  h.gunnerSelfDamageFlash = snap.gunnerSelfDamageFlash;
+  h.momentum = snap.momentum;
 }
 
 export function applyLaneSnap(
@@ -180,12 +346,13 @@ export function applyLaneSnap(
   state.fx = snap.fx.map((f) => ({ ...f }));
   state.utilityDraft = snap.utilityDraft ? [...snap.utilityDraft] : null;
   state.curseDraft = snap.curseDraft ? [...snap.curseDraft] : null;
-  // Chest options: labels only on wire; keep local options if labels match, else stub
+  // Chest options are display-only on the client (the host resolves by index),
+  // but carry enough to render the real reward instead of a zero-gold stub.
   if (snap.chestDraft) {
     state.chestDraft = snap.chestDraft.map((c, i) => {
       const prev = state.chestDraft?.[i];
       if (prev && prev.label === c.label) return prev;
-      return { kind: "gold" as const, amount: 0, label: c.label, blurb: c.blurb };
+      return { kind: "gold" as const, amount: c.amount ?? 0, label: c.label, blurb: c.blurb };
     });
   } else {
     state.chestDraft = null;
@@ -200,6 +367,69 @@ export function applyLaneSnap(
   state.curseIncomeTaxTimer = snap.curseIncomeTaxTimer ?? 0;
   state.curseIncomeTaxMul = snap.curseIncomeTaxMul ?? 1;
   state.curseFogTimer = snap.curseFogTimer ?? 0;
+  state.curseShopRefreshSlowTimer = snap.curseShopRefreshSlowTimer ?? 0;
+  state.curseShopRefreshSlowMul = snap.curseShopRefreshSlowMul ?? 1;
+  state.shopRefreshTimer = snap.shopRefreshTimer ?? state.shopRefreshTimer;
+  state.mapFogActive = !!snap.mapFogActive;
+  if (snap.fogOpacity != null) state.fogOpacity = snap.fogOpacity;
+  if (snap.fogVisionRadiusResolved != null) {
+    state.fogVisionRadiusResolved = snap.fogVisionRadiusResolved;
+  }
+  state.mapEclipseActive = !!snap.mapEclipseActive;
+  // Full data again — HUD may stop falling back to the summary counters.
+  state.summaryEnemyCount = null;
+  state.summaryIncoming = null;
+  if (snap.mapHazardX != null) state.mapHazardX = snap.mapHazardX;
+  state.mapSupplyCrates = (snap.mapSupplyCrates ?? []).map((c) => ({ ...c }));
+  if (snap.humanPlayers != null) state.humanPlayers = Math.max(1, snap.humanPlayers);
+  state.chests = (snap.chests ?? []).map((c) => ({
+    id: c.id,
+    x: c.x,
+    y: c.y,
+    radius: c.radius,
+    rarity: c.rarity as GameState["chests"][number]["rarity"],
+    openDuration: c.openDuration,
+    openProgress: c.openProgress,
+    life: c.life,
+  }));
+  state.hexZones = (snap.hexZones ?? []).map((z) => ({
+    x: z.x,
+    y: z.y,
+    radius: z.radius,
+    life: z.life,
+    dps: 0,
+  }));
+  state.mapOrbs = (snap.mapOrbs ?? []).map((o) => ({
+    x: o.x,
+    y: o.y,
+    radius: o.radius,
+    fuse: o.fuse,
+    damage: 0,
+  }));
+  if (snap.teleporters) {
+    const prev = state.teleporters;
+    state.teleporters = {
+      a: snap.teleporters.a ? { ...snap.teleporters.a } : null,
+      b: snap.teleporters.b ? { ...snap.teleporters.b } : null,
+      linked: snap.teleporters.linked,
+      nextReplace: prev.nextReplace,
+    };
+  }
+  state.mines = (snap.mines ?? []).map((m) => ({
+    id: m.id,
+    x: m.x,
+    y: m.y,
+    radius: m.radius,
+    armTimer: m.armTimer,
+    damage: 0,
+  }));
+  if (snap.laneGeometry) {
+    state.map.laneTop = snap.laneGeometry.laneTop;
+    state.map.laneBottom = snap.laneGeometry.laneBottom;
+    if (snap.laneGeometry.laneLeft != null) state.map.laneLeft = snap.laneGeometry.laneLeft;
+    if (snap.laneGeometry.laneRight != null) state.map.laneRight = snap.laneGeometry.laneRight;
+    state.map.obstacles = snap.laneGeometry.obstacles.map((o) => ({ ...o }));
+  }
 
   if (snap.playerBags) {
     applyBags(state, snap.playerBags as Record<string, PlayerBag>, focusSlot);
@@ -266,11 +496,42 @@ export function applyLaneSnap(
   }));
 }
 
+/**
+ * Apply a HUD-only lane digest. Entity arrays are deliberately left alone: the
+ * client keeps its last known picture of that lane until it looks over and the
+ * host promotes it back to full snapshots (no flicker, no vanishing units).
+ */
+export function applyLaneSummary(state: GameState, snap: LaneSummary): void {
+  state.status = snap.status as GameState["status"];
+  state.wave = snap.wave;
+  state.waveTier = snap.waveTier as GameState["waveTier"];
+  state.waveTimer = snap.waveTimer;
+  state.spawning = snap.spawning;
+  state.baseHp = snap.baseHp;
+  state.baseLevel = snap.baseLevel;
+  state.summaryEnemyCount = snap.enemyCount;
+  state.summaryIncoming = snap.sentIncoming;
+  const heroes = allLaneHeroes(state);
+  for (const p of snap.players) {
+    const h = heroes.find((x) => (x.controllerSlot ?? null) === p.slot);
+    if (!h) continue;
+    h.heroId = p.heroId;
+    h.alive = p.alive;
+    h.hp = p.hp;
+    h.maxHp = p.maxHp;
+  }
+}
+
 export function applyMatchSnap(match: MpMatch, snap: MatchSnap): void {
   const focus0 = match.myTeam === 0 ? match.mySlot : null;
   const focus1 = match.myTeam === 1 ? match.mySlot : null;
-  applyLaneSnap(match.lanes[0], snap.lanes[0], focus0);
-  applyLaneSnap(match.lanes[1], snap.lanes[1], focus1);
+  const apply = (team: MpTeam, focus: number | null): void => {
+    const payload = snap.lanes[team];
+    if (isLaneSummary(payload)) applyLaneSummary(match.lanes[team], payload);
+    else applyLaneSnap(match.lanes[team], payload, focus);
+  };
+  apply(0, focus0);
+  apply(1, focus1);
   // viewTeam is local-only — never overwrite from host snap
   match.ended = snap.ended;
   match.winnerTeam = snap.winnerTeam;

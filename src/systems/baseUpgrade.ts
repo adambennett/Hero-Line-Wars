@@ -7,6 +7,7 @@ import {
 } from "../data/baseBranches";
 import type { GameState } from "../game/state";
 import { hasRelic } from "./relics";
+import { hasDraftPending, openOrQueueDraft, syncDraftFlags } from "./drafts";
 
 export function upgradeBaseCost(state: GameState): number {
   let cost = baseUpgradeCost(state.baseLevel);
@@ -35,10 +36,8 @@ export function tryUpgradeBase(state: GameState): string | null {
     state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 20);
   }
 
-  if (shouldOfferBaseBranch(state.baseLevel) && !state.baseBranchDraft) {
-    state.baseBranchDraft = draftBaseBranches(state.baseBranches);
-    state.pausedForDraft = true;
-    state.draftKind = "base";
+  if (shouldOfferBaseBranch(state.baseLevel) && !hasDraftPending(state, "base")) {
+    openOrQueueDraft(state, { kind: "base", choices: draftBaseBranches(state.baseBranches) });
     state.toast = `Base Lv ${state.baseLevel} — choose a branch!`;
     state.toastTimer = 2;
     return null;
@@ -58,13 +57,7 @@ export function chooseBaseBranch(state: GameState, id: BaseBranchId): void {
   state.baseBranchMods = recomputeBranchMods(state.baseBranches);
   applyBranchImmediate(state, id);
   state.baseBranchDraft = null;
-  if (state.levelDraft || state.relicDraft) {
-    state.draftKind = state.levelDraft ? "level" : "relic";
-    state.pausedForDraft = true;
-  } else {
-    state.draftKind = null;
-    state.pausedForDraft = false;
-  }
+  syncDraftFlags(state);
   state.toast = `Branch: ${id.replace(/_/g, " ")}`;
   state.toastTimer = 2;
 }

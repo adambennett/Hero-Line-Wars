@@ -55,6 +55,9 @@ export const ATTACK_STYLES: AttackStyle[] = [
   "magnet",
   "chrono",
   "drone",
+  "machinegun",
+  "grenade",
+  "kinetic",
 ];
 
 export const AIM_MODES: AimMode[] = ["free", "engage", "auto"];

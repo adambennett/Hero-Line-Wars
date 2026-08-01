@@ -6,6 +6,8 @@ import { type EnemyUnit, type GameState, type TurretUnit } from "../game/state";
 import { inHighGround } from "../systems/combat";
 import { loadSettings } from "../ui/settings";
 import { mapRespawn, mapShops } from "../data/maps";
+import { fillPlayablePath, strokePlayablePath } from "../game/playBounds";
+import { gameplayCheats } from "../meta/cheats";
 
 export type View = {
   scale: number;
@@ -225,17 +227,12 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     return;
   }
 
-  // Lane floor
+  // Lane floor (shape-aware)
   ctx.fillStyle = "#152038";
-  ctx.fillRect(0, map.laneTop, MAP_W, map.laneBottom - map.laneTop);
-
+  fillPlayablePath(ctx, map);
   ctx.strokeStyle = "#2a3d60";
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, map.laneTop);
-  ctx.lineTo(MAP_W, map.laneTop);
-  ctx.moveTo(0, map.laneBottom);
-  ctx.lineTo(MAP_W, map.laneBottom);
+  strokePlayablePath(ctx, map);
   ctx.stroke();
 
   // High grounds
@@ -286,6 +283,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   paintZones(map.hastePads, "#e0c04022", "#f0d060aa", "HASTE");
   paintZones(map.goldVents, "#e0c02022", "#ffd040aa", "GOLD");
   paintZones(map.windCurrents, "#60c0e022", "#80d0f0aa", "WIND");
+  paintZones(map.bouncePads, "#80e0ff22", "#80e0ffaa", "BOUNCE");
   for (const sp of map.spikePulses ?? []) {
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, sp.radius || 36, 0, Math.PI * 2);
@@ -294,6 +292,39 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.strokeStyle = "#ff7070aa";
     ctx.lineWidth = 1.5;
     ctx.stroke();
+  }
+  for (const p of map.mapPortals ?? []) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius || 28, 0, Math.PI * 2);
+    ctx.fillStyle = "#c080ff33";
+    ctx.fill();
+    ctx.strokeStyle = "#d0a0ffaa";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.exitX, p.exitY);
+    ctx.strokeStyle = "#c080ff66";
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(p.exitX, p.exitY, 10, 0, Math.PI * 2);
+    ctx.fillStyle = "#c080ff55";
+    ctx.fill();
+  }
+  for (const b of map.relayBeacons ?? []) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius || 40, 0, Math.PI * 2);
+    ctx.fillStyle = "#f0c06022";
+    ctx.fill();
+    ctx.strokeStyle = "#f0c060aa";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = "#f0c060cc";
+    ctx.font = "9px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("RELAY", b.x, b.y + 3);
   }
 
   // Moving hazard
@@ -348,6 +379,20 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.strokeStyle = "#ff9040cc";
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+
+  for (const crate of state.mapSupplyCrates ?? []) {
+    ctx.beginPath();
+    ctx.rect(crate.x - 12, crate.y - 10, 24, 20);
+    ctx.fillStyle = "#2a2410";
+    ctx.fill();
+    ctx.strokeStyle = "#ffe080";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#ffe080";
+    ctx.font = "bold 8px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("SUPPLY", crate.x, crate.y + 3);
   }
 
   // Shop pads
@@ -442,14 +487,18 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.globalAlpha = 1;
   }
 
-  // Beam
+  // Beam (Prism / Gunner laser)
   if (state.beam) {
-    ctx.strokeStyle = "#5ef0a8cc";
-    ctx.lineWidth = 4;
+    const col = state.beam.color ?? "#5ef0a8";
+    ctx.strokeStyle = `${col}cc`;
+    ctx.lineWidth = state.beam.width ?? 4;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = state.beam.width ? 12 : 0;
     ctx.beginPath();
     ctx.moveTo(state.beam.x1, state.beam.y1);
     ctx.lineTo(state.beam.x2, state.beam.y2);
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Hex DoT zones
@@ -493,6 +542,27 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.setLineDash([]);
   }
 
+  // Sapper mines
+  for (const m of state.mines ?? []) {
+    const armed = m.armTimer <= 0;
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2);
+    ctx.fillStyle = armed ? "#c8784066" : "#c8784028";
+    ctx.fill();
+    ctx.strokeStyle = armed ? "#ff9040cc" : "#c8784088";
+    ctx.lineWidth = armed ? 2.5 : 1.5;
+    ctx.setLineDash(armed ? [] : [3, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (armed) {
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.radius + 6 + Math.sin(state.elapsed * 8) * 2, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ff604044";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
   // Turrets
   for (const t of state.turrets) {
     if (t.alive) drawTurret(ctx, t);
@@ -533,6 +603,65 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
         ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
+      }
+
+      // Gunner aim / charge / self-damage flash
+      if (h.heroId === "gunner") {
+        if (h.gunnerAiming) {
+          const ang = Math.atan2(state.aimWorldY - h.y, state.aimWorldX - h.x);
+          ctx.beginPath();
+          ctx.moveTo(h.x, h.y);
+          ctx.lineTo(h.x + Math.cos(ang) * 220, h.y + Math.sin(ang) * 220);
+          ctx.strokeStyle = "#90e0ff88";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.arc(
+            h.x + Math.cos(ang) * 200,
+            h.y + Math.sin(ang) * 200,
+            8,
+            0,
+            Math.PI * 2,
+          );
+          ctx.strokeStyle = "#90e0ffcc";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        if ((h.gunnerCharge ?? 0) > 0.02) {
+          const ch = h.gunnerCharge ?? 0;
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius + 12, -Math.PI / 2, -Math.PI / 2 + ch * Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,64,96,${0.4 + ch * 0.5})`;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        if ((h.gunnerSpin ?? 0) > 0.05) {
+          const sp = h.gunnerSpin ?? 0;
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius + 10, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(224,176,96,${0.15 + sp * 0.4})`;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        if ((h.gunnerSelfDamageFlash ?? 0) > 0) {
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius + 18, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,32,64,${(h.gunnerSelfDamageFlash ?? 0) * 1.4})`;
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        }
+      }
+
+      // Vector momentum ring
+      if (h.heroId === "vector" && (h.momentum ?? 0) > 1) {
+        const ratio = Math.min(1, (h.momentum ?? 0) / 100);
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius + 11, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,138,64,${0.35 + ratio * 0.5})`;
+        ctx.lineWidth = 3;
+        ctx.stroke();
       }
 
       // Gyro blade orbit VFX — close spinny death-ball, not distant orbs
@@ -632,15 +761,20 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.fill();
   }
 
-  if (state.mapFogActive) {
-    ctx.fillStyle = "rgba(8, 10, 20, 0.55)";
-    ctx.fillRect(0, map.laneTop, MAP_W, map.laneBottom - map.laneTop);
-    // Keep a small clear radius around the hero
+  if (state.mapFogActive && !gameplayCheats(state)?.revealFog) {
+    const opacity = Math.max(0, Math.min(1, state.fogOpacity ?? 0.55));
+    const vision = Math.max(40, state.fogVisionRadiusResolved ?? 120);
+    ctx.fillStyle = `rgba(4, 6, 12, ${opacity})`;
+    fillPlayablePath(ctx, map);
+    // Clear vision circles around living lane heroes (Flash-style).
     ctx.save();
     ctx.globalCompositeOperation = "destination-out";
-    ctx.beginPath();
-    ctx.arc(state.hero.x, state.hero.y, 120, 0, Math.PI * 2);
-    ctx.fill();
+    for (const h of [state.hero, ...(state.allies ?? [])]) {
+      if (!h.alive) continue;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, vision, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -669,15 +803,10 @@ function drawOpponentLaneWorld(ctx: CanvasRenderingContext2D, state: GameState):
   const opp = state.opponent;
 
   ctx.fillStyle = "#1a1428";
-  ctx.fillRect(0, map.laneTop, MAP_W, map.laneBottom - map.laneTop);
-
+  fillPlayablePath(ctx, map);
   ctx.strokeStyle = "#4a3560";
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, map.laneTop);
-  ctx.lineTo(MAP_W, map.laneTop);
-  ctx.moveTo(0, map.laneBottom);
-  ctx.lineTo(MAP_W, map.laneBottom);
+  strokePlayablePath(ctx, map);
   ctx.stroke();
 
   for (const hg of map.highGrounds) {

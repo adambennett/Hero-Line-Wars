@@ -34,7 +34,8 @@ export type ChallengeId =
   | "deathless_boss"
   | "polarity_prodigy"
   | "time_keeper"
-  | "swarm_lord";
+  | "swarm_lord"
+  | "momentum_master";
 
 export type ChallengeDef = {
   id: ChallengeId;
@@ -290,6 +291,14 @@ export const CHALLENGES: ChallengeDef[] = [
     unlocks: "unlock_hive",
     kind: "place_artifacts",
     threshold: 5,
+  },
+  {
+    id: "momentum_master",
+    name: "Momentum Master",
+    blurb: "Reach wave 14 in a single run.",
+    unlocks: "unlock_vector",
+    kind: "reach_wave",
+    threshold: 14,
   },
 ];
 

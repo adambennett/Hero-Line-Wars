@@ -2,6 +2,12 @@
 
 import { MAP_H, MAP_W } from "./constants";
 import { isMapUnlocked } from "../meta/contentLocks";
+import {
+  clampToPlayable,
+  pointInPlayable,
+  resolveMapShape,
+  type MapShapeId,
+} from "../game/playBounds";
 
 export type MapId =
   | "classic"
@@ -24,7 +30,10 @@ export type MapId =
   | "treasure_vein"
   | "tourist_loop"
   | "rift_cataract"
-  | "orb_foundry";
+  | "orb_foundry"
+  | "mazing"
+  | "hex_bowl"
+  | "capsule_coast";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -53,16 +62,31 @@ export type TurretSlot = {
 export type EffectRect = Rect & { label?: string };
 export type WindCurrentZone = EffectRect & { vx: number; vy: number };
 export type SpikePulsePoint = { x: number; y: number; radius: number; damage?: number };
+export type BouncePadZone = EffectRect & { impulseX: number; impulseY: number };
+export type MapPortalPad = {
+  x: number;
+  y: number;
+  radius: number;
+  exitX: number;
+  exitY: number;
+};
+export type RelayBeaconPad = { x: number; y: number; radius: number; damageBonus?: number };
 
 export type MapDef = {
   id: MapId | string;
   name: string;
   blurb: string;
+  /** Playable outline. Omitted ⇒ rectangle (legacy). */
+  shape?: MapShapeId;
   laneTop: number;
   laneBottom: number;
+  laneLeft?: number;
+  laneRight?: number;
   /** Original authored lane bounds (for shrinking reset). */
   baseLaneTop?: number;
   baseLaneBottom?: number;
+  baseLaneLeft?: number;
+  baseLaneRight?: number;
   base: PointPad & { maxHp: number };
   /** Shop pads (0 or more). Standing on any opens the shop. */
   shops: ShopPad[];
@@ -91,6 +115,12 @@ export type MapDef = {
   riftSurges?: boolean;
   /** Spawn delayed explosive orbs during waves. */
   volatileOrbs?: boolean;
+  /** Ember rain AoE during waves. */
+  emberRain?: boolean;
+  /** Periodic free gold supply crates. */
+  supplyDrops?: boolean;
+  /** Chrono pulse — freeze creeps, haste heroes. */
+  chronoPulse?: boolean;
   /** Standing heals heroes. */
   healSprings?: EffectRect[];
   /** Slows units inside. */
@@ -103,6 +133,12 @@ export type MapDef = {
   windCurrents?: WindCurrentZone[];
   /** Periodic point AoE damage. */
   spikePulses?: SpikePulsePoint[];
+  /** Launch pads — impulse shove on contact. */
+  bouncePads?: BouncePadZone[];
+  /** One-way warp pads (enter → exit). */
+  mapPortals?: MapPortalPad[];
+  /** Standing nearby grants temporary damage bonus. */
+  relayBeacons?: RelayBeaconPad[];
 };
 
 /** Scale Y coords authored against the old 560-tall map. */
@@ -133,6 +169,13 @@ function finalizeMap(m: MapAuthoring): MapDef {
   const { shop: _legacyShop, ...rest } = m;
   return {
     ...rest,
+    shape: m.shape ?? "rectangle",
+    laneLeft: m.laneLeft ?? 0,
+    laneRight: m.laneRight ?? MAP_W,
+    baseLaneTop: m.baseLaneTop ?? m.laneTop,
+    baseLaneBottom: m.baseLaneBottom ?? m.laneBottom,
+    baseLaneLeft: m.baseLaneLeft ?? m.laneLeft ?? 0,
+    baseLaneRight: m.baseLaneRight ?? m.laneRight ?? MAP_W,
     shops,
     respawn: m.respawn ?? { x: m.base.x + 120, y: m.base.y, radius: 28 },
   };
@@ -689,6 +732,117 @@ export const MAPS: Record<MapId, MapDef> = {
     ],
     volatileOrbs: true,
   }),
+  mazing: finalizeMap({
+    id: "mazing",
+    name: "Mazing",
+    blurb:
+      "A winding corridor maze — weave between rock walls, claim the low shelf, and fight through choke points to the twin spawn mouths.",
+    laneTop: 20,
+    laneBottom: 680,
+    base: { x: 58.27, y: 83.59, radius: 46, maxHp: 120 },
+    shops: [{ x: 552.09, y: 156.13, radius: 36, interactRange: 56 }],
+    respawn: { x: 550.56, y: 59.15, radius: 28 },
+    spawner: { x: 1550.85, y: 150.13, radius: 30 },
+    spawnerAlt: { x: 1553.46, y: 552.39, radius: 30 },
+    highGrounds: [
+      {
+        x: 8,
+        y: 614.78,
+        w: 943.99,
+        h: 65.73,
+        damageBonus: 0.35,
+        oathDamageBonus: 0.65,
+      },
+    ],
+    obstacles: [
+      { x: 1374.86, y: 204.64, w: 89.46, h: 287.48 },
+      { x: 1068.69, y: 26.2, w: 52.66, h: 400 },
+      { x: 943.46, y: 395.62, w: 34.16, h: 284.89 },
+      { x: 616.13, y: 26.2, w: 83.97, h: 400 },
+      { x: 324.39, y: 217.33, w: 292.97, h: 48.5 },
+      { x: 123.92, y: 507.66, w: 126.47, h: 106.85 },
+    ],
+    turretSlots: [
+      { x: 1152.66, y: 463.65 },
+      { x: 910.72, y: 418.11 },
+      { x: 580.55, y: 576.08 },
+      { x: 468.13, y: 578.93 },
+      { x: 280.27, y: 238.79 },
+    ],
+    dualSpawners: true,
+    slowMires: [{ x: 699.95, y: 26.2, w: 365.9, h: 201.66 }],
+    hastePads: [
+      { x: 1381.78, y: 494.96, w: 82.54, h: 185.55 },
+      { x: 1376.09, y: 26.2, w: 85.39, h: 177.01 },
+    ],
+    goldVents: [{ x: 1462.49, y: 328.45, w: 129.51, h: 59.89 }],
+  }),
+  hex_bowl: finalizeMap({
+    id: "hex_bowl",
+    name: "Hex Bowl",
+    blurb:
+      "Fight inside a hexagonal arena — cover sits on the flats, high ground crowns the center, and the rim is the wall.",
+    shape: "hexagon",
+    laneTop: 70,
+    laneBottom: MAP_H - 70,
+    laneLeft: 160,
+    laneRight: MAP_W - 160,
+    base: { x: 280, y: MID_Y, radius: 44, maxHp: 120 },
+    shop: { x: 360, y: MID_Y + 90, radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 280, y: MID_Y, radius: 30 },
+    highGrounds: [HG(680, 210, 220, 140)],
+    obstacles: [
+      { x: 520, y: sy(140), w: 36, h: sh(90) },
+      { x: 520, y: sy(330), w: 36, h: sh(90) },
+      { x: 1040, y: sy(160), w: 40, h: sh(70) },
+      { x: 1040, y: sy(330), w: 40, h: sh(70) },
+    ],
+    turretSlots: [
+      { x: 320, y: MID_Y - 70 },
+      { x: 320, y: MID_Y + 70 },
+      { x: 400, y: MID_Y },
+    ],
+    bouncePads: [
+      { x: 600, y: sy(120), w: 70, h: 50, impulseX: 220, impulseY: 40 },
+      { x: 600, y: sy(390), w: 70, h: 50, impulseX: 220, impulseY: -40 },
+    ],
+    relayBeacons: [{ x: 800, y: MID_Y, radius: 48, damageBonus: 0.18 }],
+  }),
+  capsule_coast: finalizeMap({
+    id: "capsule_coast",
+    name: "Capsule Coast",
+    blurb:
+      "An oval shoreline lane — portals stitch the long flanks, relay beacons reward mid control, and the curve keeps fights honest.",
+    shape: "oval",
+    laneTop: 90,
+    laneBottom: MAP_H - 90,
+    laneLeft: 80,
+    laneRight: MAP_W - 80,
+    base: { x: 140, y: MID_Y, radius: 46, maxHp: 120 },
+    shop: { x: 220, y: MID_Y + 80, radius: 36, interactRange: 56 },
+    spawner: { x: MAP_W - 140, y: MID_Y, radius: 30 },
+    highGrounds: [HG(700, 200, 200, 160)],
+    obstacles: [
+      { x: 480, y: sy(200), w: 50, h: sh(80) },
+      { x: 1100, y: sy(180), w: 44, h: sh(100) },
+      { x: 820, y: sy(120), w: 60, h: sh(50) },
+      { x: 820, y: sy(380), w: 60, h: sh(50) },
+    ],
+    turretSlots: [
+      { x: 180, y: MID_Y - 80 },
+      { x: 180, y: MID_Y + 80 },
+      { x: 260, y: MID_Y },
+    ],
+    mapPortals: [
+      { x: 420, y: sy(150), radius: 28, exitX: 1180, exitY: sy(380) },
+      { x: 1180, y: sy(150), radius: 28, exitX: 420, exitY: sy(380) },
+    ],
+    bouncePads: [{ x: 900, y: MID_Y - 20, w: 80, h: 48, impulseX: -180, impulseY: 0 }],
+    relayBeacons: [
+      { x: 640, y: MID_Y, radius: 42, damageBonus: 0.14 },
+      { x: 980, y: MID_Y, radius: 42, damageBonus: 0.14 },
+    ],
+  }),
 };
 
 export const MAP_LIST: MapDef[] = Object.values(MAPS);
@@ -725,10 +879,21 @@ export function circleHitsObstacle(
 }
 
 export function pointBlocked(map: MapDef, x: number, y: number, radius: number): boolean {
-  if (x < radius || x > MAP_W - radius) return true;
-  if (y < map.laneTop + radius || y > map.laneBottom - radius) return true;
+  if (!pointInPlayable(map, x, y, radius)) return true;
   return map.obstacles.some((o) => circleHitsObstacle(x, y, radius, o));
 }
+
+/** Clamp a point into the map's playable shape (shape-aware). */
+export function clampInLane(
+  map: MapDef,
+  x: number,
+  y: number,
+  radius = 0,
+): { x: number; y: number } {
+  return clampToPlayable(map, x, y, radius);
+}
+
+export { resolveMapShape, pointInPlayable, clampToPlayable };
 
 /** True if a circle overlaps any map obstacle. */
 export function blockedByObstacle(

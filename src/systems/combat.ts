@@ -3,7 +3,7 @@ import type { RelicId } from "../data/relics";
 import type { HighGroundZone } from "../data/maps";
 import { hasLineOfSight, rayObstacleHitT } from "../data/maps";
 import { dist, normalize, type Vec2 } from "../game/math";
-import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { gameplayCheats } from "../meta/cheats";
 import type { EnemyUnit, GameState, Projectile } from "../game/state";
 import {
   hasRelic,
@@ -13,7 +13,8 @@ import {
 import { isBossKind, isEliteKind } from "../data/enemies";
 import { grantKillXp } from "./xp";
 import { playSfx } from "./audio";
-import { heroHasPassive, heroUsesGyroKit, resolveHero } from "../custom/registry";
+import { heroHasPassive, heroUsesGyroKit, heroUsesVectorKit, resolveHero } from "../custom/registry";
+import { perksForState } from "./heroPerks";
 
 export function highGroundAt(state: GameState, p: Vec2): HighGroundZone | null {
   for (const z of state.map.highGrounds) {
@@ -49,6 +50,7 @@ export function applySlow(e: EnemyUnit, mul: number, duration: number): void {
 
 export function attackDamage(state: GameState): number {
   const hero = resolveHero(state.hero.heroId);
+  const perks = perksForState(state);
   let base = hero.attackDamage + state.hero.damageBonus + (state.baseBranchMods?.damageFlat ?? 0);
   if (hasRelic(state, "blood_price")) base *= 1.35;
   if (hasRelic(state, "overcharge")) base *= 0.85;
@@ -58,7 +60,12 @@ export function attackDamage(state: GameState): number {
   const hg = zone
     ? 1 + (hasRelic(state, "high_ground_oath") ? zone.oathDamageBonus : zone.damageBonus)
     : 1;
-  let dmg = base * hg * relicDamageMul(state);
+  let dmg = base * hg * relicDamageMul(state) * perks.damageMul;
+  if (heroUsesVectorKit(state.hero.heroId)) {
+    const mom = state.hero.momentum ?? 0;
+    const cap = 100 + perks.momentumCapBonus;
+    dmg *= 1 + 0.6 * Math.min(1, mom / Math.max(1, cap));
+  }
 
   // Close Quarters passive
   if (heroHasPassive(state.hero.heroId, "close_quarters")) {
@@ -70,6 +77,8 @@ export function attackDamage(state: GameState): number {
 
   if ((state.hero.overchargeTimer ?? 0) > 0) dmg *= 1.2;
   if (state.utilityDamageBoost > 0) dmg *= 1.25;
+  if ((state.hero.relayDmgTimer ?? 0) > 0) dmg *= 1 + (state.hero.relayDmgBonus ?? 0.15);
+  if (state.glassCannon) dmg *= 1.5;
 
   const stacks = state.hero.bloodEngineStacks ?? 0;
   if (stacks > 0 && (state.shopOwned.blood_engine ?? 0) > 0) {
@@ -90,10 +99,33 @@ export function attackDamage(state: GameState): number {
 
 export function attackCooldown(state: GameState): number {
   const hero = resolveHero(state.hero.heroId);
-  let cd = hero.attackCooldown * state.hero.attackSpeedMul * (state.baseBranchMods?.attackSpeedMul ?? 1);
+  const perks = perksForState(state);
+  let cd =
+    hero.attackCooldown *
+    state.hero.attackSpeedMul *
+    (state.baseBranchMods?.attackSpeedMul ?? 1) *
+    perks.attackCdMul;
   if (hasRelic(state, "overcharge")) cd *= 0.7;
   if ((state.hero.marksmanTimer ?? 0) > 0) cd *= 0.75;
+  if (heroUsesVectorKit(state.hero.heroId)) {
+    const mom = state.hero.momentum ?? 0;
+    const cap = 100 + perks.momentumCapBonus;
+    cd *= 1 - 0.3 * Math.min(1, mom / Math.max(1, cap));
+  }
   return cd;
+}
+
+/** Friendly (player) projectile AoE on impact / expire / wall. */
+export function explodeFriendlyAoe(state: GameState, p: Projectile): void {
+  const aoe = p.aoeRadius ?? 0;
+  if (aoe <= 0) {
+    p.alive = false;
+    return;
+  }
+  addFx(state, p.x, p.y, aoe, p.color ? `${p.color}88` : "#ff804088", 0.35);
+  state.shake = Math.max(state.shake, 0.16);
+  damageEnemiesInRadius(state, p.x, p.y, aoe, p.damage);
+  p.alive = false;
 }
 
 export function pushProjectile(
@@ -126,6 +158,7 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
     gold += 8;
     state.utilityBountyKills -= 1;
   }
+  if (state.goldRush) gold *= 2;
   state.gold += gold;
   state.goldFromKills += gold;
   state.peakGold = Math.max(state.peakGold, state.gold);
@@ -180,6 +213,7 @@ export function damageEnemy(
     dmg *= 1.4;
     state.hero.mirageEmpowered = false;
   }
+  if (gameplayCheats(state)?.oneShot) dmg = Math.max(dmg, e.hp);
 
   e.hp -= dmg;
   state.damageDealt += dmg;
@@ -615,6 +649,66 @@ function fireStyle(
       });
       break;
     }
+    case "machinegun": {
+      const a = angle + (Math.random() * 2 - 1) * 0.05;
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: Math.cos(a) * (heroDef.projectileSpeed || 760),
+        vy: Math.sin(a) * (heroDef.projectileSpeed || 760),
+        damage: dmg,
+        radius: 2.8,
+        kind: "bolt",
+        color: "#c8d090",
+        fromBasic: true,
+        life: 0.55,
+      });
+      break;
+    }
+    case "grenade": {
+      const perks = perksForState(state);
+      const aimDist = Math.min(
+        heroDef.attackRange * 1.15,
+        Math.hypot(state.aimWorldX - state.hero.x, state.aimWorldY - state.hero.y) || 80,
+      );
+      const spd = heroDef.projectileSpeed || 340;
+      const life = Math.max(0.25, aimDist / spd);
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * spd,
+        vy: facing.y * spd,
+        damage: dmg * 1.15 * perks.mineDamageMul,
+        radius: 6,
+        kind: "heavy",
+        color: "#e09050",
+        fromBasic: true,
+        aoeRadius: 52 * perks.abilityAreaMul,
+        life,
+      });
+      break;
+    }
+    case "kinetic": {
+      const perks = perksForState(state);
+      const mom = state.hero.momentum ?? 0;
+      const cap = 100 + perks.momentumCapBonus;
+      const ratio = Math.min(1, mom / Math.max(1, cap));
+      const pierce = ratio >= 0.85 ? 3 : ratio >= 0.5 ? 1 : 0;
+      pushProjectile(state, {
+        x: state.hero.x,
+        y: state.hero.y,
+        vx: facing.x * (heroDef.projectileSpeed || 560) * (1 + ratio * 0.35),
+        vy: facing.y * (heroDef.projectileSpeed || 560) * (1 + ratio * 0.35),
+        damage: dmg,
+        radius: 4,
+        kind: "bolt",
+        color: "#ff9a50",
+        fromBasic: true,
+        pierceLeft: pierce,
+        life: 0.75,
+      });
+      break;
+    }
     case "chaos":
       break;
   }
@@ -711,8 +805,9 @@ export function bounceProjectile(state: GameState, p: Projectile, hitId: number)
 
 export function applyPlayerDamage(state: GameState, amount: number): void {
   if (amount <= 0 || !state.hero.alive) return;
-  if (areCheatsEnabled() && loadCheatOptions().godMode) return;
+  if (gameplayCheats(state)?.godMode) return;
   let dmg = amount;
+  if (state.glassCannon) dmg *= 1.5;
   if (hasRelic(state, "blood_price")) dmg *= 1.25;
   if (heroHasPassive(state.hero.heroId, "bedrock") && state.hero.barrierTimer > 0) dmg *= 0.85;
   if ((state.wardBeaconTimer ?? 0) > 0) dmg *= 0.88;

@@ -1,20 +1,21 @@
 import type { MapDef, Obstacle } from "../data/maps";
 import {
   circleHitsObstacle,
+  clampInLane,
   firstBlockingObstacle,
   hasLineOfSight,
   pointBlocked,
 } from "../data/maps";
+import { playBounds } from "../game/playBounds";
 import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyDef, type EnemyKind } from "../data/enemies";
 import {
   ENEMY_CAMP_BREAK_SEC,
   ENEMY_STUCK_DESPAWN_SEC,
   ENEMY_STUCK_ESCALATE,
   ENEMY_STUCK_SEC,
-  MAP_W,
   WAVE_SCALE,
 } from "../data/constants";
-import { clamp, dist, normalize } from "../game/math";
+import { dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
 import { addFx, applyPlayerDamage, killEnemy, pushProjectile } from "./combat";
 import { baseDamageTakenMul } from "./relics";
@@ -109,20 +110,19 @@ function nearestTurret(from: { x: number; y: number }, turrets: TurretUnit[]): T
 
 function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
   const r = e.radius;
-  const x = clamp(nx, r, MAP_W - r);
-  const y = clamp(ny, map.laneTop + r, map.laneBottom - r);
+  const { x, y } = clampInLane(map, nx, ny, r);
   const blocked = map.obstacles.some((o) => circleHitsObstacle(x, y, r, o));
   if (!blocked) {
     e.x = x;
     e.y = y;
     return true;
   }
-  const xOnly = clamp(nx, r, MAP_W - r);
+  const xOnly = clampInLane(map, nx, e.y, r).x;
   if (!map.obstacles.some((o) => circleHitsObstacle(xOnly, e.y, r, o))) {
     e.x = xOnly;
     return true;
   }
-  const yOnly = clamp(ny, map.laneTop + r, map.laneBottom - r);
+  const yOnly = clampInLane(map, e.x, ny, r).y;
   if (!map.obstacles.some((o) => circleHitsObstacle(e.x, yOnly, r, o))) {
     e.y = yOnly;
     return true;
@@ -131,10 +131,7 @@ function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
 }
 
 function clampLanePoint(map: MapDef, x: number, y: number, r: number): { x: number; y: number } {
-  return {
-    x: clamp(x, r, MAP_W - r),
-    y: clamp(y, map.laneTop + r, map.laneBottom - r),
-  };
+  return clampInLane(map, x, y, r);
 }
 
 /** Clear corner waypoints around an AABB so units route instead of ramming. */
@@ -313,23 +310,31 @@ export function createEnemy(
 ): EnemyUnit {
   const def = ENEMY_DEFS[kind];
   const map = state.map;
-  const spread = (map.laneBottom - map.laneTop) * 0.35;
-  let y = clamp(
+  const b = playBounds(map);
+  const spread = (b.bottom - b.top) * 0.35;
+  let spawn = clampInLane(
+    map,
+    map.spawner.x - 24,
     map.spawner.y + (Math.random() * 2 - 1) * spread,
-    map.laneTop + 20,
-    map.laneBottom - 20,
+    20,
   );
   if (map.dualSpawners && map.spawnerAlt) {
     const band = state.mapActiveSpawner === 0 ? map.spawner : map.spawnerAlt;
-    y = clamp(band.y + (Math.random() * 2 - 1) * 30, map.laneTop + 20, map.laneBottom - 20);
+    spawn = clampInLane(map, band.x - 24, band.y + (Math.random() * 2 - 1) * 30, 20);
   }
-  // Spawn slightly left of spawner, clear of obstacles
-  let x = map.spawner.x - 24;
+  let x = spawn.x;
+  let y = spawn.y;
   const r = def.radius;
   for (let i = 0; i < 12; i++) {
     if (!pointBlocked(map, x, y, r)) break;
-    y = clamp(y + ((i % 2 === 0 ? 1 : -1) * (20 + i * 8)), map.laneTop + r + 4, map.laneBottom - r - 4);
-    x = map.spawner.x - 24 - i * 8;
+    const nudged = clampInLane(
+      map,
+      map.spawner.x - 24 - i * 8,
+      y + ((i % 2 === 0 ? 1 : -1) * (20 + i * 8)),
+      r + 4,
+    );
+    x = nudged.x;
+    y = nudged.y;
   }
 
   const waveScale = 1 + (state.wave - 1) * WAVE_SCALE.hpPerWave;

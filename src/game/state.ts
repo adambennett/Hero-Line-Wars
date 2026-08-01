@@ -6,11 +6,9 @@
   WAVE_BREAK_SEC,
   WAVE_SCALE,
   WIN_WAVES,
-  ENEMIES_PER_WAVE_BASE,
 } from "../data/constants";
 import {
   pickEnemyKind,
-  waveTier,
   type EnemyIntent,
   type EnemyKind,
   type WaveTier,
@@ -19,22 +17,38 @@ import { type HeroId } from "../data/heroes";
 import {
   circleHitsObstacle,
   reshuffleObstacles,
-  findClearSpot,
   blockedByObstacle,
   resolveMapChoice,
   mapRespawn,
   nearAnyShop,
+  clampInLane,
   type MapDef,
   type MapId,
 } from "../data/maps";
-import { resolveHero, resolveMap, heroUsesGyroKit, heroUsesWarpKit } from "../custom/registry";
+import { shrinkPlayBounds } from "./playBounds";
+import { laneFogState } from "./fog";
+import {
+  resolveHero,
+  resolveMap,
+  heroUsesGyroKit,
+  heroUsesWarpKit,
+  heroUsesGunnerKit,
+  heroUsesVectorKit,
+} from "../custom/registry";
+import { gunnerWeaponAt } from "../data/gunnerWeapons";
+import {
+  gunnerMoveSpeedMul,
+  gunnerShouldFreezeSim,
+  tickGunnerWeapons,
+} from "../systems/gunner";
+import { tickMines, tickVectorMomentum } from "../systems/abilities";
 import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
 import { draftRelicChoices, type RelicId } from "../data/relics";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
 import { DEFAULT_MAX_TURRETS, type TurretKind } from "../data/turrets";
 import type { LevelPassiveId } from "../data/xp";
 import { DEFAULT_UTILITY_DRAFT_LEVEL, type UtilityId } from "../data/utilities";
-import { clamp, dist, normalize } from "./math";
+import { dist, normalize } from "./math";
 import type { Input } from "../systems/input";
 import {
   applyCurseChoice,
@@ -50,6 +64,7 @@ import {
   applySlow,
   bounceProjectile,
   damageEnemy,
+  explodeFriendlyAoe,
   inHighGround,
   resolveHostileProjectile,
   steerSeekingProjectile,
@@ -66,11 +81,18 @@ import { applyUtilityChoice, tickUtilityEffects, tryCastUtility } from "../syste
 import { updateTurrets } from "../systems/turrets";
 import { tickChests, tickMapSpecials } from "../systems/chests";
 import { playSfx } from "../systems/audio";
-import { pickEliteKind, pickBossKind } from "../data/enemies";
 import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
 import { emptyBranchMods } from "../data/baseBranches";
-import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { gameplayCheats, areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
 import { loadSettings } from "../ui/settings";
+import { canPauseSimulation } from "./pause";
+import { openOrQueueDraft, syncDraftFlags } from "../systems/drafts";
+import {
+  beginWaveFromPlan,
+  planWaveSpawns,
+  prepareLaneGeometryForWave,
+  spawnWaveSpecials,
+} from "../systems/waves";
 
 export type Unit = {
   id: number;
@@ -216,6 +238,19 @@ export type BeamFx = {
   x2: number;
   y2: number;
   life: number;
+  color?: string;
+  width?: number;
+};
+
+export type MineUnit = {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  /** Seconds until armed (0 = live). */
+  armTimer: number;
+  damage: number;
+  ownerSlot?: number | null;
 };
 
 export type GameStatus = "playing" | "won" | "lost";
@@ -329,6 +364,29 @@ export type HeroRuntime = Unit & {
   nestCoreKills?: number;
   /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
   controllerSlot?: number | null;
+  /** Gunner arsenal runtime. */
+  gunnerWeaponIndex?: number;
+  gunnerAmmo?: number;
+  gunnerReload?: number;
+  gunnerWeaponCd?: number;
+  gunnerAiming?: boolean;
+  gunnerAimTime?: number;
+  gunnerSpin?: number;
+  gunnerCharge?: number;
+  gunnerSwapCd?: number;
+  gunnerSelfDamageFlash?: number;
+  /** Vector momentum 0–cap. */
+  momentum?: number;
+  /** Last frame position for momentum distance. */
+  momentumPrevX?: number;
+  momentumPrevY?: number;
+  /** Map bounce-pad cooldown. */
+  bounceCd?: number;
+  /** Map portal cooldown. */
+  portalCd?: number;
+  /** Relay beacon temporary damage buff. */
+  relayDmgTimer?: number;
+  relayDmgBonus?: number;
 };
 
 export type RunOptions = {
@@ -384,9 +442,23 @@ export type RunOptions = {
   disableRelics?: boolean;
   allyAiAggression?: number;
   fogAlways?: boolean;
+  /** 0–100; 100 = fully black outside vision when fog is active. */
+  fogThicknessPct?: number;
+  /** Clear radius around the hero while fogged (px). */
+  fogVisionRadius?: number;
   doubleElites?: boolean;
   suddenDeathBaseHp?: number;
   sharedFriendlyFire?: boolean;
+  /** Heroes deal and take +50% damage. */
+  glassCannon?: boolean;
+  /** Kill gold ×2. */
+  goldRush?: boolean;
+  /** Chest spawn chance ×3. */
+  wildChests?: boolean;
+  /** Start with a tighter playable bounds. */
+  crampedLane?: boolean;
+  /** Humans in the whole game (both lanes). Drives pause + cheat policy. */
+  humanPlayers?: number;
 };
 
 export type GameState = {
@@ -471,9 +543,24 @@ export type GameState = {
   mapSpecialTimer: number;
   mapHazardX: number;
   mapFogActive: boolean;
+  /** Resolved fog shroud opacity 0–1 (from stacking helper). */
+  fogOpacity: number;
+  /** Resolved vision circle radius in px. */
+  fogVisionRadiusResolved: number;
+  /** Map eclipse pulse currently on (stacks with curse / run fog). */
+  mapEclipseActive: boolean;
   mapActiveSpawner: 0 | 1;
   /** Volatile orb map hazards. */
   mapOrbs: MapOrb[];
+  /** Free gold crates from supply-drops special. */
+  mapSupplyCrates: {
+    id: number;
+    x: number;
+    y: number;
+    radius: number;
+    life: number;
+    gold: number;
+  }[];
   /** Ward Beacon: remaining DR window for heroes (seconds). */
   wardBeaconTimer: number;
   /** Mouse aim in world space (updated each frame from Input). */
@@ -534,6 +621,8 @@ export type GameState = {
   /** Chest open: pick 1 of 2 rewards (pauses local lane in SP). */
   chestDraft: ChestRewardOption[] | null;
   hexZones: HexZone[];
+  /** Sapper proximity mines on this lane. */
+  mines: MineUnit[];
   /** Warp hero teleporter pads (team-usable). */
   teleporters: TeleporterState;
   /** Brief lockout after a pad hop to prevent bounce loops. */
@@ -568,7 +657,29 @@ export type GameState = {
   disableSends: boolean;
   disableRelics: boolean;
   fogAlways: boolean;
+  fogThicknessPct: number;
+  fogVisionRadius: number;
   doubleElites: boolean;
+  glassCannon: boolean;
+  goldRush: boolean;
+  wildChests: boolean;
+  crampedLane: boolean;
+  /**
+   * Rewards earned while another draft of the same kind is still open.
+   * Per-player (mirrored into `PlayerBag`) so nothing is replaced or discarded.
+   */
+  draftQueue: import("../systems/drafts").PendingDraft[];
+  /**
+   * Humans participating in this GAME (both lanes), not just this lane.
+   * Drives the pause + cheat policy — see `game/pause.ts`. Always >= 1.
+   */
+  humanPlayers: number;
+  /**
+   * Client-only: set while this lane is only being received as a HUD summary
+   * (nobody here is watching it). Cleared as soon as full snapshots resume.
+   */
+  summaryEnemyCount?: number | null;
+  summaryIncoming?: number | null;
   /**
    * Per-controller economy (MP shared lane). When set, gold/shop/relics/drafts/sends
    * live in bags; lane fields mirror `activeBagKey` for HUD/systems.
@@ -583,6 +694,13 @@ export function createState(
 ): GameState {
   const mapId = resolveMapChoice(opts?.mapId ?? "random");
   const map = structuredClone(resolveMap(mapId));
+  if (opts?.crampedLane) {
+    shrinkPlayBounds(map, 48, 90);
+    map.baseLaneTop = map.laneTop;
+    map.baseLaneBottom = map.laneBottom;
+    map.baseLaneLeft = map.laneLeft;
+    map.baseLaneRight = map.laneRight;
+  }
   if (map.shiftingObstacles) reshuffleObstacles(map);
   const def = resolveHero(heroId);
   const mods = opts?.modifiers ?? defaultModifiers();
@@ -614,7 +732,10 @@ export function createState(
     map.base.maxHp = baseHp;
   }
   const startBase = Math.max(0, opts?.startingBaseLevel ?? 0);
-  const cheats = areCheatsEnabled() ? loadCheatOptions() : null;
+  // Human count is known up-front for MP (matchFactory passes it) — a cheating
+  // host must not seed a multi-human match with cheat gold / rerolls.
+  const humanPlayers = Math.max(1, Math.floor(opts?.humanPlayers ?? 1));
+  const cheats = humanPlayers <= 1 && areCheatsEnabled() ? loadCheatOptions() : null;
   return {
     status: "playing",
     map,
@@ -667,6 +788,19 @@ export function createState(
       chronaCleanTimer: 0,
       bloodEngineStacks: 0,
       nestCoreKills: 0,
+      gunnerWeaponIndex: heroId === "gunner" ? 0 : undefined,
+      gunnerAmmo: heroId === "gunner" ? gunnerWeaponAt(0).clip : undefined,
+      gunnerReload: 0,
+      gunnerWeaponCd: 0,
+      gunnerAiming: false,
+      gunnerAimTime: 0,
+      gunnerSpin: 0,
+      gunnerCharge: 0,
+      gunnerSwapCd: 0,
+      gunnerSelfDamageFlash: 0,
+      momentum: heroId === "vector" ? 0 : undefined,
+      momentumPrevX: undefined,
+      momentumPrevY: undefined,
     },
     enemies: [],
     turrets: [],
@@ -722,6 +856,10 @@ export function createState(
     mapSpecialTimer: 0,
     mapHazardX: MAP_W * 0.55,
     mapFogActive: !!opts?.fogAlways,
+    fogOpacity: 0,
+    fogVisionRadiusResolved: opts?.fogVisionRadius ?? 120,
+    mapEclipseActive: false,
+    mapSupplyCrates: [],
     mapActiveSpawner: 0,
     mapOrbs: [],
     wardBeaconTimer: 0,
@@ -769,6 +907,7 @@ export function createState(
     curseDraft: null,
     chestDraft: null,
     hexZones: [],
+    mines: [],
     teleporters: { a: null, b: null, linked: false, nextReplace: "a", shockCdA: 0, shockCdB: 0 },
     teleportLock: 0,
     utilityId: null,
@@ -797,7 +936,15 @@ export function createState(
     disableSends: !!opts?.disableSends,
     disableRelics: !!opts?.disableRelics,
     fogAlways: !!opts?.fogAlways,
+    fogThicknessPct: Math.max(0, Math.min(100, opts?.fogThicknessPct ?? 55)),
+    fogVisionRadius: Math.max(40, opts?.fogVisionRadius ?? 120),
     doubleElites: !!opts?.doubleElites,
+    glassCannon: !!opts?.glassCannon,
+    goldRush: !!opts?.goldRush,
+    wildChests: !!opts?.wildChests,
+    crampedLane: !!opts?.crampedLane,
+    draftQueue: [],
+    humanPlayers,
     playerBags: undefined,
     activeBagKey: null,
   };
@@ -809,43 +956,10 @@ function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean 
 }
 
 function startWave(state: GameState): void {
-  if (state.map.shrinkingLane && state.map.baseLaneTop != null && state.map.baseLaneBottom != null) {
-    state.map.laneTop = state.map.baseLaneTop;
-    state.map.laneBottom = state.map.baseLaneBottom;
-  }
-  if (state.map.shiftingObstacles) {
-    const reserved = [
-      state.hero,
-      ...state.allies,
-      ...state.turrets.filter((t) => t.alive),
-    ].map((u) => ({ x: u.x, y: u.y, radius: u.radius }));
-    reshuffleObstacles(state.map, reserved);
-    // Eject anyone still inside rubble after the shift
-    for (const h of [state.hero, ...state.allies]) {
-      if (!h.alive && h !== state.hero) continue;
-      const clear = findClearSpot(state.map, h.x, h.y, h.radius);
-      h.x = clear.x;
-      h.y = clear.y;
-    }
-    for (const t of state.turrets) {
-      if (!t.alive) continue;
-      const clear = findClearSpot(state.map, t.x, t.y, t.radius);
-      t.x = clear.x;
-      t.y = clear.y;
-    }
-    state.toast = "Ground shifts…";
-    state.toastTimer = 1.4;
-  }
+  prepareLaneGeometryForWave(state, [state.hero, ...state.allies]);
   state.wave += 1;
-  state.waveTier = waveTier(state.wave);
-  state.spawning = true;
-  const count = Math.round(
-    (ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave) *
-      state.modifiers.enemyCountMul,
-  );
-  state.toSpawn = count;
-  if (state.waveTier === "elite") state.toSpawn = Math.max(3, Math.floor(state.toSpawn * 0.75));
-  if (state.waveTier === "boss") state.toSpawn = Math.max(2, Math.floor(state.toSpawn * 0.55));
+  const plan = planWaveSpawns(state);
+  beginWaveFromPlan(state, plan);
   state.sentQueue = consumePendingSends(state);
   state.spawnCd = state.wave <= 2 ? 0.35 : 0;
   beginWaveShop(state);
@@ -856,15 +970,7 @@ function startWave(state: GameState): void {
     state.hero.barrierTimer = Math.max(state.hero.barrierTimer, 1.8);
   }
 
-  if (state.waveTier === "elite") {
-    state.enemies.push(createEnemy(state, pickEliteKind(), { hpScale: 1 }));
-    state.toast = "ELITE WAVE";
-    state.toastTimer = 2.2;
-  } else if (state.waveTier === "boss") {
-    state.enemies.push(createEnemy(state, pickBossKind(), { hpScale: 1 }));
-    state.toast = "BOSS WAVE";
-    state.toastTimer = 2.4;
-  }
+  spawnWaveSpecials(state, plan);
   applyWaveRider(state);
   resetWaveLives(state);
 }
@@ -915,6 +1021,9 @@ function remainingSpawns(state: GameState): number {
 
 /** Alive on the lane + still waiting to spawn this wave (incl. received sends). */
 export function laneEnemiesRemaining(state: GameState): number {
+  // A client that is not watching this lane only receives a HUD summary, so the
+  // summary count wins whenever it is present (see `net/sync.ts`).
+  if (state.summaryEnemyCount != null) return state.summaryEnemyCount;
   const alive = state.enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
   return alive + remainingSpawns(state);
 }
@@ -935,6 +1044,9 @@ export function heroMoveSpeed(state: GameState): number {
     const mode = state.hero.bladeMode ?? "wrapped";
     if (mode === "wrapped" && spin > 0) spd *= 1 - Math.min(0.55, spin * 0.55);
     if (mode === "rewinding" || mode === "flying" || mode === "sling") return 0;
+  }
+  if (heroUsesGunnerKit(state.hero.heroId)) {
+    spd *= gunnerMoveSpeedMul(state);
   }
   // Timed mobility overrides player steer a bit
   if ((state.hero.slideTimer ?? 0) > 0 || (state.hero.chargeTimer ?? 0) > 0) spd *= 0.15;
@@ -1047,8 +1159,9 @@ function respawnHero(state: GameState): void {
 function moveHero(state: GameState, nx: number, ny: number): void {
   const r = state.hero.radius;
   const map = state.map;
-  const x = clamp(nx, r, MAP_W - r);
-  const y = clamp(ny, map.laneTop + r, map.laneBottom - r);
+  const clamped = clampInLane(map, nx, ny, r);
+  const x = clamped.x;
+  const y = clamped.y;
   if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
     state.hero.x = x;
     state.hero.y = y;
@@ -1076,6 +1189,8 @@ function updateProjectiles(state: GameState, dt: number): void {
           resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
             if (h === state.hero) applyPlayerDamage(state, dmg);
           });
+        } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
+          explodeFriendlyAoe(state, p);
         } else {
           p.alive = false;
         }
@@ -1093,6 +1208,8 @@ function updateProjectiles(state: GameState, dt: number): void {
         resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
           if (h === state.hero) applyPlayerDamage(state, dmg);
         });
+      } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
+        explodeFriendlyAoe(state, p);
       } else {
         p.alive = false;
       }
@@ -1126,6 +1243,10 @@ function updateProjectiles(state: GameState, dt: number): void {
     for (const e of state.enemies) {
       if (!e.alive) continue;
       if (dist(p, e) <= e.radius + p.radius) {
+        if ((p.aoeRadius ?? 0) > 0 && !p.hostile) {
+          explodeFriendlyAoe(state, p);
+          break;
+        }
         damageEnemy(state, e, p.damage, {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
@@ -1162,10 +1283,7 @@ function afterWaveClear(state: GameState, input: Input): boolean {
   if (state.waveTier === "elite" || state.waveTier === "boss") {
     const choices = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
     if (choices.length > 0) {
-      state.relicDraft = choices;
-      state.pausedForDraft = true;
-      state.pendingRelicDraft = true;
-      state.draftKind = "relic";
+      openOrQueueDraft(state, { kind: "relic", choices });
       state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
       if (state.pendingLevelUps > 0) {
         openLevelDraft(state);
@@ -1202,12 +1320,15 @@ export function update(state: GameState, input: Input, dt: number): void {
     return;
   }
 
-  if (state.paused) {
+  const mayPause = canPauseSimulation(state);
+
+  if (state.paused && mayPause) {
     input.endFrame();
     return;
   }
 
   if (
+    mayPause &&
     state.pausedForDraft &&
     (state.relicDraft ||
       state.levelDraft ||
@@ -1217,6 +1338,20 @@ export function update(state: GameState, input: Input, dt: number): void {
       state.chestDraft)
   ) {
     state.elapsed += dt;
+    input.endFrame();
+    return;
+  }
+
+  // Gunner sniper aim-freeze (solo / single-human only)
+  if (mayPause && gunnerShouldFreezeSim(state)) {
+    state.elapsed += dt;
+    if (state.hero.alive) {
+      tickGunnerWeapons(state, {
+        fireHeld: input.isActionHeld("mobility"),
+        cycle: input.consumeAction("ultimate"),
+        dt,
+      });
+    }
     input.endFrame();
     return;
   }
@@ -1233,7 +1368,7 @@ export function update(state: GameState, input: Input, dt: number): void {
   state.goldFromIncome += gained;
   state.peakGold = Math.max(state.peakGold, state.gold);
   state.peakIncome = Math.max(state.peakIncome, income);
-  if (areCheatsEnabled() && loadCheatOptions().infiniteGold) {
+  if (gameplayCheats(state)?.infiniteGold) {
     state.gold = Math.max(state.gold, 99999);
   }
 
@@ -1245,7 +1380,18 @@ export function update(state: GameState, input: Input, dt: number): void {
   state.curseIncomeTaxTimer = tick(state.curseIncomeTaxTimer);
   state.curseFogTimer = tick(state.curseFogTimer);
   state.curseShopRefreshSlowTimer = tick(state.curseShopRefreshSlowTimer);
-  if (state.fogAlways || state.curseFogTimer > 0) state.mapFogActive = true;
+  {
+    const fog = laneFogState({
+      fogAlways: state.fogAlways,
+      fogThicknessPct: state.fogThicknessPct,
+      fogVisionRadius: state.fogVisionRadius,
+      curseFogTimer: state.curseFogTimer,
+      mapEclipseActive: state.mapEclipseActive,
+    });
+    state.mapFogActive = fog.active;
+    state.fogOpacity = fog.opacity;
+    state.fogVisionRadiusResolved = fog.visionRadius;
+  }
 
   // Hex DoT zones
   for (const z of state.hexZones) {
@@ -1379,15 +1525,25 @@ export function update(state: GameState, input: Input, dt: number): void {
         // Consume stray press so it doesn't linger
         input.consumeAction("mobility");
       }
+    } else if (heroUsesGunnerKit(state.hero.heroId)) {
+      tickGunnerWeapons(state, {
+        fireHeld: input.isActionHeld("mobility"),
+        cycle: input.consumeAction("ultimate"),
+        dt,
+      });
+      input.consumeAction("mobility");
     } else if (input.consumeAction("mobility")) {
       tryCastAbility(state, "mobility", axis);
     }
-    if (input.consumeAction("ultimate")) tryCastAbility(state, "ultimate", axis);
+    if (!heroUsesGunnerKit(state.hero.heroId) && input.consumeAction("ultimate")) {
+      tryCastAbility(state, "ultimate", axis);
+    }
     if (input.consumeAction("utility")) tryCastUtility(state);
 
     tickAbilityEffects(state, dt);
     tickUtilityEffects(state, dt);
     tickHeroKits(state, dt, input.isActionHeld("attack"));
+    if (heroUsesVectorKit(state.hero.heroId)) tickVectorMomentum(state, dt);
 
     const canBasic =
       !heroUsesGyroKit(state.hero.heroId) ||
@@ -1403,6 +1559,7 @@ export function update(state: GameState, input: Input, dt: number): void {
   if (!state.endless && !state.mpLane) updateOpponent(state, dt);
   tickChests(state, dt);
   tickMapSpecials(state, dt, state.spawning || state.enemies.some((e) => e.alive));
+  tickMines(state, dt);
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);
@@ -1425,7 +1582,7 @@ export function update(state: GameState, input: Input, dt: number): void {
       state.spawning = false;
       if (afterWaveClear(state, input)) return;
     }
-  } else if (!state.pausedForDraft) {
+  } else if (!state.pausedForDraft || !mayPause) {
     state.waveTimer -= dt;
     if (state.waveTimer <= 0) startWave(state);
   }
@@ -1442,65 +1599,46 @@ export function update(state: GameState, input: Input, dt: number): void {
   input.endFrame();
 }
 
+/**
+ * Common tail for every draft resolution: promote anything waiting in the queue,
+ * recompute the draft flags, and only wrap up the wave once the player has no
+ * reward left to take.
+ */
+function afterDraftResolved(state: GameState): void {
+  if (state.pendingLevelUps > 0 && !state.levelDraft) openLevelDraft(state);
+  syncDraftFlags(state);
+  if (state.draftKind !== null) return;
+  applySecondWind(state);
+  if (waveVictoryReached(state)) state.status = "won";
+}
+
 export function chooseRelic(state: GameState, id: RelicId): void {
   if (!state.relicDraft?.includes(id)) return;
   pickRelic(state, id);
   state.pendingRelicDraft = false;
   playSfx("levelup");
-  if (state.pendingLevelUps > 0 && !state.levelDraft) {
-    openLevelDraft(state);
-    return;
-  }
-  if (!state.pausedForDraft) {
-    applySecondWind(state);
-  }
-  if (waveVictoryReached(state) && !state.pausedForDraft) {
-    state.status = "won";
-  }
+  afterDraftResolved(state);
 }
 
 export function skipRelic(state: GameState): void {
   if (!state.relicDraft) return;
   state.relicDraft = null;
   state.pendingRelicDraft = false;
-  if (state.pendingLevelUps > 0 && !state.levelDraft) {
-    openLevelDraft(state);
-    return;
-  }
-  state.draftKind = null;
-  state.pausedForDraft = false;
-  applySecondWind(state);
+  afterDraftResolved(state);
   state.toast = "Relic skipped";
   state.toastTimer = 1.4;
-  if (waveVictoryReached(state)) state.status = "won";
 }
 
 export function chooseLevelUp(state: GameState, id: LevelPassiveId): void {
   chooseLevelPassive(state, id);
   playSfx("levelup");
-  if (!state.pausedForDraft) {
-    applySecondWind(state);
-    if (waveVictoryReached(state)) state.status = "won";
-  }
+  afterDraftResolved(state);
 }
 
 export function chooseUtility(state: GameState, id: UtilityId): void {
   if (!state.utilityDraft?.includes(id)) return;
   applyUtilityChoice(state, id);
-  if (state.pendingLevelUps > 0 && !state.levelDraft) {
-    openLevelDraft(state);
-  } else if (state.levelDraft) {
-    state.draftKind = "level";
-    state.pausedForDraft = true;
-  } else if (state.relicDraft) {
-    state.draftKind = "relic";
-    state.pausedForDraft = true;
-  } else {
-    state.draftKind = null;
-    state.pausedForDraft = false;
-    applySecondWind(state);
-    if (waveVictoryReached(state)) state.status = "won";
-  }
+  afterDraftResolved(state);
 }
 
 export function chooseCurse(state: GameState, id: CurseId): void {

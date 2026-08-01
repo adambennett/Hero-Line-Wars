@@ -4,7 +4,8 @@ import {
   xpToNextLevel,
   type LevelPassiveId,
 } from "../data/xp";
-import { LEVEL_PASSIVES } from "../data/xp";
+import { LEVEL_PASSIVES, isHeroPerkId } from "../data/xp";
+import { HERO_PERKS } from "../data/heroPerks";
 import { draftRelicChoices } from "../data/relics";
 import {
   draftUtilities,
@@ -13,6 +14,8 @@ import {
 import type { EnemyUnit, GameState } from "../game/state";
 import { isBossKind, isEliteKind } from "../data/enemies";
 import { hasRelic } from "./relics";
+import { hasDraftPending, openOrQueueDraft, syncDraftFlags } from "./drafts";
+import { applyHeroPerkOnChoose, perkEligibleForHero } from "./heroPerks";
 
 function levelDraftChoiceCount(state: GameState): number {
   return (state.levelDraftSize ?? 3) + (hasRelic(state, "draft_sage") ? 1 : 0);
@@ -58,18 +61,14 @@ export function shouldOfferUtilityDraft(state: GameState): boolean {
 export function openRunStartUtilityDraft(state: GameState): void {
   if (state.utilityDraftLevel !== UTILITY_DRAFT_AT_RUN_START) return;
   if (state.utilityId || state.utilityDraftOffered || state.utilityDraft) return;
-  state.utilityDraft = draftUtilities(3);
   state.utilityDraftOffered = true;
-  state.pausedForDraft = true;
-  state.draftKind = "utility";
+  openOrQueueDraft(state, { kind: "utility", choices: draftUtilities(3) });
 }
 
 export function openUtilityDraft(state: GameState): void {
   if (!shouldOfferUtilityDraft(state)) return;
-  state.utilityDraft = draftUtilities(3);
   state.utilityDraftOffered = true;
-  state.pausedForDraft = true;
-  state.draftKind = "utility";
+  openOrQueueDraft(state, { kind: "utility", choices: draftUtilities(3) });
 }
 
 function tryLevelUp(state: GameState): void {
@@ -78,22 +77,25 @@ function tryLevelUp(state: GameState): void {
     state.level += 1;
     state.pendingLevelUps += 1;
   }
-  if (state.pausedForDraft) return;
+  // Drafts queue now, so a level-up earned mid-draft is never dropped.
   if (shouldOfferUtilityDraft(state)) {
     openUtilityDraft(state);
     return;
   }
-  if (state.pendingLevelUps > 0 && !state.levelDraft) {
+  if (state.pendingLevelUps > 0) {
     openLevelDraft(state);
   }
 }
 
 export function openLevelDraft(state: GameState): void {
   if (state.pendingLevelUps <= 0) return;
+  // One level draft per pending level-up — the queue must not double-offer.
+  if (hasDraftPending(state, "level")) return;
   const size = levelDraftChoiceCount(state);
-  state.levelDraft = draftLevelPassives(size);
-  state.pausedForDraft = true;
-  state.draftKind = "level";
+  openOrQueueDraft(state, {
+    kind: "level",
+    choices: draftLevelPassives(size, state.hero.heroId),
+  });
   state.levelDraftsTaken += 1;
 }
 
@@ -101,7 +103,7 @@ export function rerollLevelDraft(state: GameState): boolean {
   if (!state.levelDraft) return false;
   if (state.rerollTokens <= 0) return false;
   state.rerollTokens -= 1;
-  state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state));
+  state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state), state.hero.heroId);
   return true;
 }
 
@@ -114,6 +116,15 @@ export function rerollRelicDraft(state: GameState): boolean {
 }
 
 export function applyLevelPassive(state: GameState, id: LevelPassiveId): void {
+  if (isHeroPerkId(id)) {
+    const def = HERO_PERKS[id];
+    if (!def || !perkEligibleForHero(id, state.hero.heroId)) return;
+    applyHeroPerkOnChoose(state, def);
+    state.levelPassives.push(id);
+    state.toast = `Level ${state.level}: ${def.name}`;
+    state.toastTimer = 2;
+    return;
+  }
   switch (id) {
     case "vitality":
       state.hero.maxHp += 30;
@@ -142,20 +153,18 @@ export function applyLevelPassive(state: GameState, id: LevelPassiveId): void {
 
 export function chooseLevelPassive(state: GameState, id: LevelPassiveId): void {
   if (!state.levelDraft?.includes(id)) return;
+  if (!perkEligibleForHero(id, state.hero.heroId)) return;
   applyLevelPassive(state, id);
   state.levelDraft = null;
   state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
   if (state.pendingLevelUps > 0) {
-    state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state));
-    state.draftKind = "level";
-    state.pausedForDraft = true;
+    openOrQueueDraft(state, {
+      kind: "level",
+      choices: draftLevelPassives(levelDraftChoiceCount(state), state.hero.heroId),
+    });
     state.levelDraftsTaken += 1;
-  } else if (state.relicDraft) {
-    state.draftKind = "relic";
-    state.pausedForDraft = true;
   } else {
-    state.draftKind = null;
-    state.pausedForDraft = false;
+    syncDraftFlags(state);
   }
 }
 

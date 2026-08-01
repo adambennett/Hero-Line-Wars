@@ -15,6 +15,7 @@ import type {
   ShopPad,
   TurretSlot,
 } from "../data/maps";
+import type { MapShapeId } from "../game/playBounds";
 
 export const CUSTOM_MAP_PREFIX = "cm_";
 export const CUSTOM_HERO_PREFIX = "ch_";
@@ -28,6 +29,18 @@ export type WindZone = RectZone & { vx: number; vy: number };
 
 export type SpikePoint = { x: number; y: number; radius: number; damage?: number };
 
+export type BouncePadZone = RectZone & { impulseX: number; impulseY: number };
+
+export type MapPortalPad = {
+  x: number;
+  y: number;
+  radius: number;
+  exitX: number;
+  exitY: number;
+};
+
+export type RelayBeaconPad = { x: number; y: number; radius: number; damageBonus?: number };
+
 export type CustomMapSpecials = {
   shiftingObstacles?: boolean;
   shrinkingLane?: boolean;
@@ -40,6 +53,12 @@ export type CustomMapSpecials = {
   riftSurges?: boolean;
   /** Spawns delayed explosive orbs in the lane during waves. */
   volatileOrbs?: boolean;
+  /** Periodic ember rain AoE during waves (not on any built-in yet). */
+  emberRain?: boolean;
+  /** Free gold crates drop during waves. */
+  supplyDrops?: boolean;
+  /** Periodic chrono pulse: freeze creeps briefly, haste heroes. */
+  chronoPulse?: boolean;
 };
 
 /** Full authored custom map (geometry + specials + effect zones). */
@@ -47,8 +66,12 @@ export type CustomMapDef = {
   id: string;
   name: string;
   blurb: string;
+  /** Playable outline; omitted on legacy maps ⇒ rectangle. */
+  shape?: MapShapeId;
   laneTop: number;
   laneBottom: number;
+  laneLeft?: number;
+  laneRight?: number;
   base: PointPad & { maxHp: number };
   /** Shop pads — 0 or more allowed. */
   shops: ShopPad[];
@@ -66,6 +89,9 @@ export type CustomMapDef = {
   goldVents?: RectZone[];
   windCurrents?: WindZone[];
   spikePulses?: SpikePoint[];
+  bouncePads?: BouncePadZone[];
+  mapPortals?: MapPortalPad[];
+  relayBeacons?: RelayBeaconPad[];
 };
 
 export type CustomHeroDef = {

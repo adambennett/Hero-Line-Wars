@@ -21,7 +21,10 @@ export type HeroId =
   | "gyro"
   | "lodestone"
   | "chrona"
-  | "hive";
+  | "hive"
+  | "gunner"
+  | "sapper"
+  | "vector";
 
 export type AbilityKind =
   | "dash"
@@ -65,7 +68,13 @@ export type AbilityKind =
   | "timestep"
   | "stasis"
   | "swarmdash"
-  | "hivedetonate";
+  | "hivedetonate"
+  | "gunfire"
+  | "gunswap"
+  | "plantmine"
+  | "detonate"
+  | "momentumdash"
+  | "kineticburst";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -91,7 +100,10 @@ export type AttackStyle =
   | "warpbolt"
   | "magnet"
   | "chrono"
-  | "drone";
+  | "drone"
+  | "machinegun"
+  | "grenade"
+  | "kinetic";
 /**
  * How basics / ults interact with attack range:
  * - free: fire along aim anywhere (no range circle / no engage gate)
@@ -936,6 +948,120 @@ export const HEROES: Record<HeroId, HeroDef> = {
       },
     ],
   },
+  gunner: {
+    id: "gunner",
+    name: "Gunner",
+    blurb: "No dash — a walking arsenal. LMB machine gun; RMB fires the equipped heavy weapon; Ult cycles guns.",
+    color: "#9aab80",
+    glowColor: "#d0e0a8",
+    radius: 17,
+    speed: 200,
+    maxHp: 118,
+    attackRange: 165,
+    attackDamage: 7,
+    attackCooldown: 0.12,
+    projectileSpeed: 760,
+    attackStyle: "machinegun",
+    aimMode: "free",
+    attackHint: "Rapid-fire machine gun — low damage per hit",
+    passive: {
+      id: "walking_arsenal",
+      name: "Walking Arsenal",
+      blurb: "Eight ultimate weapons. Ult cycles; RMB fires. Snipers lock movement (solo freeze).",
+    },
+    abilities: [
+      {
+        id: "gunfire",
+        slot: "mobility",
+        name: "Fire Weapon",
+        cooldown: 0.4,
+        hint: "Hold to fire / aim / charge the equipped ultimate weapon (not a dash).",
+      },
+      {
+        id: "gunswap",
+        slot: "ultimate",
+        name: "Swap Weapon",
+        cooldown: 0.4,
+        hint: "Cycle Rockets → Bolt Sniper → Auto Sniper → Shotgun → BR → AR → LMG → Laser.",
+      },
+    ],
+  },
+  sapper: {
+    id: "sapper",
+    name: "Sapper",
+    blurb: "Demolitions — lob grenades, seed the lane with mines, then detonate the field.",
+    color: "#c87840",
+    glowColor: "#f0c080",
+    radius: 16,
+    speed: 215,
+    maxHp: 108,
+    attackRange: 150,
+    attackDamage: 14,
+    attackCooldown: 0.48,
+    projectileSpeed: 340,
+    attackStyle: "grenade",
+    aimMode: "free",
+    attackHint: "Lobbed grenade — arcs to aim and bursts on impact",
+    passive: {
+      id: "demolition",
+      name: "Demolition",
+      blurb: "Mine kills refund 25% of Plant Mine cooldown. Armed mines pulse visibly.",
+    },
+    abilities: [
+      {
+        id: "plantmine",
+        slot: "mobility",
+        name: "Plant Mine",
+        cooldown: 5.5,
+        hint: "Drop an armed mine at your feet (~1.2s arm). Up to 5 active.",
+      },
+      {
+        id: "detonate",
+        slot: "ultimate",
+        name: "Detonate",
+        cooldown: 11,
+        hint: "Explode all mines for heavy AoE. Empty field drops a cluster charge at aim.",
+      },
+    ],
+  },
+  vector: {
+    id: "vector",
+    name: "Vector",
+    blurb: "Momentum fighter — move to charge kinetic power, then spend it on dash or shockwave.",
+    color: "#ff8a40",
+    glowColor: "#ffd080",
+    radius: 16,
+    speed: 232,
+    maxHp: 96,
+    attackRange: 145,
+    attackDamage: 13,
+    attackCooldown: 0.34,
+    projectileSpeed: 560,
+    attackStyle: "kinetic",
+    aimMode: "free",
+    attackHint: "Kinetic slug — damage and pierce scale with momentum",
+    passive: {
+      id: "inertia",
+      name: "Inertia",
+      blurb: "Build Momentum while moving (cap 100). High momentum: +damage, attack speed, pierce.",
+    },
+    abilities: [
+      {
+        id: "momentumdash",
+        slot: "mobility",
+        name: "Momentum Dash",
+        cooldown: 5,
+        hint: "Spend momentum for a long dash; low momentum = short hop.",
+      },
+      {
+        id: "kineticburst",
+        slot: "ultimate",
+        name: "Kinetic Burst",
+        cooldown: 12,
+        hint: "Convert all momentum into a shockwave — damage and knockback scale with charge.",
+      },
+    ],
+  },
 };
 
 export const HERO_LIST: HeroDef[] = [
@@ -960,6 +1086,9 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.lodestone,
   HEROES.chrona,
   HEROES.hive,
+  HEROES.gunner,
+  HEROES.sapper,
+  HEROES.vector,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

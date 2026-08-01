@@ -19,8 +19,21 @@ import {
   tryCastAbility,
   tickAbilityEffects,
   tickHeroKits,
+  tickMines,
+  tickVectorMomentum,
 } from "../systems/abilities";
-import { tryBasicAttack } from "../systems/combat";
+import {
+  tryBasicAttack,
+  explodeFriendlyAoe,
+  applyPlayerDamage,
+  applySlow,
+  bounceProjectile,
+  damageEnemy,
+  resolveHostileProjectile,
+  steerSeekingProjectile,
+  applyMagnetPull,
+} from "../systems/combat";
+import { tickGunnerWeapons } from "../systems/gunner";
 import { tryCastUtility, tickUtilityEffects } from "../systems/utility";
 import { chooseBaseBranch, tryUpgradeBase } from "../systems/baseUpgrade";
 import { buyShopItem, tickShopRotation, beginWaveShop } from "../systems/shop";
@@ -28,23 +41,42 @@ import { buySendPack, availableSendPacks, consumePendingSends } from "../systems
 import { updateEnemies, createEnemy } from "../systems/enemies";
 import { updateTurrets } from "../systems/turrets";
 import { chooseChestReward, tickChests, tickMapSpecials } from "../systems/chests";
-import { applyWaveRider } from "../systems/relics";
-import { pickBossKind, pickEliteKind, pickEnemyKind, waveTier } from "../data/enemies";
+import { applyWaveRider, tryPhoenixRevive } from "../systems/relics";
+import { pickEnemyKind } from "../data/enemies";
+import { MAP_W, WAVE_BREAK_SEC, WAVE_SCALE } from "../data/constants";
 import {
-  ENEMIES_PER_WAVE_BASE,
-  MAP_W,
-  WAVE_BREAK_SEC,
-  WAVE_SCALE,
-} from "../data/constants";
-import { circleHitsObstacle, findClearSpot, reshuffleObstacles, blockedByObstacle, mapRespawn, nearAnyShop } from "../data/maps";
-import { clamp, dist } from "../game/math";
-import { heroUsesGyroKit, heroUsesWarpKit, resolveHero } from "../custom/registry";
-import { rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
+  circleHitsObstacle,
+  blockedByObstacle,
+  mapRespawn,
+  nearAnyShop,
+  clampInLane,
+} from "../data/maps";
+import { laneFogState } from "../game/fog";
+import {
+  beginWaveFromPlan,
+  planWaveSpawns,
+  prepareLaneGeometryForWave,
+  spawnWaveSpecials,
+} from "../systems/waves";
+import { canPauseSimulation } from "../game/pause";
+import { openOrQueueDraft } from "../systems/drafts";
+import { dist } from "../game/math";
+import {
+  heroUsesGyroKit,
+  heroUsesWarpKit,
+  heroUsesGunnerKit,
+  heroUsesVectorKit,
+  resolveHero,
+} from "../custom/registry";
+import { rerollLevelDraft, rerollRelicDraft, openLevelDraft } from "../systems/xp";
 import {
   anyBagPausedForDraft,
   withPlayerBag,
 } from "./playerBag";
 import { isAiControllerSlot } from "./matchFactory";
+import { draftRelicChoices } from "../data/relics";
+import { applySecondWind } from "../systems/relics";
+import { setLaneSfxEnabled } from "../systems/audio";
 
 function applyOutgoingCurseTo(from: GameState, to: GameState): void {
   const c = from.outgoingCurse;
@@ -61,11 +93,6 @@ function applyOutgoingCurseTo(from: GameState, to: GameState): void {
   to.toast = "Hex Storm hits your lane!";
   to.toastTimer = 2;
 }
-import { draftRelicChoices } from "../data/relics";
-import { applySecondWind } from "../systems/relics";
-import { openLevelDraft } from "../systems/xp";
-import { bounceProjectile, applyPlayerDamage, applySlow, damageEnemy, resolveHostileProjectile, steerSeekingProjectile, applyMagnetPull } from "../systems/combat";
-import { setLaneSfxEnabled } from "../systems/audio";
 import type { CombatIntent } from "./types";
 import { emptyIntent } from "./types";
 import type { MpMatch } from "./matchFactory";
@@ -75,8 +102,9 @@ import { scriptedIntent, thinkNeural, type NeuralLaneAi } from "../ai/runtime";
 function moveHeroObj(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
   const map = state.map;
-  const x = clamp(nx, r, MAP_W - r);
-  const y = clamp(ny, map.laneTop + r, map.laneBottom - r);
+  const clamped = clampInLane(map, nx, ny, r);
+  const x = clamped.x;
+  const y = clamped.y;
   if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
     hero.x = x;
     hero.y = y;
@@ -91,11 +119,11 @@ function moveHeroObj(state: GameState, hero: HeroRuntime, nx: number, ny: number
   }
 }
 
-function withHero(state: GameState, hero: HeroRuntime, fn: () => void): void {
+function withHero<T>(state: GameState, hero: HeroRuntime, fn: () => T): T {
   const prev = state.hero;
   state.hero = hero;
   try {
-    fn();
+    return fn();
   } finally {
     // If fn replaced state.hero identity unexpectedly, keep mutations on `hero`.
     if (state.hero !== hero && state.hero === prev) {
@@ -141,14 +169,23 @@ function applyHeroCombat(state: GameState, hero: HeroRuntime, intent: CombatInte
       } else {
         hero.bladeHookCharge = 0;
       }
+    } else if (heroUsesGunnerKit(hero.heroId)) {
+      tickGunnerWeapons(state, {
+        fireHeld: !!intent.mobilityHeld || intent.mobility,
+        cycle: intent.ultimate,
+        dt,
+      });
     } else if (intent.mobility) {
       tryCastAbility(state, "mobility", axis);
     }
-    if (intent.ultimate) tryCastAbility(state, "ultimate", axis);
+    if (!heroUsesGunnerKit(hero.heroId) && intent.ultimate) {
+      tryCastAbility(state, "ultimate", axis);
+    }
     if (intent.utility) tryCastUtility(state);
     tickAbilityEffects(state, dt);
     tickUtilityEffects(state, dt);
     tickHeroKits(state, dt, intent.attackHeld);
+    if (heroUsesVectorKit(hero.heroId)) tickVectorMomentum(state, dt);
 
     const canBasic =
       !heroUsesGyroKit(hero.heroId) || (hero.bladeMode ?? "wrapped") === "wrapped";
@@ -191,41 +228,10 @@ function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean 
 }
 
 function startWave(state: GameState): void {
-  if (state.map.shrinkingLane && state.map.baseLaneTop != null && state.map.baseLaneBottom != null) {
-    state.map.laneTop = state.map.baseLaneTop;
-    state.map.laneBottom = state.map.baseLaneBottom;
-  }
-  if (state.map.shiftingObstacles) {
-    const heroes = allLaneHeroes(state);
-    const reserved = [
-      ...heroes,
-      ...state.turrets.filter((t) => t.alive),
-    ].map((u) => ({ x: u.x, y: u.y, radius: u.radius }));
-    reshuffleObstacles(state.map, reserved);
-    for (const h of heroes) {
-      const clear = findClearSpot(state.map, h.x, h.y, h.radius);
-      h.x = clear.x;
-      h.y = clear.y;
-    }
-    for (const t of state.turrets) {
-      if (!t.alive) continue;
-      const clear = findClearSpot(state.map, t.x, t.y, t.radius);
-      t.x = clear.x;
-      t.y = clear.y;
-    }
-    state.toast = "Ground shifts…";
-    state.toastTimer = 1.4;
-  }
+  prepareLaneGeometryForWave(state, allLaneHeroes(state));
   state.wave += 1;
-  state.waveTier = waveTier(state.wave);
-  state.spawning = true;
-  const count = Math.round(
-    (ENEMIES_PER_WAVE_BASE + (state.wave - 1) * WAVE_SCALE.enemiesPerWave) *
-      state.modifiers.enemyCountMul,
-  );
-  state.toSpawn = count;
-  if (state.waveTier === "elite") state.toSpawn = Math.max(3, Math.floor(state.toSpawn * 0.75));
-  if (state.waveTier === "boss") state.toSpawn = Math.max(2, Math.floor(state.toSpawn * 0.55));
+  const plan = planWaveSpawns(state);
+  beginWaveFromPlan(state, plan);
   state.sentQueue = consumePendingSends(state);
   state.spawnCd = state.wave <= 2 ? 0.35 : 0;
   if (state.playerBags) {
@@ -242,15 +248,7 @@ function startWave(state: GameState): void {
     }
   }
 
-  if (state.waveTier === "elite") {
-    state.enemies.push(createEnemy(state, pickEliteKind(), { hpScale: 1 }));
-    state.toast = "ELITE WAVE";
-    state.toastTimer = 2.2;
-  } else if (state.waveTier === "boss") {
-    state.enemies.push(createEnemy(state, pickBossKind(), { hpScale: 1 }));
-    state.toast = "BOSS WAVE";
-    state.toastTimer = 2.4;
-  }
+  spawnWaveSpecials(state, plan);
   applyWaveRider(state);
   resetWaveLives(state);
 }
@@ -281,6 +279,15 @@ function remainingSpawns(state: GameState): number {
 
 function killHeroObj(state: GameState, hero: HeroRuntime): void {
   if (!hero.alive) return;
+  // Phoenix Down is a per-player relic, so the revive must run inside the
+  // dying hero's bag (parity with SP `killHero`).
+  const slot = hero.controllerSlot;
+  const revived = withHero(state, hero, () =>
+    state.playerBags && slot != null && slot >= 0
+      ? withPlayerBag(state, slot, () => tryPhoenixRevive(state))
+      : tryPhoenixRevive(state),
+  );
+  if (revived) return;
   hero.alive = false;
   hero.hp = 0;
   state.deathCount += 1;
@@ -326,6 +333,8 @@ function updateProjectilesMp(state: GameState, dt: number): void {
           resolveHostileProjectile(state, p, heroes, (h, dmg) => {
             withHero(state, h as HeroRuntime, () => applyPlayerDamage(state, dmg));
           });
+        } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
+          explodeFriendlyAoe(state, p);
         } else {
           p.alive = false;
         }
@@ -342,6 +351,8 @@ function updateProjectilesMp(state: GameState, dt: number): void {
         resolveHostileProjectile(state, p, heroes, (h, dmg) => {
           withHero(state, h as HeroRuntime, () => applyPlayerDamage(state, dmg));
         });
+      } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
+        explodeFriendlyAoe(state, p);
       } else {
         p.alive = false;
       }
@@ -376,6 +387,10 @@ function updateProjectilesMp(state: GameState, dt: number): void {
     for (const e of state.enemies) {
       if (!e.alive) continue;
       if (dist(p, e) <= e.radius + p.radius) {
+        if ((p.aoeRadius ?? 0) > 0 && !p.hostile) {
+          explodeFriendlyAoe(state, p);
+          break;
+        }
         damageEnemy(state, e, p.damage, {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
@@ -399,10 +414,7 @@ function openRelicDraftOnBag(state: GameState): boolean {
   if (state.disableRelics) return false;
   const choices = draftRelicChoices(state.relics, state.relicDraftSize || 3);
   if (choices.length === 0) return false;
-  state.relicDraft = choices;
-  state.pausedForDraft = true;
-  state.pendingRelicDraft = true;
-  state.draftKind = "relic";
+  openOrQueueDraft(state, { kind: "relic", choices });
   return true;
 }
 
@@ -532,7 +544,11 @@ function updateLaneMp(
 ): void {
   if (state.status !== "playing") return;
 
-  if (anyBagPausedForDraft(state)) {
+  // With more than one human, nothing may freeze the lane — drafts stay open
+  // on top of a running match (see `game/pause.ts`).
+  const draftsMayPause = canPauseSimulation(state);
+
+  if (draftsMayPause && anyBagPausedForDraft(state)) {
     state.elapsed += dt;
     for (const h of allLaneHeroes(state)) {
       const slot = h.controllerSlot;
@@ -549,6 +565,32 @@ function updateLaneMp(
     return;
   }
 
+  // Solo sniper aim-freeze: pause lane combat while the human Gunner aims
+  if (draftsMayPause) {
+    const aimingGunner = allLaneHeroes(state).find(
+      (h) =>
+        h.alive &&
+        heroUsesGunnerKit(h.heroId) &&
+        h.gunnerAiming &&
+        h.controllerSlot != null &&
+        h.controllerSlot >= 0,
+    );
+    if (aimingGunner) {
+      state.elapsed += dt;
+      withHero(state, aimingGunner, () => {
+        const intent = intents.get(aimingGunner.controllerSlot!) ?? emptyIntent();
+        state.aimWorldX = aimingGunner.x + intent.aimX * 200;
+        state.aimWorldY = aimingGunner.y + intent.aimY * 200;
+        tickGunnerWeapons(state, {
+          fireHeld: !!intent.mobilityHeld || intent.mobility,
+          cycle: intent.ultimate,
+          dt,
+        });
+      });
+      return;
+    }
+  }
+
   state.elapsed += dt;
   tickIncomeForBags(state, dt);
 
@@ -560,7 +602,18 @@ function updateLaneMp(
   state.curseIncomeTaxTimer = tick(state.curseIncomeTaxTimer);
   state.curseFogTimer = tick(state.curseFogTimer);
   state.curseShopRefreshSlowTimer = tick(state.curseShopRefreshSlowTimer);
-  if (state.fogAlways || state.curseFogTimer > 0) state.mapFogActive = true;
+  {
+    const fog = laneFogState({
+      fogAlways: state.fogAlways,
+      fogThicknessPct: state.fogThicknessPct,
+      fogVisionRadius: state.fogVisionRadius,
+      curseFogTimer: state.curseFogTimer,
+      mapEclipseActive: state.mapEclipseActive,
+    });
+    state.mapFogActive = fog.active;
+    state.fogOpacity = fog.opacity;
+    state.fogVisionRadiusResolved = fog.visionRadius;
+  }
 
   // Hex DoT zones
   for (const z of state.hexZones) {
@@ -625,6 +678,7 @@ function updateLaneMp(
   updateTurrets(state, dt);
   tickChests(state, dt);
   tickMapSpecials(state, dt, state.spawning || state.enemies.some((e) => e.alive));
+  tickMines(state, dt);
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);
@@ -656,7 +710,7 @@ function updateLaneMp(
       state.spawning = false;
       afterWaveClearMp(state);
     }
-  } else if (!anyBagPausedForDraft(state)) {
+  } else if (!draftsMayPause || !anyBagPausedForDraft(state)) {
     state.waveTimer -= dt;
     if (state.waveTimer <= 0) {
       if (holdNextWave) {

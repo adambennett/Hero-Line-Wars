@@ -60,6 +60,8 @@ export type PlayerBag = {
   shopBuys: number;
   levelDraftsTaken: number;
   phoenixCharges: number;
+  /** Rewards earned while another draft of the same kind was open. */
+  draftQueue: import("../systems/drafts").PendingDraft[];
 };
 
 const BAG_KEYS: (keyof PlayerBag)[] = [
@@ -109,6 +111,7 @@ const BAG_KEYS: (keyof PlayerBag)[] = [
   "shopBuys",
   "levelDraftsTaken",
   "phoenixCharges",
+  "draftQueue",
 ];
 
 export function bagKey(slot: number): string {
@@ -163,6 +166,7 @@ export function createPlayerBag(from: GameState): PlayerBag {
     shopBuys: 0,
     levelDraftsTaken: 0,
     phoenixCharges: 0,
+    draftQueue: [],
   };
 }
 
@@ -309,6 +313,7 @@ export function serializeBags(
       baseBranchDraft: bag.baseBranchDraft ? [...bag.baseBranchDraft] : null,
       baseBranches: [...bag.baseBranches],
       baseBranchMods: { ...bag.baseBranchMods },
+      draftQueue: (bag.draftQueue ?? []).map((d) => ({ ...d })),
     };
   }
   return out;

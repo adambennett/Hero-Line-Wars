@@ -167,6 +167,14 @@ export function loadSettings(): ClientSettingsFull {
 
 export function saveSettings(settings: ClientSettings | ClientSettingsFull): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  syncMotionPreference(settings);
+}
+
+/** Mirror reduce-motion onto `<html>` so CSS can kill shine / idle menu motion. */
+export function syncMotionPreference(settings?: Pick<ClientSettings, "reduceMotion"> | ClientSettingsFull): void {
+  if (typeof document === "undefined") return;
+  const on = !!(settings?.reduceMotion ?? loadSettings().reduceMotion);
+  document.documentElement.classList.toggle("reduce-motion", on);
 }
 
 export function bindingEquals(a: Binding, b: Binding): boolean {

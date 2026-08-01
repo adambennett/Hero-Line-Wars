@@ -24,6 +24,9 @@ export type MetaUpgradeId =
   | "unlock_lodestone"
   | "unlock_chrona"
   | "unlock_hive"
+  | "unlock_gunner"
+  | "unlock_sapper"
+  | "unlock_vector"
   | "crest_forge"
   | "bounty_board"
   | "veteran_pay"
@@ -357,6 +360,31 @@ export const META_UPGRADES: MetaUpgradeDef[] = [
     costs: [80],
     kind: "unlock",
     requiresChallenge: "swarm_lord",
+  },
+  {
+    id: "unlock_gunner",
+    name: "Commission: Gunner",
+    blurb: "Unlock the walking arsenal Gunner — eight ultimate weapons.",
+    maxRank: 1,
+    costs: [90],
+    kind: "unlock",
+  },
+  {
+    id: "unlock_sapper",
+    name: "Commission: Sapper",
+    blurb: "Unlock the demolitions expert Sapper — mines and grenades.",
+    maxRank: 1,
+    costs: [85],
+    kind: "unlock",
+  },
+  {
+    id: "unlock_vector",
+    name: "Commission: Vector",
+    blurb: "Unlock the momentum fighter Vector.",
+    maxRank: 1,
+    costs: [80],
+    kind: "unlock",
+    requiresChallenge: "momentum_master",
   },
   {
     id: "unlock_challenge_items_a",

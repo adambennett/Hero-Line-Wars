@@ -1,6 +1,7 @@
 import type { RelicId } from "../data/relics";
 import { RELICS } from "../data/relics";
 import type { GameState } from "../game/state";
+import { syncDraftFlags } from "./drafts";
 
 export function hasRelic(state: GameState, id: RelicId): boolean {
   return state.relics.includes(id);
@@ -87,13 +88,7 @@ export function pickRelic(state: GameState, id: RelicId): void {
     state.hero.luck += 0.05;
   }
 
-  if (state.pendingLevelUps > 0 || state.levelDraft) {
-    state.draftKind = "level";
-    state.pausedForDraft = true;
-  } else {
-    state.draftKind = null;
-    state.pausedForDraft = false;
-  }
+  syncDraftFlags(state);
 
   state.toast = `Relic: ${RELICS[id].name}`;
   state.toastTimer = 2.2;

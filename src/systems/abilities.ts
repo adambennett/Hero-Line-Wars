@@ -1,5 +1,11 @@
 import { type AbilityKind, type AbilitySlot } from "../data/heroes";
-import { heroUsesGyroKit, resolveHero, heroHasPassive } from "../custom/registry";
+import {
+  heroUsesGyroKit,
+  heroUsesSapperKit,
+  heroUsesVectorKit,
+  resolveHero,
+  heroHasPassive,
+} from "../custom/registry";
 import { MAP_W } from "../data/constants";
 import { circleHitsObstacle, findClearSpot, rayObstacleHitT } from "../data/maps";
 import { draftCurseChoices, CURSES, type CurseId } from "../data/curses";
@@ -17,6 +23,8 @@ import {
 } from "./combat";
 import { mobilityCdMul, ultimateCdMul } from "./relics";
 import { playSfx } from "./audio";
+import { openOrQueueDraft, syncDraftFlags } from "./drafts";
+import { perksForState } from "./heroPerks";
 
 function resolveDashDir(state: GameState, move: Vec2): Vec2 {
   let dx = move.x;
@@ -407,9 +415,7 @@ function castHexStep(state: GameState, move: Vec2): boolean {
 
 /** Open Hex Storm curse draft (SP pauses combat; AI auto-picks). */
 function castHexStorm(state: GameState): boolean {
-  state.curseDraft = draftCurseChoices(3);
-  state.pausedForDraft = true;
-  state.draftKind = "curse";
+  openOrQueueDraft(state, { kind: "curse", choices: draftCurseChoices(3) });
   state.toast = "Choose a curse for the enemy lane";
   state.toastTimer = 1.6;
   addFx(state, state.hero.x, state.hero.y, 70, "#a060c866", 0.4);
@@ -463,14 +469,7 @@ export function applyCurseChoice(state: GameState, id: CurseId): void {
   state.toast = `Hex Storm — ${def.name}!`;
   state.toastTimer = 2;
   state.curseDraft = null;
-  state.draftKind = null;
-  state.pausedForDraft = !!(
-    state.relicDraft ||
-    state.levelDraft ||
-    state.baseBranchDraft ||
-    state.utilityDraft ||
-    state.chestDraft
-  );
+  syncDraftFlags(state);
   playSfx("cast");
 }
 
@@ -741,7 +740,160 @@ const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = 
   stasis: (s) => castStasis(s),
   swarmdash: (s, m) => castSwarmDash(s, m),
   hivedetonate: (s) => castHiveDetonate(s),
+  gunfire: () => false, // hold-handled in gunner.ts
+  gunswap: () => false, // cycle handled in gunner.ts
+  plantmine: (s) => castPlantMine(s),
+  detonate: (s) => castDetonate(s),
+  momentumdash: (s, m) => castMomentumDash(s, m),
+  kineticburst: (s) => castKineticBurst(s),
 };
+
+function castPlantMine(state: GameState): boolean {
+  if (!state.mines) state.mines = [];
+  if (state.mines.length >= 5) {
+    state.toast = "Mine cap (5)";
+    state.toastTimer = 0.9;
+    return false;
+  }
+  const perks = perksForState(state);
+  const arm = 1.2 * perks.mineArmMul;
+  state.mines.push({
+    id: state.nextId++,
+    x: state.hero.x,
+    y: state.hero.y,
+    radius: 16,
+    armTimer: arm,
+    damage: attackDamage(state) * 2.4 * perks.mineDamageMul,
+    ownerSlot: state.hero.controllerSlot ?? null,
+  });
+  addFx(state, state.hero.x, state.hero.y, 28, "#c8784088", 0.3);
+  return true;
+}
+
+function explodeMine(state: GameState, m: { x: number; y: number; damage: number; radius: number }): number {
+  const perks = perksForState(state);
+  const area = 70 * perks.abilityAreaMul;
+  const dmg = m.damage * perks.abilityDamageMul;
+  const before = state.enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
+  damageEnemiesInRadius(state, m.x, m.y, area, dmg);
+  const after = state.enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
+  addFx(state, m.x, m.y, area, "#ff804088", 0.4);
+  state.shake = Math.max(state.shake, 0.2);
+  return Math.max(0, before - after);
+}
+
+function castDetonate(state: GameState): boolean {
+  const perks = perksForState(state);
+  if (!state.mines) state.mines = [];
+  if (state.mines.length === 0) {
+    // Cluster charge at aim
+    const dmg = attackDamage(state) * 3.2 * perks.abilityDamageMul;
+    const r = 90 * perks.abilityAreaMul;
+    damageEnemiesInRadius(state, state.aimWorldX, state.aimWorldY, r, dmg);
+    addFx(state, state.aimWorldX, state.aimWorldY, r, "#ff604088", 0.45);
+    state.shake = Math.max(state.shake, 0.28);
+    return true;
+  }
+  let killCredit = 0;
+  for (const m of state.mines) killCredit += explodeMine(state, m);
+  state.mines = [];
+  if (killCredit > 0 && heroHasPassive(state.hero.heroId, "demolition")) {
+    state.hero.abilityCds[0] = Math.max(0, (state.hero.abilityCds[0] ?? 0) - 5.5 * 0.25);
+  }
+  return true;
+}
+
+function castMomentumDash(state: GameState, move: Vec2): boolean {
+  const perks = perksForState(state);
+  const mom = state.hero.momentum ?? 0;
+  const cap = 100 + perks.momentumCapBonus;
+  const ratio = Math.min(1, mom / Math.max(1, cap));
+  const distDash = 70 + ratio * 100;
+  dashHero(state, move, distDash, "#ff9a50", {
+    damageTrail: attackDamage(state) * 0.4 * ratio * perks.abilityDamageMul,
+  });
+  state.hero.momentum = Math.max(0, mom * 0.35);
+  return true;
+}
+
+function castKineticBurst(state: GameState): boolean {
+  const perks = perksForState(state);
+  const mom = state.hero.momentum ?? 0;
+  const cap = 100 + perks.momentumCapBonus;
+  const ratio = Math.min(1, mom / Math.max(1, cap));
+  const r = (85 + ratio * 55) * perks.abilityAreaMul;
+  const dmg = attackDamage(state) * (1.6 + ratio * 2.4) * perks.abilityDamageMul;
+  damageEnemiesInRadius(state, state.hero.x, state.hero.y, r, dmg);
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    if (dist(state.hero, e) > r + e.radius) continue;
+    const n = normalize(e.x - state.hero.x, e.y - state.hero.y);
+    e.x += n.x * (40 + ratio * 50);
+    e.y += n.y * (40 + ratio * 50);
+    applySlow(e, 0.55, 1.2);
+  }
+  addFx(state, state.hero.x, state.hero.y, r, "#ff8a4088", 0.45);
+  state.shake = Math.max(state.shake, 0.3);
+  state.hero.momentum = 0;
+  return true;
+}
+
+/** Arm / trip Sapper mines. Call once per lane tick. */
+export function tickMines(state: GameState, dt: number): void {
+  if (!state.mines?.length) return;
+  const perks = perksForState(state);
+  const remain: typeof state.mines = [];
+  for (const m of state.mines) {
+    if (m.armTimer > 0) {
+      m.armTimer = Math.max(0, m.armTimer - dt);
+      remain.push(m);
+      continue;
+    }
+    let tripped = false;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist(m, e) <= m.radius + e.radius + 8) {
+        tripped = true;
+        break;
+      }
+    }
+    if (tripped) {
+      const kills = explodeMine(state, m);
+      if (kills > 0 && heroHasPassive(state.hero.heroId, "demolition")) {
+        const refund = 5.5 * 0.25 * (perks.passiveMul > 1 ? 1.1 : 1);
+        // Refund on primary sapper if present
+        for (const h of [state.hero, ...state.allies]) {
+          if (heroUsesSapperKit(h.heroId)) {
+            h.abilityCds[0] = Math.max(0, (h.abilityCds[0] ?? 0) - refund);
+          }
+        }
+      }
+    } else {
+      remain.push(m);
+    }
+  }
+  state.mines = remain;
+}
+
+/** Build / decay Vector momentum from movement. */
+export function tickVectorMomentum(state: GameState, dt: number): void {
+  if (!heroUsesVectorKit(state.hero.heroId) || !state.hero.alive) return;
+  const perks = perksForState(state);
+  const h = state.hero;
+  const prevX = h.momentumPrevX ?? h.x;
+  const prevY = h.momentumPrevY ?? h.y;
+  const moved = Math.hypot(h.x - prevX, h.y - prevY);
+  h.momentumPrevX = h.x;
+  h.momentumPrevY = h.y;
+  const cap = 100 + perks.momentumCapBonus;
+  let mom = h.momentum ?? 0;
+  if (moved > 0.5) {
+    mom += moved * 0.55 * perks.momentumGainMul;
+  } else {
+    mom = Math.max(0, mom - 35 * dt);
+  }
+  h.momentum = clamp(mom, 0, cap);
+}
 
 export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2): void {
   const hero = resolveHero(state.hero.heroId);
@@ -758,9 +910,10 @@ export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2):
   const ok = CASTERS[ability.id](state, move);
   if (ok) {
     state.abilitiesCast += 1;
+    const perks = perksForState(state);
     let cd = ability.cooldown;
-    if (slot === "mobility") cd *= mobilityCdMul(state);
-    if (slot === "ultimate") cd *= ultimateCdMul(state);
+    if (slot === "mobility") cd *= mobilityCdMul(state) * perks.mobilityCdMul;
+    if (slot === "ultimate") cd *= ultimateCdMul(state) * perks.ultimateCdMul;
     // blinkrng / padlink may have set CD negative to refund / skip
     if ((state.hero.abilityCds[index] ?? 0) < 0) {
       state.hero.abilityCds[index] = 0;

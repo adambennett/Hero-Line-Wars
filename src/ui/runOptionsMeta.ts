@@ -40,6 +40,13 @@ export const RUN_OPTION_TIPS = {
   noSends: "Cannot buy send packs.",
   noRelics: "No relic drafts.",
   fogAlways: "Fog of war stays on for the whole run.",
+  fogThickness:
+    "How black the fog shroud is. 100% blacks out the lane except your vision circle (Flash-style).",
+  fogVision: "Size of the clear vision circle around you while fogged.",
+  glassCannon: "Heroes deal +50% damage and take +50% damage.",
+  goldRush: "Kill gold is doubled.",
+  wildChests: "Chest spawn chance is tripled.",
+  crampedLane: "Start with a tighter playable area (shape shrinks inward).",
   doubleElites: "Elite spawns are doubled when elites are enabled.",
 } as const;
 
@@ -86,7 +93,13 @@ export const RUN_OPTION_DEFAULTS = {
   disableSends: false,
   disableRelics: false,
   fogAlways: false,
+  fogThicknessPct: 55,
+  fogVisionRadius: 120,
   doubleElites: false,
+  glassCannon: false,
+  goldRush: false,
+  wildChests: false,
+  crampedLane: false,
 };
 
 export const RUN_OPTION_POOLS = {
@@ -110,4 +123,6 @@ export const RUN_OPTION_POOLS = {
   suddenDeathBaseHp: [0, 40, 60, 80] as const,
   teamSize: [1, 2, 3] as const,
   utilityDraftLevel: UTILITY_DRAFT_LEVEL_OPTIONS,
+  fogThicknessPct: [25, 40, 55, 70, 85, 100] as const,
+  fogVisionRadius: [60, 90, 120, 160, 220] as const,
 };

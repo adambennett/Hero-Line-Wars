@@ -2,6 +2,7 @@
  * Cheat sandbox profile — never mutates the real Barracks save while cheats are on.
  */
 
+import { cheatsAllowedForPlayers, type PauseTarget } from "../game/pause";
 import { loadMetaStore, saveMetaStore, type MetaStore } from "./store";
 
 const CHEAT_FLAG = "hlw-cheats-enabled-v1";
@@ -53,18 +54,50 @@ export function areCheatsEnabled(): boolean {
   return localStorage.getItem(CHEAT_FLAG) === "1";
 }
 
+/**
+ * Cheat flags are read from hot paths (per hit, per frame), so the parsed
+ * options are cached and invalidated whenever they are written.
+ */
+let cheatCache: CheatOptions | null = null;
+
 export function loadCheatOptions(): CheatOptions {
+  if (cheatCache) return { ...cheatCache };
+  let opts: CheatOptions;
   try {
     const raw = localStorage.getItem(CHEAT_OPTS);
-    if (!raw) return { ...DEFAULT_CHEATS };
-    return { ...DEFAULT_CHEATS, ...(JSON.parse(raw) as Partial<CheatOptions>) };
+    opts = raw
+      ? { ...DEFAULT_CHEATS, ...(JSON.parse(raw) as Partial<CheatOptions>) }
+      : { ...DEFAULT_CHEATS };
   } catch {
-    return { ...DEFAULT_CHEATS };
+    opts = { ...DEFAULT_CHEATS };
   }
+  cheatCache = opts;
+  return { ...opts };
 }
 
 export function saveCheatOptions(opts: CheatOptions): void {
-  localStorage.setItem(CHEAT_OPTS, JSON.stringify(opts));
+  cheatCache = { ...DEFAULT_CHEATS, ...opts };
+  localStorage.setItem(CHEAT_OPTS, JSON.stringify(cheatCache));
+}
+
+/**
+ * Gameplay-altering cheats (everything except "Unlock everything") are only
+ * legal when a single human is playing — online or local. Mirrors the pause
+ * policy in `game/pause.ts` so a cheating host can never affect other players.
+ */
+export function gameplayCheatsAllowed(target: PauseTarget): boolean {
+  if (!areCheatsEnabled()) return false;
+  return cheatsAllowedForPlayers(target);
+}
+
+/**
+ * The single entry point every gameplay cheat check must use.
+ * Returns null when cheats are off OR more than one human is participating.
+ */
+export function gameplayCheats(target: PauseTarget): CheatOptions | null {
+  if (!gameplayCheatsAllowed(target)) return null;
+  if (cheatCache) return cheatCache;
+  return loadCheatOptions();
 }
 
 /** Enable cheats: cache real profile, swap in sandbox cheat profile. */
@@ -99,6 +132,11 @@ export function disableCheats(): void {
     /* keep current if cache corrupt — better than wipe */
   }
   localStorage.removeItem(CHEAT_FLAG);
+}
+
+/** Drop the cached options (call after an external write, e.g. save import). */
+export function invalidateCheatCache(): void {
+  cheatCache = null;
 }
 
 export function setCheatsEnabled(on: boolean): void {

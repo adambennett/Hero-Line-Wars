@@ -462,4 +462,48 @@ function applyHeroKitAi(state: GameState, intent: CombatIntent): void {
       intent.ultimate = true;
     }
   }
+
+  if (id === "gunner") {
+    if (target) {
+      intent.attackHeld = true;
+      intent.mobilityHeld = true;
+      intent.mobility = true;
+      // Occasionally cycle weapons
+      if (Math.random() < 0.008) intent.ultimate = true;
+      // Don't walk while sniper-aiming
+      if (h.gunnerAiming) {
+        intent.moveX = 0;
+        intent.moveY = 0;
+      }
+    }
+    return;
+  }
+
+  if (id === "sapper") {
+    if (target) {
+      intent.attackHeld = true;
+      if (h.abilityCds[0]! <= 0 && dist(h, target) < 140 && Math.random() < 0.06) {
+        intent.mobility = true;
+      }
+      if (h.abilityCds[1]! <= 0 && (state.mines?.length ?? 0) >= 2 && Math.random() < 0.04) {
+        intent.ultimate = true;
+      }
+    }
+    return;
+  }
+
+  if (id === "vector") {
+    if (target) {
+      intent.attackHeld = true;
+      // Keep moving to build momentum
+      intent.moveX = Math.sign(target.x - h.x) || 0.3;
+      intent.moveY = Math.sign(target.y - h.y) * 0.4;
+      if (h.abilityCds[0]! <= 0 && (h.momentum ?? 0) > 40 && Math.random() < 0.05) {
+        intent.mobility = true;
+      }
+      if (h.abilityCds[1]! <= 0 && (h.momentum ?? 0) > 70 && Math.random() < 0.04) {
+        intent.ultimate = true;
+      }
+    }
+  }
 }

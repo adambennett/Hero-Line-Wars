@@ -1,14 +1,15 @@
 import { MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { waveTierLabel } from "../data/enemies";
-import { type HeroId } from "../data/heroes";
+import { HEROES, type HeroId } from "../data/heroes";
 import { registerSessionCustoms, resolveHero } from "../custom/registry";
 import { RELICS } from "../data/relics";
 import { relicArtImg } from "../data/relicArt";
 import { LEVEL_PASSIVES } from "../data/xp";
+import { RARITY_COLOR, RARITY_LABEL } from "../data/rarity";
+import { gunnerWeaponLabel } from "../systems/gunner";
 import { getShopItem } from "../data/shop";
 import type { ShopItemId } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
-import { RARITY_LABEL, RARITY_COLOR } from "../data/rarity";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
 import {
   chooseCurse,
@@ -43,10 +44,11 @@ import {
   bindHooks,
   bindMatchHandlers,
   disconnectNet,
-  netBroadcast,
+  netPeerSlots,
   netSendToHost,
+  netSendToSlot,
 } from "../net/session";
-import { applyMatchSnap, buildMatchSnap } from "../net/sync";
+import { applyMatchSnap, buildMatchSnapFor, newSnapCache } from "../net/sync";
 import { gatherLocalIntent, stepMpMatch } from "../net/mpSim";
 import type { CombatIntent, NetMsg } from "../net/types";
 import { createNeuralLaneAi } from "../ai/runtime";
@@ -56,11 +58,19 @@ import { composeRunModifiers } from "../meta/modifiers";
 import { applyRunPayout, loadMetaStore } from "../meta/store";
 import { careerDeltaFromState } from "../meta/runStats";
 import { evaluateChallenges, CHALLENGES } from "../meta/challenges";
-import { areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
+import { gameplayCheats } from "../meta/cheats";
+import { canPauseSimulation, isMultiHumanGame } from "./pause";
+import { pendingDraftCount } from "../systems/drafts";
 import { chooseBaseBranch } from "../systems/baseUpgrade";
 import { BASE_BRANCHES } from "../data/baseBranches";
 import { ascensionLabel } from "../meta/ascension";
-import { buildMpMatch, buildSoloVsAiMatch, heroForSlot, type MpMatch } from "../net/matchFactory";
+import {
+  buildMpMatch,
+  buildSoloVsAiMatch,
+  heroForSlot,
+  laneForSlot,
+  type MpMatch,
+} from "../net/matchFactory";
 import { focusBag, withPlayerBag } from "../net/playerBag";
 import { emptyIntent } from "../net/types";
 
@@ -138,6 +148,10 @@ export class Game {
   private mpMatch: MpMatch | null = null;
   private mpHost = false;
   private remoteIntents = new Map<number, CombatIntent>();
+  /** Host: which lane each remote seat is watching (drives full vs summary snaps). */
+  private remoteViews = new Map<number, 0 | 1>();
+  /** Client: last lane we told the host we were watching. */
+  private lastReportedView: 0 | 1 | null = null;
   private intentSeq = 0;
   private snapSeq = 0;
   /** Queued draft / shop UI choices for the next MP intent frame. */
@@ -246,6 +260,7 @@ export class Game {
       if (this.mpMatch) {
         this.mpMatch.viewTeam = (1 - this.mpMatch.viewTeam) as 0 | 1;
         this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
+        this.reportViewTeam();
         this.laneFlipBtn.textContent =
           this.mpMatch.viewTeam === this.mpMatch.myTeam ? "View lane" : "Your lane";
         this.laneFlipBtn.classList.toggle("active", this.mpMatch.viewTeam !== this.mpMatch.myTeam);
@@ -299,15 +314,13 @@ export class Game {
 
     window.addEventListener("resize", () => this.resize());
     window.addEventListener("keydown", (e) => {
-      if (e.code === "Escape" && this.state) {
-        e.preventDefault();
-        if (this.state.pausedForDraft) return;
-        if (this.pauseMode === "confirm" || this.pauseMode === "settings") {
-          this.showPauseMenu();
-          return;
-        }
-        this.togglePause();
-      }
+      // Plain Escape is handled by the frame loop via consumeAction("pause") so
+      // it stays remappable and never double-toggles. Sub-overlays are handled
+      // here because the frame loop skips input while a menu is on screen.
+      if (e.code !== "Escape" || !this.state) return;
+      if (this.pauseMode !== "confirm" && this.pauseMode !== "settings") return;
+      e.preventDefault();
+      this.showPauseMenu();
     });
     window.addEventListener(
       "pointerdown",
@@ -506,8 +519,14 @@ export class Game {
       disableSends: opts.disableSends,
       disableRelics: opts.disableRelics,
       fogAlways: opts.fogAlways,
+      fogThicknessPct: opts.fogThicknessPct,
+      fogVisionRadius: opts.fogVisionRadius,
       doubleElites: opts.doubleElites,
       suddenDeathBaseHp: opts.suddenDeathBaseHp,
+      glassCannon: opts.glassCannon,
+      goldRush: opts.goldRush,
+      wildChests: opts.wildChests,
+      crampedLane: opts.crampedLane,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -609,19 +628,30 @@ export class Game {
     this.state.aimWorldY = (sy - view.offsetY) / view.scale;
   }
 
+  /** Single source of truth for "may this client freeze the sim right now?". */
+  private canPauseNow(): boolean {
+    return canPauseSimulation(this.mpMatch ?? this.state);
+  }
+
   private togglePause(): void {
     if (!this.state || this.state.status !== "playing") return;
-    if (this.state.pausedForDraft) return;
     if (this.pauseMode === "inventory") {
       this.closeInventory();
       return;
     }
-    if (this.state.paused && this.pauseMode === "paused") {
+    if (this.pauseMode === "paused") {
       this.resumeFromPause();
       return;
     }
+    if (this.pauseMode === "confirm" || this.pauseMode === "settings") {
+      this.showPauseMenu();
+      return;
+    }
+    // A draft owns the screen in single-human runs; with more humans the match
+    // keeps running and the menu may open on top of the draft.
+    if (this.state.pausedForDraft && this.canPauseNow()) return;
     this.closeInventory();
-    this.state.paused = true;
+    if (this.canPauseNow()) this.state.paused = true;
     this.showPauseMenu();
     playSfx("ui");
   }
@@ -631,18 +661,22 @@ export class Game {
     this.state.paused = false;
     this.pauseMode = "none";
     this.overlay.classList.add("hidden");
+    this.canvas.focus({ preventScroll: true });
     playSfx("ui");
   }
 
   private showPauseMenu(): void {
+    const freeze = this.canPauseNow();
     this.pauseMode = "paused";
-    this.overlayTitle.textContent = "Paused";
-    this.overlayBody.textContent = "Combat and waves are frozen.";
+    this.overlayTitle.textContent = freeze ? "Paused" : "Menu";
+    this.overlayBody.textContent = freeze
+      ? "Combat and waves are frozen."
+      : "The match keeps running — pausing is disabled with more than one player.";
     this.overlayActions.innerHTML = "";
 
     const cont = document.createElement("button");
     cont.type = "button";
-    cont.textContent = "Continue";
+    cont.textContent = freeze ? "Continue" : "Back to match";
     cont.addEventListener("click", () => this.resumeFromPause());
     this.overlayActions.appendChild(cont);
 
@@ -665,24 +699,14 @@ export class Game {
     this.pauseMode = "settings";
     this.overlay.classList.add("hidden");
     this.menus.show("settings", { allowMenuMusic: false });
-    // When leaving settings back to main, intercept — keep paused overlay
-    const check = () => {
-      if (!this.state?.paused) return;
-      if (!this.menus.isVisible()) {
-        this.showPauseMenu();
-        return;
-      }
-      // If user navigated to main from settings while paused, send them back to pause
-      requestAnimationFrame(check);
-    };
-    // Hook: when menus go to main while paused, return to pause menu
+    // Hook: when menus go to main from in-run settings, bounce back to the
+    // in-run menu instead of dumping the player on the title screen.
     const root = document.querySelector("#menus")!;
     const obs = new MutationObserver(() => {
-      if (!this.state?.paused) {
+      if (this.pauseMode !== "settings" || !this.state) {
         obs.disconnect();
         return;
       }
-      // If menu shows main title while paused mid-run, bounce to pause
       if (root.querySelector(".menu-title")?.textContent === "Hero Line Wars") {
         this.menus.hide();
         this.showPauseMenu();
@@ -715,7 +739,7 @@ export class Game {
 
   private toggleInventory(): void {
     if (!this.state || this.state.status !== "playing") return;
-    if (this.state.pausedForDraft) return;
+    if (this.state.pausedForDraft && this.canPauseNow()) return;
     // Don't open bag over the Esc pause menu
     if (this.pauseMode === "paused" || this.pauseMode === "confirm" || this.pauseMode === "settings") {
       return;
@@ -724,8 +748,9 @@ export class Game {
     if (this.invPanel.classList.contains("hidden")) {
       this.refreshInventory();
       this.invPanel.classList.remove("hidden");
-      // Singleplayer: freeze combat while browsing inventory
-      if (!this.state.paused) {
+      // Single human: freeze combat while browsing the bag. With more humans the
+      // bag is an overlay only — the match keeps running behind it.
+      if (!this.state.paused && this.canPauseNow()) {
         this.state.paused = true;
         this.pauseMode = "inventory";
       }
@@ -1018,7 +1043,23 @@ export class Game {
     this.shopMetaEl.textContent = `${stock} · Artifacts ${turrets}/${cap}`;
   }
 
+  /**
+   * Draft panel. With more than one human the match keeps running behind it, so
+   * the panel renders compact and advertises how many rewards are still queued.
+   */
   private syncDraft(): void {
+    if (!this.state) return;
+    const compact = isMultiHumanGame(this.mpMatch ?? this.state);
+    this.relicDraft.classList.toggle("compact-draft", compact);
+    this.renderDraft();
+    if (this.relicDraft.classList.contains("hidden")) return;
+    const queued = pendingDraftCount(this.state);
+    if (queued > 0) {
+      this.draftBlurb.textContent = `${this.draftBlurb.textContent} · ${queued} more reward${queued > 1 ? "s" : ""} queued`;
+    }
+  }
+
+  private renderDraft(): void {
     if (!this.state) return;
     if (this.state.pausedForDraft && this.state.curseDraft) {
       this.relicDraft.classList.remove("hidden");
@@ -1142,7 +1183,10 @@ export class Game {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card level-card";
-        btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
+        const heroTag = def.heroId
+          ? ` · ${HEROES[def.heroId]?.name ?? def.heroId}`
+          : "";
+        btn.innerHTML = `<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}${heroTag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
           if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseLevel = id;
@@ -1250,7 +1294,7 @@ export class Game {
         if (this.input.consumeAction("laneFlip") && !this.state.endless) {
           this.state.viewOpponentLane = !this.state.viewOpponentLane;
         }
-        const cheats = areCheatsEnabled() ? loadCheatOptions() : null;
+        const cheats = gameplayCheats(this.state);
         if (cheats?.godMode && this.state.hero.alive) {
           this.state.hero.hp = this.state.hero.maxHp;
         }
@@ -1339,8 +1383,14 @@ export class Game {
       disableSends: draft.disableSends,
       disableRelics: draft.disableRelics,
       fogAlways: draft.fogAlways,
+      fogThicknessPct: draft.fogThicknessPct,
+      fogVisionRadius: draft.fogVisionRadius,
       doubleElites: draft.doubleElites,
       suddenDeathBaseHp: draft.suddenDeathBaseHp,
+      glassCannon: draft.glassCannon,
+      goldRush: draft.goldRush,
+      wildChests: draft.wildChests,
+      crampedLane: draft.crampedLane,
       heroId,
       preferredCode: draft.hostCode,
       joinCode: draft.joinCode,
@@ -1458,10 +1508,48 @@ export class Game {
         if (!this.mpHost) return;
         this.remoteIntents.set(seat, intent);
       },
+      onView: (seat, team) => {
+        if (!this.mpHost) return;
+        this.remoteViews.set(seat, team);
+      },
       onPeerLost: (who) => {
         this.handleMpDisconnect(who);
       },
     });
+  }
+
+  /**
+   * Host → peers. Each seat gets a FULL lane snapshot for its own lane and for
+   * whatever lane it is currently watching; the other lane ships as a cheap HUD
+   * summary. Lane payloads are built at most once per frame and shared.
+   */
+  private broadcastSnapshots(): void {
+    const match = this.mpMatch;
+    if (!match) return;
+    const cache = newSnapCache();
+    for (const slot of netPeerSlots()) {
+      const seat = laneForSlot(match, slot);
+      const ownTeam = seat?.team ?? 0;
+      const viewTeam = this.remoteViews.get(slot) ?? ownTeam;
+      const full: [boolean, boolean] = [
+        ownTeam === 0 || viewTeam === 0,
+        ownTeam === 1 || viewTeam === 1,
+      ];
+      netSendToSlot(slot, {
+        k: "state",
+        snap: buildMatchSnapFor(match, viewTeam, full, cache),
+        seq: this.snapSeq,
+      });
+    }
+  }
+
+  /** Client → host: tell the host which lane we are watching. */
+  private reportViewTeam(): void {
+    const match = this.mpMatch;
+    if (!match || this.mpHost || match.soloOffline) return;
+    if (this.lastReportedView === match.viewTeam) return;
+    this.lastReportedView = match.viewTeam;
+    netSendToHost({ k: "view", t: match.viewTeam });
   }
 
   private frameMultiplayer(dt: number): void {
@@ -1481,6 +1569,16 @@ export class Game {
       x: (sx - view.offsetX) / view.scale,
       y: (sy - view.offsetY) / view.scale,
     };
+
+    // Tell the host which lane we watch so it can send full data for it.
+    this.reportViewTeam();
+
+    // Escape / pause + bag work in MP too — they just never freeze the sim
+    // when more than one human is playing (see `canPauseNow`).
+    if (!this.menus.isVisible()) {
+      if (this.input.consumeAction("pause")) this.togglePause();
+      if (this.input.consumeAction("inventory")) this.toggleInventory();
+    }
 
     const local = gatherLocalIntent(this.input, aim, controlled);
     // Merge queued draft / UI choices (clients must send these — never mutate host sim locally)
@@ -1513,7 +1611,7 @@ export class Game {
       local.sendDigit = null;
     }
 
-    const paused = !!this.mpMatch.lanes[this.mpMatch.myTeam].paused;
+    const paused = this.canPauseNow() && !!this.mpMatch.lanes[this.mpMatch.myTeam].paused;
     if (!paused) {
       if (this.mpHost) {
         const intents = new Map<number, CombatIntent>();
@@ -1523,13 +1621,7 @@ export class Game {
         }
         stepMpMatch(this.mpMatch, intents, dt);
         this.snapSeq++;
-        if (!this.mpMatch.soloOffline) {
-          netBroadcast({
-            k: "state",
-            snap: buildMatchSnap(this.mpMatch, this.mpMatch.viewTeam),
-            seq: this.snapSeq,
-          });
-        }
+        if (!this.mpMatch.soloOffline) this.broadcastSnapshots();
       } else {
         this.intentSeq++;
         netSendToHost({
@@ -1592,7 +1684,8 @@ export class Game {
       : other.aiControlled
         ? `AI · ${resolveHero(other.hero.heroId).name}`
         : `Enemy · ${resolveHero(other.hero.heroId).name}`;
-    const sendIn = other.pendingSends.reduce((n, p) => n + p.enemies, 0);
+    const sendIn =
+      other.summaryIncoming ?? other.pendingSends.reduce((n, p) => n + p.enemies, 0);
     const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
     const myLeft = laneEnemiesRemaining(myLane);
     const theirLeft = laneEnemiesRemaining(other);
@@ -1605,7 +1698,7 @@ export class Game {
       `<div>Base ${Math.ceil(other.baseHp)} · Wave ${other.wave}</div>`,
       `<div>Gold ${Math.floor(other.gold)} · +${other.incomePerSec.toFixed(1)}/s</div>`,
       `<div>Enemies left: ${theirLeft}</div>`,
-      `<div>${other.status === "playing" ? (other.spawning || other.enemies.length ? "Fighting" : "Between waves") : other.status}</div>`,
+      `<div>${other.status === "playing" ? (other.spawning || theirLeft > 0 ? "Fighting" : "Between waves") : other.status}</div>`,
       sendIn > 0 ? `<div class="opp-alert">Incoming sends: ${sendIn}</div>` : "",
     ]
       .filter(Boolean)
@@ -1816,16 +1909,32 @@ export class Game {
     ];
     const utilId = s.utilityId;
     const utilCd = s.utilityCd;
-    const abilityKey = `${s.hero.abilityCds.map((c) => c.toFixed(1)).join(",")}:${utilId ?? "-"}:${utilCd.toFixed(1)}:${s.hero.alive}`;
+    const gunLabel = s.hero.heroId === "gunner" ? gunnerWeaponLabel(s.hero) : "";
+    const momLabel =
+      s.hero.heroId === "vector" ? `Mom ${Math.round(s.hero.momentum ?? 0)}` : "";
+    const abilityKey = `${s.hero.abilityCds.map((c) => c.toFixed(1)).join(",")}:${utilId ?? "-"}:${utilCd.toFixed(1)}:${s.hero.alive}:${gunLabel}:${momLabel}:${s.hero.gunnerAiming ? 1 : 0}`;
     if (abilityKey !== this.lastAbilityKey) {
       this.lastAbilityKey = abilityKey;
       const heroSlots = hero.abilities
         .map((a, i) => {
           const cd = s.hero.abilityCds[i] ?? 0;
-          const ready = cd <= 0 && s.hero.alive;
-          const cdText = !s.hero.alive ? "—" : ready ? "ready" : cd.toFixed(1);
+          let ready = cd <= 0 && s.hero.alive;
+          let cdText = !s.hero.alive ? "—" : ready ? "ready" : cd.toFixed(1);
+          let name = a.name;
+          if (s.hero.heroId === "gunner" && a.id === "gunfire") {
+            name = gunLabel || a.name;
+            ready = (s.hero.gunnerReload ?? 0) <= 0 && s.hero.alive;
+            cdText = !s.hero.alive
+              ? "—"
+              : (s.hero.gunnerReload ?? 0) > 0
+                ? `REL ${(s.hero.gunnerReload ?? 0).toFixed(1)}`
+                : `${s.hero.gunnerAmmo ?? 0}`;
+          }
+          if (s.hero.heroId === "vector" && i === 0 && momLabel) {
+            cdText = ready ? momLabel : cd.toFixed(1);
+          }
           const tip = `<strong>${a.name}</strong><br/>${a.hint}<br/>CD ${a.cooldown}s`;
-          return `<div class="ability ${ready ? "ready" : "cooling"}" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[i]}</kbd><span>${a.name}</span><em>${cdText}</em></div>`;
+          return `<div class="ability ${ready ? "ready" : "cooling"}" data-tip="${tip.replace(/"/g, "&quot;")}"><kbd>${labels[i]}</kbd><span>${name}</span><em>${cdText}</em></div>`;
         })
         .join("");
       let utilSlot = "";

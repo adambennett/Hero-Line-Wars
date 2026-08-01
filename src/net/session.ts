@@ -16,8 +16,17 @@ import {
   newLobby,
   setMode,
 } from "./lobby";
-import type { CombatIntent, LobbyState, MatchMode, MatchPrivacy, NetMode, NetMsg } from "./types";
+import type {
+  CombatIntent,
+  LobbyState,
+  MatchMode,
+  MatchPrivacy,
+  MpTeam,
+  NetMode,
+  NetMsg,
+} from "./types";
 import { isPveMode, modeCap } from "./types";
+import { IntentRateLimiter, sanitizeIntent } from "./intentGuard";
 import { collectCustomsForMatch, getCustomHero, getCustomMap } from "../custom/registry";
 import { isCustomHeroId, isCustomMapId, type CustomHeroDef, type CustomMapDef } from "../custom/types";
 import { sanitizeCustomHero, sanitizeCustomMap } from "../custom/validate";
@@ -37,6 +46,8 @@ export type SessionHooks = {
 export type MatchNetHandlers = {
   onState: (snap: Extract<NetMsg, { k: "state" }>) => void;
   onIntent: (seat: number, intent: CombatIntent, seq: number) => void;
+  /** Client started/stopped watching a lane — host switches that seat to full snaps. */
+  onView?: (seat: number, team: MpTeam) => void;
   /** Mid-match peer / host drop. */
   onPeerLost?: (who: string) => void;
 };
@@ -108,6 +119,17 @@ export function netSendToHost(msg: NetMsg): void {
   send(S.peers[0]?.conn, msg);
 }
 
+/** Host → one seat. Used for per-viewer snapshots (see `net/sync.ts`). */
+export function netSendToSlot(slot: number, msg: NetMsg): void {
+  const peer = S.peers.find((p) => p.slot === slot);
+  send(peer?.conn, msg);
+}
+
+/** Connected seats (host only). */
+export function netPeerSlots(): number[] {
+  return S.peers.map((p) => p.slot);
+}
+
 export function disconnectNet(): void {
   try {
     S.peer?.destroy();
@@ -174,8 +196,27 @@ function broadcastLobby(): void {
   emitLobby();
 }
 
+const intentLimiter = new IntentRateLimiter();
+
+/** Parse a wire payload without letting malformed data escape as an exception. */
+function decodeMsg(raw: unknown): NetMsg | null {
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const k = (value as { k?: unknown }).k;
+  if (typeof k !== "string") return null;
+  return value as NetMsg;
+}
+
 function onMsg(raw: unknown, fromSlot?: number): void {
-  const m = (typeof raw === "string" ? JSON.parse(raw) : raw) as NetMsg;
+  const m = decodeMsg(raw);
+  if (!m) return;
 
   if (m.k === "full") {
     status('<b style="color:#e85d04">Lobby is full.</b>');
@@ -206,7 +247,14 @@ function onMsg(raw: unknown, fromSlot?: number): void {
   if (m.k === "intent" && S.mode === "host") {
     // Bind seat to the connection — ignore client-claimed seat (spoof)
     const seat = fromSlot != null ? fromSlot : m.seat;
-    S.matchHandlers?.onIntent(seat, m.intent, m.seq);
+    if (!intentLimiter.allow(seat)) return;
+    const seq = Number.isFinite(m.seq) ? m.seq : 0;
+    S.matchHandlers?.onIntent(seat, sanitizeIntent(m.intent), seq);
+    return;
+  }
+  if (m.k === "view" && S.mode === "host" && fromSlot != null) {
+    const team: MpTeam = m.t === 1 ? 1 : 0;
+    S.matchHandlers?.onView?.(fromSlot, team);
     return;
   }
 
@@ -531,8 +579,14 @@ export function hostSetOpts(
     if (extras.disableSends != null) S.lobby.disableSends = extras.disableSends;
     if (extras.disableRelics != null) S.lobby.disableRelics = extras.disableRelics;
     if (extras.fogAlways != null) S.lobby.fogAlways = extras.fogAlways;
+    if (extras.fogThicknessPct != null) S.lobby.fogThicknessPct = extras.fogThicknessPct;
+    if (extras.fogVisionRadius != null) S.lobby.fogVisionRadius = extras.fogVisionRadius;
     if (extras.doubleElites != null) S.lobby.doubleElites = extras.doubleElites;
     if (extras.suddenDeathBaseHp != null) S.lobby.suddenDeathBaseHp = extras.suddenDeathBaseHp;
+    if (extras.glassCannon != null) S.lobby.glassCannon = extras.glassCannon;
+    if (extras.goldRush != null) S.lobby.goldRush = extras.goldRush;
+    if (extras.wildChests != null) S.lobby.wildChests = extras.wildChests;
+    if (extras.crampedLane != null) S.lobby.crampedLane = extras.crampedLane;
   }
   netBroadcast({
     k: "opts",

@@ -1,7 +1,7 @@
 {
   "name": "hero-line-wars",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Hero Line Wars — WC3-style line wars prototype",
   "author": "Hero Line Wars",
   "type": "module",
@@ -12,6 +12,9 @@
     "build:pages": "tsc && vite build",
     "build:release": "tsc && vite build --mode singlefile",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "desktop": "electron .",
     "desktop:dev": "node tools/desktop-dev.mjs",
     "desktop:pack": "electron-builder --dir",
@@ -23,7 +26,8 @@
     "electron-builder": "^26.0.12",
     "typescript": "^7.0.2",
     "vite": "^7.1.7",
-    "vite-plugin-singlefile": "^2.3.0"
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^4.1.10"
   },
   "build": {
     "appId": "com.herolinewars.game",

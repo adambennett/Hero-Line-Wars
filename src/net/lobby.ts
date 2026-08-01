@@ -46,8 +46,14 @@ export function newLobby(mode: MatchMode, hostName: string, heroId: HeroId = HER
     disableSends: false,
     disableRelics: false,
     fogAlways: false,
+    fogThicknessPct: 55,
+    fogVisionRadius: 120,
     doubleElites: false,
     suddenDeathBaseHp: 0,
+    glassCannon: false,
+    goldRush: false,
+    wildChests: false,
+    crampedLane: false,
   };
 }
 
