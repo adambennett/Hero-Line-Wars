@@ -42,7 +42,7 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 ## Systems
 
 - **Maps** — Classic Lane through Orb Foundry, plus **Mazing**, **Hex Bowl**, and **Capsule Coast**. Workshop editor supports non-rect playable shapes, new specials (ember rain / supply drops / chrono pulse), and bounce / portal / relay tools.
-- **Heroes** — Full roster including signature kits (Warp, Gyro, Gunner, Sapper, Vector, …). Each has aim mode, passive, and abilities (see Compendium). Hero-specific level bonuses appear as rare draft picks.
+- **Heroes** — Full roster including signature kits (Warp, Gyro, Gunner, Sapper, Vector, Cloud, …). Each has aim mode, passive, and abilities (see Compendium). Hero-specific level bonuses appear as rare draft picks.
 - **Sends & income** — Passive gold/sec; spend gold to queue enemies into the **opponent’s** next wave (and raise your income).
 - **Base upgrades** — Unlock stronger send packs and scale cost/income/HP of already-unlocked packs.
 - **XP / relics** — Level drafts and relic drafts (Skip supported); Inventory shows descriptions.

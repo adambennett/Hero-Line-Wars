@@ -5,6 +5,8 @@ import {
   firstBlockingObstacle,
   hasLineOfSight,
   pointBlocked,
+  pointInPlayable,
+  resolveMovePlayable,
 } from "../data/maps";
 import { playBounds } from "../game/playBounds";
 import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyDef, type EnemyKind } from "../data/enemies";
@@ -18,6 +20,7 @@ import {
 import { dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
 import { addFx, applyPlayerDamage, killEnemy, pushProjectile } from "./combat";
+import { FLOW_CELL, flowFieldFor, flowReachable, sampleFlow } from "./flowField";
 import { baseDamageTakenMul } from "./relics";
 import { damageTurret, livingTurrets } from "./turrets";
 import { playSfx } from "./audio";
@@ -108,24 +111,96 @@ function nearestTurret(from: { x: number; y: number }, turrets: TurretUnit[]): T
   return best;
 }
 
+/**
+ * Push a circle out of any overlapping obstacles. Handles the exact-corner
+ * case (nearest point is the corner, or the center is inside the AABB) by
+ * escaping to the nearest free face/corner instead of zeroing the normal.
+ */
+function separateFromObstacles(
+  map: MapDef,
+  x: number,
+  y: number,
+  r: number,
+): { x: number; y: number } {
+  for (let iter = 0; iter < 6; iter++) {
+    let hit: Obstacle | null = null;
+    for (const o of map.obstacles) {
+      if (circleHitsObstacle(x, y, r, o)) {
+        hit = o;
+        break;
+      }
+    }
+    if (!hit) break;
+
+    const cx = Math.max(hit.x, Math.min(x, hit.x + hit.w));
+    const cy = Math.max(hit.y, Math.min(y, hit.y + hit.h));
+    let dx = x - cx;
+    let dy = y - cy;
+    const d = Math.hypot(dx, dy);
+    const pad = r + 0.75;
+
+    if (d < 1e-4) {
+      // Embedded in the solid or sitting on a mathematical corner — pick the
+      // shortest exit among faces and outer corners.
+      const exits = [
+        { x: hit.x - pad, y },
+        { x: hit.x + hit.w + pad, y },
+        { x, y: hit.y - pad },
+        { x, y: hit.y + hit.h + pad },
+        { x: hit.x - pad, y: hit.y - pad },
+        { x: hit.x + hit.w + pad, y: hit.y - pad },
+        { x: hit.x - pad, y: hit.y + hit.h + pad },
+        { x: hit.x + hit.w + pad, y: hit.y + hit.h + pad },
+      ];
+      let best = exits[0]!;
+      let bestD = Infinity;
+      for (const p of exits) {
+        if (!pointInPlayable(map, p.x, p.y, r)) continue;
+        const dd = (p.x - x) ** 2 + (p.y - y) ** 2;
+        if (dd < bestD) {
+          bestD = dd;
+          best = p;
+        }
+      }
+      x = best.x;
+      y = best.y;
+    } else {
+      x = cx + (dx / d) * pad;
+      y = cy + (dy / d) * pad;
+    }
+  }
+  return clampInLane(map, x, y, r);
+}
+
 function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
   const r = e.radius;
-  const { x, y } = clampInLane(map, nx, ny, r);
-  const blocked = map.obstacles.some((o) => circleHitsObstacle(x, y, r, o));
-  if (!blocked) {
+  // Slide along shaped playable bounds, then peel off obstacle faces/corners.
+  let { x, y } = resolveMovePlayable(map, e.x, e.y, nx, ny, r);
+  ({ x, y } = separateFromObstacles(map, x, y, r));
+
+  if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
+    const moved = Math.hypot(x - e.x, y - e.y) > 1e-6;
     e.x = x;
     e.y = y;
-    return true;
+    return moved;
   }
-  const xOnly = clampInLane(map, nx, e.y, r).x;
-  if (!map.obstacles.some((o) => circleHitsObstacle(xOnly, e.y, r, o))) {
-    e.x = xOnly;
-    return true;
-  }
-  const yOnly = clampInLane(map, e.x, ny, r).y;
-  if (!map.obstacles.some((o) => circleHitsObstacle(e.x, yOnly, r, o))) {
-    e.y = yOnly;
-    return true;
+
+  // Axis slides with the same separation — frees units wedged on corners.
+  for (const [ax, ay] of [
+    [nx, e.y],
+    [e.x, ny],
+  ] as const) {
+    let p = resolveMovePlayable(map, e.x, e.y, ax, ay, r);
+    p = separateFromObstacles(map, p.x, p.y, r);
+    if (
+      pointInPlayable(map, p.x, p.y, r) &&
+      !map.obstacles.some((o) => circleHitsObstacle(p.x, p.y, r, o)) &&
+      Math.hypot(p.x - e.x, p.y - e.y) > 1e-6
+    ) {
+      e.x = p.x;
+      e.y = p.y;
+      return true;
+    }
   }
   return false;
 }
@@ -204,15 +279,27 @@ function moveWithPathing(
 
   let aimX = tx;
   let aimY = ty;
+  let followingFlow = false;
   if (clear) {
     e.pathSide = undefined;
     e.preferAngle = undefined;
   } else {
-    const blocker = firstBlockingObstacle(map, e.x, e.y, tx, ty, e.radius);
-    if (blocker) {
-      const wp = pickBypassPoint(map, e, blocker, tx, ty);
-      aimX = wp.x;
-      aimY = wp.y;
+    // Macro navigation: shared flow field toward the goal (real pathfinding).
+    const field = flowFieldFor(map, tx, ty);
+    const dir = sampleFlow(field, e.x, e.y);
+    if (dir && (dir.x !== 0 || dir.y !== 0)) {
+      aimX = e.x + dir.x * FLOW_CELL * 1.5;
+      aimY = e.y + dir.y * FLOW_CELL * 1.5;
+      followingFlow = true;
+      e.pathSide = undefined;
+    } else {
+      // Off-grid / unreachable — legacy local bypass steering.
+      const blocker = firstBlockingObstacle(map, e.x, e.y, tx, ty, e.radius);
+      if (blocker) {
+        const wp = pickBypassPoint(map, e, blocker, tx, ty);
+        aimX = wp.x;
+        aimY = wp.y;
+      }
     }
   }
 
@@ -247,9 +334,11 @@ function moveWithPathing(
   const traveled = Math.hypot(e.x - prevX, e.y - prevY);
   const towardX = Math.sign(tx - prevX) || Math.sign(tx - e.x);
   const progressX = towardX * (e.x - prevX);
-  // Stuck if blocked, or scraping a wall with almost no forward progress
+  // Stuck if blocked, or scraping a wall with almost no forward progress.
+  // Flow-field routes legitimately move away from the target (mazes), so the
+  // X-progress heuristic only applies to non-flow steering.
   const scraping =
-    traveled < step * 0.55 && progressX < step * 0.12 && !clear;
+    !followingFlow && traveled < step * 0.55 && progressX < step * 0.12 && !clear;
   if ((!moved && traveled < Math.max(0.8, step * 0.15)) || scraping) {
     e.stuckTimer = (e.stuckTimer ?? 0) + dt;
     e.stuckTotal = (e.stuckTotal ?? 0) + dt;
@@ -262,9 +351,15 @@ function moveWithPathing(
   }
 
   if ((e.stuckTimer ?? 0) >= ENEMY_STUCK_SEC) {
-    unstuckToBypass(map, e, tx, ty);
-    e.stuckTimer = 0;
-    e.preferAngle = undefined;
+    // Teleport hop is a LAST resort: only quickly when genuinely boxed in
+    // (no path exists), otherwise wait much longer for local slides to work.
+    const boxedIn = !flowReachable(flowFieldFor(map, tx, ty), e.x, e.y);
+    const hopAfter = boxedIn ? ENEMY_STUCK_SEC : ENEMY_STUCK_SEC * 3;
+    if ((e.stuckTimer ?? 0) >= hopAfter) {
+      unstuckToBypass(map, e, tx, ty);
+      e.stuckTimer = 0;
+      e.preferAngle = undefined;
+    }
   }
 }
 
@@ -440,6 +535,7 @@ export function updateEnemies(state: GameState, dt: number): void {
       if ((e.dotTimer ?? 0) <= 0) {
         e.dotTimer = 0;
         e.dotDps = 0;
+        e.poisonStacks = 0;
       }
     }
     if ((e.burnTimer ?? 0) > 0) {
@@ -549,7 +645,9 @@ export function updateEnemies(state: GameState, dt: number): void {
         heroHasPassive(focusHero.heroId, "bladeguard") &&
         (focusHero.bladeMode ?? "wrapped") === "wrapped" &&
         (focusHero.bladeReformTimer ?? 0) <= 0;
-      if (!gyroImmune) {
+      // Cloud / Prism-style phase: no contact while phaseTimer is active
+      const phaseImmune = (focusHero.phaseTimer ?? 0) > 0;
+      if (!gyroImmune && !phaseImmune) {
         const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
         damageHero(state, focusHero, e.contactDamage * contactMul * dt);
       }

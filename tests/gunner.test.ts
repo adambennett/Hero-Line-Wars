@@ -6,6 +6,7 @@ import {
   currentGunnerWeapon,
   gunnerMoveLocked,
   gunnerShouldFreezeSim,
+  gunnerSwitchLocked,
   tickGunnerWeapons,
   __testFireWeapon,
 } from "../src/systems/gunner";
@@ -65,6 +66,50 @@ describe("Gunner weapon FSM", () => {
     expect(state.hero.hp).toBeLessThan(hpBefore);
     expect(state.hero.gunnerSelfDamageFlash ?? 0).toBeGreaterThan(0);
     expect(state.beam).toBeTruthy();
+  });
+
+  it("locks weapon switching while reloading", () => {
+    const state = createState("gunner");
+    // Fire the single-shot rocket — clip empties and reload starts immediately.
+    __testFireWeapon(state, "rockets");
+    expect(state.hero.gunnerReload ?? 0).toBeGreaterThan(0);
+    expect(gunnerSwitchLocked(state.hero)).toBe(true);
+
+    const idxBefore = state.hero.gunnerWeaponIndex;
+    tickGunnerWeapons(state, { fireHeld: false, cycle: true, dt: 0.016 });
+    expect(state.hero.gunnerWeaponIndex).toBe(idxBefore);
+    expect(currentGunnerWeapon(state.hero).id).toBe("rockets");
+  });
+
+  it("locks switching during inter-shot weapon cooldown", () => {
+    const state = createState("gunner");
+    state.hero.gunnerWeaponIndex = GUNNER_WEAPON_ORDER.indexOf("ar");
+    state.hero.gunnerAmmo = 30;
+    state.hero.gunnerReload = 0;
+    state.hero.gunnerWeaponCd = 0.1;
+    state.hero.gunnerSwapCd = 0;
+    expect(gunnerSwitchLocked(state.hero)).toBe(true);
+    tickGunnerWeapons(state, { fireHeld: false, cycle: true, dt: 0.001 });
+    expect(currentGunnerWeapon(state.hero).id).toBe("ar");
+  });
+
+  it("allows switching again once the reload finishes", () => {
+    const state = createState("gunner");
+    __testFireWeapon(state, "rockets");
+    // Run the reload down.
+    for (let i = 0; i < 200 && (state.hero.gunnerReload ?? 0) > 0; i++) {
+      tickGunnerWeapons(state, { fireHeld: false, cycle: false, dt: 0.1 });
+    }
+    expect(state.hero.gunnerReload ?? 0).toBe(0);
+    expect(gunnerSwitchLocked(state.hero)).toBe(false);
+    state.hero.gunnerSwapCd = 0;
+    tickGunnerWeapons(state, { fireHeld: false, cycle: true, dt: 0.016 });
+    expect(currentGunnerWeapon(state.hero).id).toBe("bolt_sniper");
+  });
+
+  it("has the rebalanced reload table (LMG very long, rockets long)", () => {
+    expect(gunnerWeaponAt(GUNNER_WEAPON_ORDER.indexOf("lmg")).reload).toBeGreaterThanOrEqual(9);
+    expect(gunnerWeaponAt(GUNNER_WEAPON_ORDER.indexOf("rockets")).reload).toBeGreaterThanOrEqual(5);
   });
 
   it("LMG spin-up increases while held", () => {

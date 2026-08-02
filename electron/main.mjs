@@ -10,6 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !!process.env.HLW_DEV_SERVER;
 const DEV_URL = process.env.HLW_DEV_SERVER || "http://127.0.0.1:5173";
 
+// Menu BGM should start on the title screen without requiring a submenu click.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 

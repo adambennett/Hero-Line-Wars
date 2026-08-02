@@ -6,6 +6,7 @@ import {
   clampToPlayable,
   pointInPlayable,
   resolveMapShape,
+  resolveMovePlayable,
   type MapShapeId,
 } from "../game/playBounds";
 
@@ -893,7 +894,7 @@ export function clampInLane(
   return clampToPlayable(map, x, y, radius);
 }
 
-export { resolveMapShape, pointInPlayable, clampToPlayable };
+export { resolveMapShape, pointInPlayable, clampToPlayable, resolveMovePlayable };
 
 /** True if a circle overlaps any map obstacle. */
 export function blockedByObstacle(

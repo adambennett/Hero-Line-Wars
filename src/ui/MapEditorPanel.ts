@@ -21,6 +21,7 @@ import {
   MAP_SHAPES,
   clampToPlayable,
   fillPlayablePath,
+  isMapShapeId,
   playBounds,
   resolveMapShape,
   shapeLabel,
@@ -130,7 +131,6 @@ export class MapEditorPanel {
   private pendingTemplateKey: string | null = null;
   private pendingShape: MapShapeId | null = null;
   status = "";
-  private bindRoot: HTMLElement | null = null;
 
   load(id: string | null): void {
     this.pendingConfirm = null;
@@ -221,7 +221,7 @@ export class MapEditorPanel {
       <header class="menu-header compact">
         <button type="button" class="menu-back" data-action="goto" data-screen="main">← Back</button>
         <h1 class="menu-title">Map Editor</h1>
-        <p class="menu-lead">Paint geometry &amp; specials. Drag playable edges to resize. Export JSON · MP syncs at start.</p>
+        <p class="menu-lead">Paint geometry &amp; specials · drag playable edges to resize · MP syncs at start.</p>
       </header>
       <div class="workshop-layout">
         <aside class="workshop-side">
@@ -234,19 +234,10 @@ export class MapEditorPanel {
           <label class="run-field"><span>Shape</span>
             <select data-me-shape>${shapeOpts}</select>
           </label>
-          <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane">Reset lane bounds</button>
-          <h3 class="workshop-section-label">Tools</h3>
-          <div class="workshop-tools">
-            ${tools
-              .map(
-                (t) =>
-                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}" title="${escapeAttr(TOOL_TOOLTIPS[t.id])}">${t.label}</button>`,
-              )
-              .join("")}
-          </div>
-          <details open class="muted-box" style="margin-top:8px">
-            <summary>Specials</summary>
-            ${this.specialFlagHtml("shiftingObstacles", "Shifting obstacles", s.shiftingObstacles)}
+          <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane" title="Playable bounds return to this shape's default size">Reset lane bounds</button>
+          <h3 class="workshop-section-label">Specials</h3>
+          <div class="me-specials-grid">
+            ${this.specialFlagHtml("shiftingObstacles", "Shifting walls", s.shiftingObstacles)}
             ${this.specialFlagHtml("shrinkingLane", "Shrinking lane", s.shrinkingLane)}
             ${this.specialFlagHtml("movingHazards", "Moving hazards", s.movingHazards)}
             ${this.specialFlagHtml("eclipseFog", "Eclipse fog", s.eclipseFog)}
@@ -257,8 +248,7 @@ export class MapEditorPanel {
             ${this.specialFlagHtml("emberRain", "Ember rain", s.emberRain)}
             ${this.specialFlagHtml("supplyDrops", "Supply drops", s.supplyDrops)}
             ${this.specialFlagHtml("chronoPulse", "Chrono pulse", s.chronoPulse)}
-          </details>
-          ${this.templatePickerHtml()}
+          </div>
           <div class="workshop-actions">
             <div class="workshop-actions-row primary">
               <button type="button" class="menu-btn primary shine-btn" data-action="me-save"><span class="btn-label">Save</span></button>
@@ -274,12 +264,30 @@ export class MapEditorPanel {
               <button type="button" class="menu-btn ghost danger" data-action="me-del-sel">Delete selected</button>
             </div>
           </div>
-          <p class="panel-note">${escape(this.status)}</p>
-          <h3 class="workshop-section-label" style="margin-top:0.5rem">Library</h3>
-          <div class="workshop-lib">${this.libraryHtml()}</div>
+          <p class="panel-note workshop-status">${escape(this.status)}</p>
         </aside>
-        <div class="workshop-canvas-wrap">
-          <canvas id="map-editor-canvas" width="${MAP_W}" height="${MAP_H}"></canvas>
+        <div class="workshop-main">
+          <div class="workshop-toolbar">
+            <h3 class="workshop-section-label">Tools</h3>
+            ${tools
+              .map(
+                (t) =>
+                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}" title="${escapeAttr(TOOL_TOOLTIPS[t.id])}">${t.label}</button>`,
+              )
+              .join("")}
+          </div>
+          <div class="workshop-canvas-wrap">
+            <canvas id="map-editor-canvas" width="${MAP_W}" height="${MAP_H}"></canvas>
+          </div>
+        </div>
+        <div class="workshop-footer-bar">
+          <div class="workshop-footer-group">
+            ${this.templatePickerHtml()}
+          </div>
+          <div class="workshop-lib horizontal">
+            <h3>Library</h3>
+            ${this.libraryHtml()}
+          </div>
         </div>
       </div>
       ${this.confirmOverlayHtml()}
@@ -328,24 +336,12 @@ export class MapEditorPanel {
   }
 
   bind(root: HTMLElement): void {
-    this.bindRoot = root;
     root.querySelectorAll<HTMLInputElement>("[data-me]").forEach((el) => {
       el.addEventListener("change", () => {
         const key = el.dataset.me!;
         if (key === "name" || key === "blurb") (this.draft as Record<string, unknown>)[key] = el.value;
         this.paintCanvas();
       });
-    });
-    root.querySelector<HTMLSelectElement>("[data-me-shape]")?.addEventListener("change", (ev) => {
-      const el = ev.target as HTMLSelectElement;
-      const next = el.value as MapShapeId;
-      const cur = resolveMapShape(this.draft);
-      if (next === cur) return;
-      this.pendingShape = next;
-      this.pendingConfirm = "shape";
-      // Revert select until confirmed — render will restore.
-      el.value = cur;
-      this.renderConfirmOnly();
     });
     root.querySelectorAll<HTMLInputElement>("[data-me-flag]").forEach((el) => {
       el.addEventListener("change", () => {
@@ -360,13 +356,17 @@ export class MapEditorPanel {
     this.paintCanvas();
   }
 
-  /** Re-paint only the confirm overlay without rebuilding the whole workshop. */
-  private renderConfirmOnly(): void {
-    const root = this.bindRoot;
-    if (!root) return;
-    root.querySelector(".menu-confirm-overlay")?.remove();
-    if (!this.pendingConfirm) return;
-    root.insertAdjacentHTML("beforeend", this.confirmOverlayHtml());
+  /**
+   * Queue a shape change behind the standard confirm modal. Called from
+   * MenuController.onChange so the confirm renders through the normal
+   * full-shell render path (a bespoke overlay path here used to orphan the
+   * modal outside the shell and softlock the editor).
+   */
+  requestShapeChange(next: string): void {
+    const cur = resolveMapShape(this.draft);
+    if (!isMapShapeId(next) || next === cur) return;
+    this.pendingShape = next;
+    this.pendingConfirm = "shape";
   }
 
   handleAction(action: string, el: HTMLElement): boolean {

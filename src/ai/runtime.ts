@@ -128,6 +128,7 @@ export function scriptedIntent(state: GameState): CombatIntent {
   else if (state.levelDraft?.length) intent.chooseLevel = state.levelDraft[0]!;
   else if (state.curseDraft?.length) intent.chooseCurse = state.curseDraft[0]!;
   else if (state.chestDraft?.length) intent.chooseChest = 0;
+  else if (state.baseBranchDraft?.length) intent.chooseBaseBranch = state.baseBranchDraft[0]!;
   applyHeroKitAi(state, intent);
   return intent;
 }
@@ -217,6 +218,7 @@ export function thinkNeural(
     else if (state.levelDraft?.length) intent.chooseLevel = state.levelDraft[0]!;
     else if (state.curseDraft?.length) intent.chooseCurse = state.curseDraft[0]!;
     else if (state.chestDraft?.length) intent.chooseChest = 0;
+    else if (state.baseBranchDraft?.length) intent.chooseBaseBranch = state.baseBranchDraft[0]!;
     return intent;
   }
 
@@ -239,6 +241,10 @@ export function thinkNeural(
   }
   if (state.chestDraft?.length) {
     intent.chooseChest = 0;
+    return intent;
+  }
+  if (state.baseBranchDraft?.length) {
+    intent.chooseBaseBranch = state.baseBranchDraft[0]!;
     return intent;
   }
 
@@ -502,6 +508,18 @@ function applyHeroKitAi(state: GameState, intent: CombatIntent): void {
         intent.mobility = true;
       }
       if (h.abilityCds[1]! <= 0 && (h.momentum ?? 0) > 70 && Math.random() < 0.04) {
+        intent.ultimate = true;
+      }
+    }
+  }
+
+  if (id === "cloud") {
+    if (target) {
+      intent.attackHeld = true;
+      intent.moveX = Math.sign(target.x - h.x) || 0.25;
+      intent.moveY = Math.sign(target.y - h.y) * 0.55;
+      if (h.abilityCds[0]! <= 0 && Math.random() < 0.07) intent.mobility = true;
+      if (h.abilityCds[1]! <= 0 && (state.spawning || state.enemies.length > 2) && Math.random() < 0.035) {
         intent.ultimate = true;
       }
     }

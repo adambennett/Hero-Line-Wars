@@ -21,7 +21,8 @@ import {
   resolveMapChoice,
   mapRespawn,
   nearAnyShop,
-  clampInLane,
+  pointInPlayable,
+  resolveMovePlayable,
   type MapDef,
   type MapId,
 } from "../data/maps";
@@ -70,6 +71,7 @@ import {
   steerSeekingProjectile,
   applyMagnetPull,
   tryBasicAttack,
+  tickHexZones,
 } from "../systems/combat";
 import { createEnemy, updateEnemies } from "../systems/enemies";
 import { applySecondWind, applyWaveRider, pickRelic, tryPhoenixRevive } from "../systems/relics";
@@ -157,6 +159,8 @@ export type EnemyUnit = Unit & {
   /** Poison / burn DoT from hex / ember basics. */
   dotTimer?: number;
   dotDps?: number;
+  /** Stack count for poison DoT (Cloud / hex). */
+  poisonStacks?: number;
   burnTimer?: number;
   burnDps?: number;
 };
@@ -285,6 +289,13 @@ export type HexZone = {
   radius: number;
   life: number;
   dps: number;
+  /** Poison clouds apply DoT stacks; classic hex zones deal direct dps. */
+  kind?: "hex" | "poison";
+  poisonStacks?: number;
+  poisonDps?: number;
+  poisonDuration?: number;
+  /** Cadence timer for poison re-apply while standing in the cloud. */
+  poisonTick?: number;
 };
 
 export type OutgoingCurse = {
@@ -375,6 +386,17 @@ export type HeroRuntime = Unit & {
   gunnerCharge?: number;
   gunnerSwapCd?: number;
   gunnerSelfDamageFlash?: number;
+  /** Cloud: Wall Dart wind-up (immobilized) then axis-aligned ricochet. */
+  cloudDartWindup?: number;
+  cloudDartActive?: boolean;
+  /** `v` = top↔bottom (default), `h` = left↔right when aim is beside Cloud. */
+  cloudDartAxis?: "h" | "v";
+  /** Sign along the active axis (−1 / +1). */
+  cloudDartDir?: number;
+  cloudDartHits?: number;
+  /** Cloud: Gas Spew remaining duration + drop cadence. */
+  cloudSpewTimer?: number;
+  cloudSpewDrop?: number;
   /** Vector momentum 0–cap. */
   momentum?: number;
   /** Last frame position for momentum distance. */
@@ -414,6 +436,18 @@ export type RunOptions = {
   modifiers?: RunModifiers;
   /** SP team size: 1 = classic abstract/opponent, 2/3 = dual-lane with AI allies. */
   teamSize?: 1 | 2 | 3;
+  /**
+   * Explicit AI allies (player lane) and enemies (rival lane). When set, overrides
+   * the symmetric `teamSize` filler list for dual-lane solo matches.
+   */
+  aiAllies?: {
+    heroId: import("../net/types").LobbyAiHeroPick;
+    ai: import("../net/types").LobbyAiKind;
+  }[];
+  aiEnemies?: {
+    heroId: import("../net/types").LobbyAiHeroPick;
+    ai: import("../net/types").LobbyAiKind;
+  }[];
   /** Solo survival: no enemy lane; sends queue into your own next wave. */
   endless?: boolean;
   /** Chest stand-to-open duration multiplier (1 = default). */
@@ -570,6 +604,16 @@ export type GameState = {
   opponent: OpponentState;
   /** When true, canvas shows opponent lane instead of player lane. */
   viewOpponentLane: boolean;
+  /**
+   * Dual-lane spectate: draw the real enemy lane with the rival purple palette
+   * (not the abstract solo `opponent.viz` world).
+   */
+  spectateRivalTint?: boolean;
+  /**
+   * Client-side MP: true while this lane only receives HUD summaries (its
+   * entity arrays are stale). Cleared whenever a full LaneSnap is applied.
+   */
+  snapIsSummary?: boolean;
   /** Extra human/AI heroes sharing this lane (multiplayer). */
   allies: HeroRuntime[];
   /** Multiplayer lane flag — skip solo opponent AI sim. */
@@ -1050,6 +1094,8 @@ export function heroMoveSpeed(state: GameState): number {
   }
   // Timed mobility overrides player steer a bit
   if ((state.hero.slideTimer ?? 0) > 0 || (state.hero.chargeTimer ?? 0) > 0) spd *= 0.15;
+  // Cloud Wall Dart: locked during wind-up and ricochet
+  if ((state.hero.cloudDartWindup ?? 0) > 0 || state.hero.cloudDartActive) return 0;
   if ((state.hero.slowTimer ?? 0) > 0) spd *= state.hero.slowMul ?? 1;
   return spd;
 }
@@ -1159,19 +1205,26 @@ function respawnHero(state: GameState): void {
 function moveHero(state: GameState, nx: number, ny: number): void {
   const r = state.hero.radius;
   const map = state.map;
-  const clamped = clampInLane(map, nx, ny, r);
-  const x = clamped.x;
-  const y = clamped.y;
+  // Slide along shaped playable bounds instead of snapping (hex teleport bug).
+  const resolved = resolveMovePlayable(map, state.hero.x, state.hero.y, nx, ny, r);
+  const x = resolved.x;
+  const y = resolved.y;
   if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
     state.hero.x = x;
     state.hero.y = y;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, state.hero.y, r, o))) {
+  if (
+    pointInPlayable(map, x, state.hero.y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(x, state.hero.y, r, o))
+  ) {
     state.hero.x = x;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(state.hero.x, y, r, o))) {
+  if (
+    pointInPlayable(map, state.hero.x, y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(state.hero.x, y, r, o))
+  ) {
     state.hero.y = y;
   }
 }
@@ -1393,17 +1446,7 @@ export function update(state: GameState, input: Input, dt: number): void {
     state.fogVisionRadiusResolved = fog.visionRadius;
   }
 
-  // Hex DoT zones
-  for (const z of state.hexZones) {
-    z.life -= dt;
-    for (const e of state.enemies) {
-      if (!e.alive) continue;
-      if (dist(e, z) <= z.radius + e.radius) {
-        damageEnemy(state, e, z.dps * dt);
-      }
-    }
-  }
-  state.hexZones = state.hexZones.filter((z) => z.life > 0);
+  tickHexZones(state, dt);
 
   if (state.toastTimer > 0) {
     state.toastTimer = Math.max(0, state.toastTimer - dt);

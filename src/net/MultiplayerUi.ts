@@ -13,7 +13,8 @@ import {
   runTip,
   type RunOptionTipKey,
 } from "../ui/runOptionsMeta";
-import { listCustomHeroes, listCustomMaps, resolveHero } from "../custom/registry";
+import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
+import { paintMapThumb } from "../ui/mapThumbs";
 import { isCustomHeroId } from "../custom/types";
 import { MainMenuFx } from "../ui/mainMenuFx";
 import { loadSettings, syncMotionPreference } from "../ui/settings";
@@ -24,9 +25,13 @@ import {
   disconnectNet,
   findPublicMatch,
   getSession,
+  hostAddAiSeat,
+  hostRemoveAiSeat,
+  hostReplaceAiSeats,
   hostSetMode,
   hostSetOpts,
   hostStartMatch,
+  hostUpdateAiSeat,
   localPickHero,
   localReady,
   localSwitchTeam,
@@ -34,9 +39,31 @@ import {
   quickHost,
   quickJoin,
 } from "./session";
-import { lobbyBalanced, lobbyFull, lobbyReadyCount, lobbySeat, lobbyTeamCount } from "./lobby";
-import type { LobbyState, MatchMode, MatchPrivacy, MpRunExtras, NetMode, NetMsg } from "./types";
+import {
+  lobbyBalanced,
+  lobbyCombatantCount,
+  lobbyFull,
+  lobbyReadyCount,
+  lobbySeat,
+  lobbyTeamCount,
+  MAX_TEAM_COMBATANTS,
+  newAiSeat,
+} from "./lobby";
+import type {
+  LobbyAiHeroPick,
+  LobbyAiKind,
+  LobbyAiSeat,
+  LobbyState,
+  MatchMode,
+  MatchPrivacy,
+  MpRunExtras,
+  MpTeam,
+  NetMode,
+  NetMsg,
+} from "./types";
 import { isPveMode, modeCap, teamNeed } from "./types";
+import { aiKindOptionsHtml, aiKindLabel, parseAiKindValue } from "../ai/lobbyAi";
+import { loadAiStore } from "../ai/store";
 
 export type MpUiCallbacks = {
   onBack: () => void;
@@ -100,6 +127,8 @@ export class MultiplayerUi {
   private crampedLane = false;
   private preferredCode = randomMpCode();
   private busy = false;
+  /** Host hub draft — copied into the PeerJS lobby when the room opens. */
+  private hubAiSeats: LobbyAiSeat[] = [];
   private readonly menuFx = new MainMenuFx();
 
   constructor(root: HTMLElement, cbs: MpUiCallbacks) {
@@ -477,17 +506,50 @@ export class MultiplayerUi {
       return `<option value="${i}" ${this.ascension === i ? "selected" : ""}>A${i} · ${escapeAttr(def.name)}</option>`;
     }).join("");
     const showFf = this.mode !== "1v1";
-    const resetRandomBtns = editable
-      ? `
-          <div class="run-options-actions choice-row" style="margin-top:10px;gap:0.5rem">
-            <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset"><span class="btn-label">Reset</span></button>
-            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize"><span class="btn-label">Randomize</span></button>
+    const creativeFlags: Array<[string, string, boolean, RunOptionTipKey]> = [
+      ["no-art", "No artifacts", this.disableArtifacts, "noArtifacts"],
+      ["no-chest", "No chests", this.disableChests, "noChests"],
+      ["no-elite", "No elites", this.disableElites, "noElites"],
+      ["no-boss", "No bosses", this.disableBosses, "noBosses"],
+      ["no-shop", "No shop", this.disableShop, "noShop"],
+      ["no-send", "No sends", this.disableSends, "noSends"],
+      ["no-relic", "No relics", this.disableRelics, "noRelics"],
+      ["fog", "Fog always", this.fogAlways, "fogAlways"],
+      ["dbl-elite", "Double elites", this.doubleElites, "doubleElites"],
+      ["glass", "Glass cannon", this.glassCannon, "glassCannon"],
+      ["gold-rush", "Gold rush", this.goldRush, "goldRush"],
+      ["wild-chests", "Wild chests", this.wildChests, "wildChests"],
+      ["cramped", "Cramped lane", this.crampedLane, "crampedLane"],
+    ];
+    const dflt = RUN_OPTION_DEFAULTS;
+    const creativeActive =
+      creativeFlags.filter(([, , on]) => on).length +
+      [
+        this.enemyDensityMul !== dflt.enemyDensityMul,
+        this.enemyHpMul !== dflt.enemyHpMul,
+        this.enemySpeedMul !== dflt.enemySpeedMul,
+        this.incomeMul !== dflt.incomeMul,
+        this.respawnMul !== dflt.respawnMul,
+        this.startingBaseLevel !== dflt.startingBaseLevel,
+        this.levelDraftSize !== dflt.levelDraftSize,
+        this.relicDraftSize !== dflt.relicDraftSize,
+        this.suddenDeathBaseHp !== dflt.suddenDeathBaseHp,
+        this.fogThicknessPct !== dflt.fogThicknessPct,
+        this.fogVisionRadius !== dflt.fogVisionRadius,
+      ].filter(Boolean).length;
+    const headActions = editable
+      ? `<div class="panel-head-actions">
+            <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset" title="Restore default run options"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize" title="Roll random run options"><span class="btn-label">Randomize</span></button>
           </div>`
       : "";
 
     return `
       <section class="sp-setup">
-        <h2 class="sp-setup-title">${editable ? "Run setup" : "Host settings"}</h2>
+        <div class="panel-head">
+          <h2 class="sp-setup-title">${editable ? "Run setup" : "Host settings"}</h2>
+          ${headActions}
+        </div>
         <div class="run-grid cols-3">
           <label class="run-field">
             <span>Map</span>
@@ -501,8 +563,6 @@ export class MultiplayerUi {
             <span>Artifacts</span>
             <select id="${prefix}-turrets" ${dis}${tip("artifacts")}>${turretOpts}</select>
           </label>
-        </div>
-        <div class="run-grid cols-3">
           <label class="run-field">
             <span>Starting gold</span>
             <select id="${prefix}-gold" ${dis}${tip("startingGold")}>${goldOpts}</select>
@@ -520,10 +580,8 @@ export class MultiplayerUi {
               <option value="1" ${this.friendlyFire ? "selected" : ""}>On</option>
             </select>
           </label>`
-              : `<div class="run-field"></div>`
+              : ""
           }
-        </div>
-        <div class="run-grid cols-3">
           <label class="run-field">
             <span>Lives / wave</span>
             <select id="${prefix}-lives-wave" ${dis}${tip("livesWave")}>${livesWaveOpts}</select>
@@ -536,8 +594,6 @@ export class MultiplayerUi {
             <span>Utility draft Lv</span>
             <select id="${prefix}-utility" ${dis}${tip("utilityDraft")}>${utilityDraftLevelOptionsHtml(this.utilityDraftLevel)}</select>
           </label>
-        </div>
-        <div class="run-grid cols-3">
           <label class="run-field">
             <span>Chest open</span>
             <select id="${prefix}-chest-open" ${dis}${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${this.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
@@ -551,8 +607,13 @@ export class MultiplayerUi {
             <select id="${prefix}-chest-chance" ${dis}${tip("chestSpawn")}>${RUN_OPTION_POOLS.chestSpawnChance.map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
           </label>
         </div>
-        <div class="muted-box" style="margin-top:4px">
-          <h3 class="sp-setup-title" style="margin-bottom:8px">Creative options</h3>
+        <div class="map-preview" id="${prefix}-map-preview" aria-hidden="true">
+          <canvas></canvas>
+          <span class="map-preview-label"></span>
+        </div>
+        <details class="opt-fold"${creativeActive > 0 ? " open" : ""}>
+          <summary>Creative options${creativeActive > 0 ? ` <span class="opt-count">${creativeActive} active</span>` : ""}</summary>
+          <div class="opt-fold-body">
           <div class="run-grid cols-4">
             <label class="run-field"><span>Enemy density</span>
               <select id="${prefix}-enemy-density" ${dis}${tip("enemyDensity")}>${RUN_OPTION_POOLS.enemyDensityMul.map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
@@ -583,28 +644,14 @@ export class MultiplayerUi {
             </label>
           </div>
           <div class="creative-check-grid">
-            ${[
-              ["no-art", "No artifacts", this.disableArtifacts, "noArtifacts"],
-              ["no-chest", "No chests", this.disableChests, "noChests"],
-              ["no-elite", "No elites", this.disableElites, "noElites"],
-              ["no-boss", "No bosses", this.disableBosses, "noBosses"],
-              ["no-shop", "No shop", this.disableShop, "noShop"],
-              ["no-send", "No sends", this.disableSends, "noSends"],
-              ["no-relic", "No relics", this.disableRelics, "noRelics"],
-              ["fog", "Fog always", this.fogAlways, "fogAlways"],
-              ["dbl-elite", "Double elites", this.doubleElites, "doubleElites"],
-              ["glass", "Glass cannon", this.glassCannon, "glassCannon"],
-              ["gold-rush", "Gold rush", this.goldRush, "goldRush"],
-              ["wild-chests", "Wild chests", this.wildChests, "wildChests"],
-              ["cramped", "Cramped lane", this.crampedLane, "crampedLane"],
-            ]
+            ${creativeFlags
               .map(
                 ([id, label, on, tipKey]) =>
-                  `<label class="setting-row"${tip(tipKey as RunOptionTipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
+                  `<label class="setting-row"${tip(tipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
               )
               .join("")}
           </div>
-          <div class="run-grid cols-2" style="margin-top:8px">
+          <div class="run-grid cols-2">
             <label class="run-field"><span>Fog thickness</span>
               <select id="${prefix}-fog-thickness" ${dis}${tip("fogThickness")}>${RUN_OPTION_POOLS.fogThicknessPct.map((n) => `<option value="${n}" ${this.fogThicknessPct === n ? "selected" : ""}>${n}%</option>`).join("")}</select>
             </label>
@@ -612,10 +659,36 @@ export class MultiplayerUi {
               <select id="${prefix}-fog-vision" ${dis}${tip("fogVision")}>${RUN_OPTION_POOLS.fogVisionRadius.map((n) => `<option value="${n}" ${this.fogVisionRadius === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
             </label>
           </div>
-          ${resetRandomBtns}
-        </div>
+          </div>
+        </details>
       </section>
     `;
+  }
+
+  /** Live shape-aware preview of the selected map (or a placeholder for Random). */
+  private paintMapPreview(prefix: string): void {
+    const box = this.root.querySelector<HTMLElement>(`#${prefix}-map-preview`);
+    if (!box) return;
+    const canvas = box.querySelector("canvas");
+    const label = box.querySelector<HTMLElement>(".map-preview-label");
+    if (!canvas || !label) return;
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(200, Math.round(rect.width) || 360);
+    const h = Math.max(48, Math.round(rect.height) || 72);
+    if (this.mapChoice === "random") {
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.fillStyle = "#0a0f1a";
+        ctx.fillRect(0, 0, w, h);
+      }
+      label.textContent = "Random map each run";
+      label.style.display = "";
+      return;
+    }
+    paintMapThumb(canvas, resolveMap(this.mapChoice), w, h);
+    label.style.display = "none";
   }
 
   private bindRunSetup(prefix: string, onChange?: () => void): void {
@@ -669,6 +742,7 @@ export class MultiplayerUi {
       this.goldRush = chk("gold-rush");
       this.wildChests = chk("wild-chests");
       this.crampedLane = chk("cramped");
+      this.paintMapPreview(prefix);
       onChange?.();
     };
     const ids = [
@@ -902,7 +976,20 @@ export class MultiplayerUi {
         </section>
 
         <div class="sp-run-layout">
-          ${this.role === "host" ? this.runSetupHtml("hub", true) : `<section class="sp-setup"><h2 class="sp-setup-title">Run setup</h2><p class="menu-note">Host sets map and run options after the lobby opens.</p></section>`}
+          ${
+            this.role === "host"
+              ? `<div class="mp-setup-col">
+                  ${this.runSetupHtml("hub", true)}
+                  ${this.aiRosterHtml({
+                    seats: this.hubAiSeats,
+                    editable: true,
+                    pve: isPveMode(this.mode),
+                    team0Humans: this.hubTeamHumans(0),
+                    team1Humans: this.hubTeamHumans(1),
+                  })}
+                </div>`
+              : `<section class="sp-setup"><h2 class="sp-setup-title">Run setup</h2><p class="menu-note">Host sets map, run options, and AI roster after the lobby opens.</p></section>`
+          }
 
           <section class="sp-heroes">
             <h2 class="sp-heroes-title">Your hero</h2>
@@ -940,6 +1027,8 @@ export class MultiplayerUi {
     });
     this.root.querySelector("#mp-mode")!.addEventListener("change", (e) => {
       this.mode = (e.target as HTMLSelectElement).value as MatchMode;
+      this.clampHubAiSeats();
+      this.refresh();
     });
     this.root.querySelector("#mp-name")!.addEventListener("change", (e) => {
       this.name = (e.target as HTMLInputElement).value.trim() || "Player";
@@ -965,8 +1054,11 @@ export class MultiplayerUi {
     });
 
     if (this.role === "host") {
+      this.clampHubAiSeats();
       this.bindRunSetup("hub");
       this.bindRunResetRandom("hub", true);
+      this.bindAiRoster("hub");
+      this.paintMapPreview("hub");
     }
     this.bindHeroGrid();
 
@@ -986,6 +1078,7 @@ export class MultiplayerUi {
     }
     this.busy = true;
     this.captureName();
+    this.clampHubAiSeats();
     const code = await quickHost(
       this.mode,
       this.name,
@@ -998,6 +1091,10 @@ export class MultiplayerUi {
       this.wavesToWin,
       this.friendlyFire,
     );
+    if (code) {
+      hostReplaceAiSeats(this.hubAiSeats);
+      this.pushHostOpts();
+    }
     this.busy = false;
     void code;
     this.refresh();
@@ -1038,6 +1135,159 @@ export class MultiplayerUi {
     if (m) this.mode = m.value as MatchMode;
   }
 
+  /** Hub preview: host alone on team 0 until friends join. */
+  private hubTeamHumans(team: MpTeam): number {
+    if (isPveMode(this.mode)) return team === 0 ? 1 : 0;
+    return team === 0 ? 1 : 0;
+  }
+
+  private hubTeamRoom(team: MpTeam): number {
+    const used =
+      this.hubTeamHumans(team) + this.hubAiSeats.filter((a) => a.team === team).length;
+    return Math.max(0, MAX_TEAM_COMBATANTS - used);
+  }
+
+  private clampHubAiSeats(): void {
+    const kept: LobbyAiSeat[] = [];
+    const room: [number, number] = [
+      MAX_TEAM_COMBATANTS - this.hubTeamHumans(0),
+      MAX_TEAM_COMBATANTS - this.hubTeamHumans(1),
+    ];
+    for (const a of this.hubAiSeats) {
+      if (room[a.team]! > 0) {
+        kept.push(a);
+        room[a.team]!--;
+      }
+    }
+    this.hubAiSeats = kept;
+  }
+
+  /**
+   * Shared AI roster panel (hub draft + live lobby). Mirrors the SP layout so
+   * host can actually find and use the controls.
+   */
+  private aiRosterHtml(opts: {
+    seats: LobbyAiSeat[];
+    editable: boolean;
+    pve: boolean;
+    team0Humans: number;
+    team1Humans: number;
+  }): string {
+    const store = loadAiStore();
+    const heroOpts = (sel: LobbyAiHeroPick) =>
+      [
+        `<option value="random" ${sel === "random" ? "selected" : ""}>Random</option>`,
+        ...HERO_LIST.map(
+          (h) =>
+            `<option value="${h.id}" ${h.id === sel ? "selected" : ""}>${escapeAttr(h.name)}</option>`,
+        ),
+      ].join("");
+
+    const count = (team: MpTeam) =>
+      (team === 0 ? opts.team0Humans : opts.team1Humans) +
+      opts.seats.filter((a) => a.team === team).length;
+    const room = (team: MpTeam) => Math.max(0, MAX_TEAM_COMBATANTS - count(team));
+
+    const col = (team: MpTeam, title: string) => {
+      const rows = opts.seats.filter((a) => a.team === team);
+      const list = rows.length
+        ? rows
+            .map((a) => {
+              const heroLabel =
+                a.heroId === "random" ? "Random" : resolveHero(a.heroId).name;
+              if (!opts.editable) {
+                return `<div class="sp-ai-row"><span class="sp-ai-you-name">AI · ${escapeAttr(heroLabel)}</span><span class="sp-ai-you-meta">${escapeAttr(aiKindLabel(a.ai, store))}</span><span class="sp-ai-lock">—</span></div>`;
+              }
+              return `<div class="sp-ai-row" data-ai-id="${escapeAttr(a.id)}">
+                <select class="menu-select mp-ai-hero" data-ai-id="${escapeAttr(a.id)}">${heroOpts(a.heroId)}</select>
+                <select class="menu-select mp-ai-kind" data-ai-id="${escapeAttr(a.id)}">${aiKindOptionsHtml(a.ai, store)}</select>
+                <button type="button" class="menu-btn small ghost mp-ai-rm" data-ai-id="${escapeAttr(a.id)}">✕</button>
+              </div>`;
+            })
+            .join("")
+        : `<p class="menu-note compact">No AI fillers</p>`;
+      return `
+        <div class="sp-ai-col" data-team="${team}">
+          <h4>${title} · ${count(team)}/${MAX_TEAM_COMBATANTS}</h4>
+          ${list}
+          ${
+            opts.editable
+              ? `<button type="button" class="menu-btn small ghost sp-ai-add mp-ai-add" data-team="${team}" ${room(team) <= 0 ? "disabled" : ""}>+ AI</button>`
+              : ""
+          }
+        </div>`;
+    };
+
+    return `
+      <div class="sp-ai-roster mp-ai-roster">
+        <div class="panel-head">
+          <h3 class="sp-setup-title">AI roster</h3>
+        </div>
+        <p class="menu-note">Add AI allies/enemies (max ${MAX_TEAM_COMBATANTS} per team). Each seat has its own Classic / trained difficulty — asymmetric 1v2 etc. are allowed.</p>
+        <div class="sp-ai-cols">
+          ${col(0, opts.pve ? "AI allies (co-op)" : "Team A · AI")}
+          ${col(1, opts.pve ? "AI foe lane" : "Team B · AI")}
+        </div>
+      </div>`;
+  }
+
+  /** Wire +AI / remove / hero / difficulty. `source: "hub"` edits local draft; `"live"` hits the session. */
+  private bindAiRoster(source: "hub" | "live"): void {
+    this.root.querySelectorAll<HTMLButtonElement>(".mp-ai-add").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const team = Number(btn.dataset.team) as MpTeam;
+        if (source === "hub") {
+          if (this.hubTeamRoom(team) <= 0) return;
+          this.hubAiSeats.push(newAiSeat(team, { kind: "classic" }, "random"));
+          this.refresh();
+          return;
+        }
+        hostAddAiSeat(team);
+        this.refresh();
+      });
+    });
+    this.root.querySelectorAll<HTMLButtonElement>(".mp-ai-rm").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.aiId ?? "";
+        if (source === "hub") {
+          this.hubAiSeats = this.hubAiSeats.filter((a) => a.id !== id);
+          this.refresh();
+          return;
+        }
+        hostRemoveAiSeat(id);
+        this.refresh();
+      });
+    });
+    this.root.querySelectorAll<HTMLSelectElement>(".mp-ai-kind").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.dataset.aiId ?? "";
+        const ai = parseAiKindValue(sel.value) as LobbyAiKind;
+        if (source === "hub") {
+          const seat = this.hubAiSeats.find((a) => a.id === id);
+          if (seat) seat.ai = ai;
+          this.refresh();
+          return;
+        }
+        hostUpdateAiSeat(id, { ai });
+        this.refresh();
+      });
+    });
+    this.root.querySelectorAll<HTMLSelectElement>(".mp-ai-hero").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.dataset.aiId ?? "";
+        const heroId = (sel.value || "random") as LobbyAiHeroPick;
+        if (source === "hub") {
+          const seat = this.hubAiSeats.find((a) => a.id === id);
+          if (seat) seat.heroId = heroId;
+          this.refresh();
+          return;
+        }
+        hostUpdateAiSeat(id, { heroId });
+        this.refresh();
+      });
+    });
+  }
+
   private renderLobby(lobby: LobbyState, mySlot: number, mode: NetMode): void {
     this.syncOptsFromLobby(lobby);
     const mySeat = lobbySeat(lobby, mySlot);
@@ -1057,13 +1307,22 @@ export class MultiplayerUi {
     }).join("");
 
     const need = teamNeed(lobby.mode);
+    const aN = lobbyCombatantCount(lobby, 0);
+    const bN = isPveMode(lobby.mode)
+      ? Math.max(1, lobbyCombatantCount(lobby, 1))
+      : lobbyCombatantCount(lobby, 1);
     const bal = isPveMode(lobby.mode)
-      ? `${lobby.slots.length}/${cap} players`
-      : `A ${lobbyTeamCount(lobby, 0)}/${need} · B ${lobbyTeamCount(lobby, 1)}/${need}`;
+      ? `Co-op ${aN}/${MAX_TEAM_COMBATANTS} · AI foe lane`
+      : `A ${aN}/${MAX_TEAM_COMBATANTS} · B ${bN}/${MAX_TEAM_COMBATANTS}` +
+        (lobbyTeamCount(lobby, 0) !== need || lobbyTeamCount(lobby, 1) !== need
+          ? ` · mode ${need}v${need} seats`
+          : "");
 
     const canStart = mode === "host" && canStartMatch();
     const amReady = mySeat?.ready ?? false;
     const isHost = mode === "host";
+    // Keep hub draft in sync with the live lobby so Leave → re-host preserves picks.
+    this.hubAiSeats = structuredClone(lobby.aiSeats ?? []);
 
     this.mountFxShell(`
       <div class="menu-shell tight mp-shell">
@@ -1083,7 +1342,16 @@ export class MultiplayerUi {
         </section>
 
         <div class="sp-run-layout">
-          ${this.runSetupHtml("live", isHost)}
+          <div class="mp-setup-col">
+            ${this.runSetupHtml("live", isHost)}
+            ${this.aiRosterHtml({
+              seats: lobby.aiSeats ?? [],
+              editable: isHost,
+              pve: isPveMode(lobby.mode),
+              team0Humans: lobbyTeamCount(lobby, 0),
+              team1Humans: lobbyTeamCount(lobby, 1),
+            })}
+          </div>
 
           <section class="sp-heroes">
             <h2 class="sp-heroes-title">Your hero</h2>
@@ -1092,23 +1360,24 @@ export class MultiplayerUi {
           </section>
         </div>
 
-        ${
-          !isPveMode(lobby.mode)
-            ? `<div class="menu-footer"><button type="button" class="menu-btn ghost" id="mp-team">Switch team</button></div>`
-            : ""
-        }
-
         <div class="menu-footer sp-footer stack">
-          ${
-            isHost
-              ? `<button type="button" class="menu-btn primary wide shine-btn" id="mp-start" ${canStart ? "" : "disabled"}>
-                  <span class="btn-label">${canStart ? "Start match" : `Waiting (${lobbyReadyCount(lobby)}/${cap} ready, full & balanced)`}</span>
+          <div class="mp-footer-row">
+            ${
+              !isPveMode(lobby.mode)
+                ? `<button type="button" class="menu-btn ghost" id="mp-team">Switch team</button>`
+                : ""
+            }
+            <button type="button" class="menu-btn ${amReady ? "ghost" : "primary"} shine-btn" id="mp-ready">
+              <span class="btn-label">${amReady ? "Unready" : "Ready"}</span>
+            </button>
+            ${
+              isHost
+                ? `<button type="button" class="menu-btn primary shine-btn" id="mp-start" ${canStart ? "" : "disabled"}>
+                  <span class="btn-label">${canStart ? "Start match" : `Waiting (${lobbyReadyCount(lobby)}/${lobby.slots.length} ready · each side 1–3)`}</span>
                 </button>`
-              : `<p class="menu-note">Waiting for host to start…</p>`
-          }
-          <button type="button" class="menu-btn ${amReady ? "ghost" : "primary"} wide shine-btn" id="mp-ready">
-            <span class="btn-label">${amReady ? "Unready" : "Ready"}</span>
-          </button>
+                : `<p class="menu-note">Waiting for host to start…</p>`
+            }
+          </div>
           <p class="menu-footnote" id="mp-status">${this.statusHtml || "Lobby open — share the code with friends."}</p>
         </div>
       </div>
@@ -1128,7 +1397,9 @@ export class MultiplayerUi {
         this.pushHostOpts();
       });
       this.bindRunResetRandom("live", true, () => this.pushHostOpts());
+      this.bindAiRoster("live");
     }
+    this.paintMapPreview("live");
 
     this.root.querySelector("#mp-team")?.addEventListener("click", () => {
       localSwitchTeam();

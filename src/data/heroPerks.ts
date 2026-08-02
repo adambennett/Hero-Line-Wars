@@ -153,6 +153,10 @@ export const HERO_PERK_DEFS: HeroPerkDef[] = [
   p("vector_inertia_core", "vector", "Inertia Core", "Momentum builds 25% faster; +10 cap.", "Passive", "rare", { momentumGainMul: 1.25, momentumCapBonus: 10, passiveMul: 1.3 }),
   p("vector_slipstream", "vector", "Slipstream", "Momentum Dash cools 18% faster.", "Mobility", "mythic", { mobilityCdMul: 0.82, moveSpeedFlat: 15 }),
   p("vector_shock_release", "vector", "Shock Release", "Kinetic Burst +30% damage/area.", "Ultimate", "legendary", { abilityDamageMul: 1.3, abilityAreaMul: 1.2 }),
+  // Cloud
+  p("cloud_toxic_reserve", "cloud", "Toxic Reserve", "Venom Cache puffs +40% stronger/larger.", "Passive", "rare", { passiveMul: 1.4, abilityAreaMul: 1.1 }),
+  p("cloud_wall_runner", "cloud", "Wall Runner", "Wall Dart cools 22% faster; +10 move speed.", "Mobility", "mythic", { mobilityCdMul: 0.78, moveSpeedFlat: 10 }),
+  p("cloud_miasma_engine", "cloud", "Miasma Engine", "Gas Spew clouds +30% poison/area.", "Ultimate", "legendary", { abilityDamageMul: 1.3, abilityAreaMul: 1.25, ultimateCdMul: 0.9 }),
 ];
 
 export const HERO_PERKS: Record<string, HeroPerkDef> = Object.fromEntries(

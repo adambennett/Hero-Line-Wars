@@ -16,10 +16,11 @@ export type View = {
 };
 
 export function computeView(canvas: HTMLCanvasElement): View {
-  // Leave room above/below for send/XP and HP/controls chrome.
-  const marginTop = canvas.height * 0.11;
-  const marginBottom = canvas.height * 0.16;
-  const availW = canvas.width * 0.98;
+  // Tight chrome margins — HUD docks to the lane edges, so the playfield can
+  // claim most of the viewport (hint text is gone).
+  const marginTop = canvas.height * 0.105;
+  const marginBottom = canvas.height * 0.09;
+  const availW = canvas.width * 0.995;
   const availH = Math.max(1, canvas.height - marginTop - marginBottom);
   const scale = Math.min(availW / MAP_W, availH / MAP_H);
   return {
@@ -227,24 +228,26 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     return;
   }
 
-  // Lane floor (shape-aware)
-  ctx.fillStyle = "#152038";
+  const rival = !!state.spectateRivalTint;
+
+  // Lane floor (shape-aware) — purple when spectating the real rival lane
+  ctx.fillStyle = rival ? "#1a1428" : "#152038";
   fillPlayablePath(ctx, map);
-  ctx.strokeStyle = "#2a3d60";
+  ctx.strokeStyle = rival ? "#4a3560" : "#2a3d60";
   ctx.lineWidth = 2;
   strokePlayablePath(ctx, map);
   ctx.stroke();
 
   // High grounds
   for (const hg of map.highGrounds) {
-    ctx.fillStyle = "#3d5a8822";
-    ctx.strokeStyle = "#7eb0ff88";
+    ctx.fillStyle = rival ? "#5a3d8822" : "#3d5a8822";
+    ctx.strokeStyle = rival ? "#b08fff66" : "#7eb0ff88";
     ctx.lineWidth = 2;
     ctx.setLineDash([8, 6]);
     ctx.fillRect(hg.x, hg.y, hg.w, hg.h);
     ctx.strokeRect(hg.x, hg.y, hg.w, hg.h);
     ctx.setLineDash([]);
-    ctx.fillStyle = "#9ec1ff99";
+    ctx.fillStyle = rival ? "#d0b0ff99" : "#9ec1ff99";
     ctx.font = "12px Segoe UI, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("HIGH GROUND", hg.x + 10, hg.y + 18);
@@ -252,8 +255,8 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
 
   // Obstacles / cover
   for (const o of map.obstacles) {
-    ctx.fillStyle = "#1c2838";
-    ctx.strokeStyle = "#4a6078";
+    ctx.fillStyle = rival ? "#241828" : "#1c2838";
+    ctx.strokeStyle = rival ? "#6a5078" : "#4a6078";
     ctx.lineWidth = 2;
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
@@ -501,13 +504,14 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.shadowBlur = 0;
   }
 
-  // Hex DoT zones
+  // Hex / poison DoT zones
   for (const z of state.hexZones) {
+    const poison = z.kind === "poison";
     ctx.beginPath();
     ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
-    ctx.fillStyle = "#a060c822";
+    ctx.fillStyle = poison ? "#5ec87828" : "#a060c822";
     ctx.fill();
-    ctx.strokeStyle = "#c080ff55";
+    ctx.strokeStyle = poison ? "#8ef0a855" : "#c080ff55";
     ctx.lineWidth = 2;
     ctx.stroke();
   }

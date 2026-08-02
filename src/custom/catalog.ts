@@ -58,6 +58,7 @@ export const ATTACK_STYLES: AttackStyle[] = [
   "machinegun",
   "grenade",
   "kinetic",
+  "poisondash",
 ];
 
 export const AIM_MODES: AimMode[] = ["free", "engage", "auto"];

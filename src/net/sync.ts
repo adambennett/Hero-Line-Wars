@@ -152,7 +152,13 @@ export function buildLaneSnap(state: GameState): LaneSnap {
       openDuration: c.openDuration,
       life: c.life,
     })),
-    hexZones: state.hexZones.map((z) => ({ x: z.x, y: z.y, radius: z.radius, life: z.life })),
+    hexZones: state.hexZones.map((z) => ({
+      x: z.x,
+      y: z.y,
+      radius: z.radius,
+      life: z.life,
+      kind: z.kind,
+    })),
     mapOrbs: (state.mapOrbs ?? []).map((o) => ({
       x: o.x,
       y: o.y,
@@ -379,6 +385,7 @@ export function applyLaneSnap(
   // Full data again — HUD may stop falling back to the summary counters.
   state.summaryEnemyCount = null;
   state.summaryIncoming = null;
+  state.snapIsSummary = false;
   if (snap.mapHazardX != null) state.mapHazardX = snap.mapHazardX;
   state.mapSupplyCrates = (snap.mapSupplyCrates ?? []).map((c) => ({ ...c }));
   if (snap.humanPlayers != null) state.humanPlayers = Math.max(1, snap.humanPlayers);
@@ -398,6 +405,7 @@ export function applyLaneSnap(
     radius: z.radius,
     life: z.life,
     dps: 0,
+    kind: z.kind === "poison" ? "poison" : z.kind === "hex" ? "hex" : undefined,
   }));
   state.mapOrbs = (snap.mapOrbs ?? []).map((o) => ({
     x: o.x,
@@ -502,6 +510,7 @@ export function applyLaneSnap(
  * host promotes it back to full snapshots (no flicker, no vanishing units).
  */
 export function applyLaneSummary(state: GameState, snap: LaneSummary): void {
+  state.snapIsSummary = true;
   state.status = snap.status as GameState["status"];
   state.wave = snap.wave;
   state.waveTier = snap.waveTier as GameState["waveTier"];

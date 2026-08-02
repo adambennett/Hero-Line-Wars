@@ -106,6 +106,7 @@ const HERO_UNLOCK: Partial<Record<HeroId, MetaUpgradeId>> = {
   gunner: "unlock_gunner",
   sapper: "unlock_sapper",
   vector: "unlock_vector",
+  cloud: "unlock_cloud",
 };
 
 export function isHeroUnlocked(heroId: HeroId, store: MetaStore = loadMetaStore()): boolean {

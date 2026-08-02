@@ -25,14 +25,22 @@ export function sendPackCost(state: GameState, packId: SendPackId): number {
   );
 }
 
-/** Available packs for this hero/base, with hotkeys remapped to 1..9. */
+/** Max send chips shown in the HUD (hotkeys 1–5). */
+export const MAX_VISIBLE_SEND_PACKS = 5;
+
+/**
+ * Available packs for this hero/base. Once many packs are unlocked we only
+ * surface the strongest few — players spam the top tier anyway, and the old
+ * full list drowned the top HUD. Hotkeys are remapped to 1..N for the visible set.
+ */
 export function availableSendPacks(state: GameState): SendPackDef[] {
   const packs = unlockedSendPacks(state.baseLevel, state.hero.heroId);
-  // Prefer shared packs first, then hero-unique; limit to 9 for digit keys
-  const shared = packs.filter((p) => !p.heroId);
-  const unique = packs.filter((p) => p.heroId);
-  const ordered = [...shared, ...unique].slice(0, 9);
-  return ordered.map((p, i) => ({ ...p, digit: i + 1 }));
+  // Strongest first by base cost (tier proxy), keep top N, then show cheap→expensive.
+  const strongest = [...packs]
+    .sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name))
+    .slice(0, MAX_VISIBLE_SEND_PACKS)
+    .sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));
+  return strongest.map((p, i) => ({ ...p, digit: i + 1 }));
 }
 
 export function buySendPack(state: GameState, packId: SendPackId): string | null {

@@ -6,8 +6,13 @@ import {
   resolveHero,
   heroHasPassive,
 } from "../custom/registry";
-import { MAP_W } from "../data/constants";
-import { circleHitsObstacle, findClearSpot, rayObstacleHitT } from "../data/maps";
+import {
+  circleHitsObstacle,
+  findClearSpot,
+  pointInPlayable,
+  rayObstacleHitT,
+  resolveMovePlayable,
+} from "../data/maps";
 import { draftCurseChoices, CURSES, type CurseId } from "../data/curses";
 import { clamp, dist, normalize, type Vec2 } from "../game/math";
 import type { GameState, HeroRuntime, OutgoingCurse } from "../game/state";
@@ -20,6 +25,7 @@ import {
   pushProjectile,
   applySlow,
   damageEnemy,
+  spawnPoisonCloud,
 } from "./combat";
 import { mobilityCdMul, ultimateCdMul } from "./relics";
 import { playSfx } from "./audio";
@@ -55,8 +61,12 @@ function dashHero(
   let x = state.hero.x;
   let y = state.hero.y;
   for (let i = 1; i <= steps; i++) {
-    const nx = clamp(state.hero.x + dx * ((distDash * i) / steps), r, MAP_W - r);
-    const ny = clamp(state.hero.y + dy * ((distDash * i) / steps), map.laneTop + r, map.laneBottom - r);
+    // Slide each step against shaped playable bounds (no rectangle-only clamp).
+    const tx = state.hero.x + dx * ((distDash * i) / steps);
+    const ty = state.hero.y + dy * ((distDash * i) / steps);
+    const resolved = resolveMovePlayable(map, x, y, tx, ty, r);
+    const nx = resolved.x;
+    const ny = resolved.y;
     const blocked = map.obstacles.some((o) => circleHitsObstacle(nx, ny, r, o));
     if (blocked && !opts?.phase) break;
     x = nx;
@@ -697,6 +707,114 @@ function castHiveDetonate(state: GameState): boolean {
   return true;
 }
 
+function dropCloudWallPuff(state: GameState, x: number, y: number): void {
+  const perks = perksForState(state);
+  const rad = 34 * perks.abilityAreaMul;
+  spawnPoisonCloud(state, x, y, {
+    radius: rad,
+    life: 2.2,
+    poisonDps: attackDamage(state) * 0.22 * perks.abilityDamageMul,
+    poisonStacks: 1,
+    poisonDuration: 2.5,
+  });
+}
+
+function castWallDart(state: GameState): boolean {
+  if ((state.hero.cloudDartWindup ?? 0) > 0 || state.hero.cloudDartActive) return false;
+  if ((state.hero.cloudSpewTimer ?? 0) > 0) {
+    // Allow dart during spew — cancel only conflicting dart.
+  }
+  const aimX = state.aimWorldX - state.hero.x;
+  const aimY = state.aimWorldY - state.hero.y;
+  // Closer to left/right of Cloud → horizontal ricochet; top/bottom → classic vertical.
+  const horizontal = Math.abs(aimX) > Math.abs(aimY);
+  state.hero.cloudDartAxis = horizontal ? "h" : "v";
+  state.hero.cloudDartWindup = 0.16;
+  state.hero.cloudDartActive = false;
+  state.hero.cloudDartHits = 0;
+  // Vertical keeps the original “start upward” feel; horizontal aims toward the cursor.
+  state.hero.cloudDartDir = horizontal ? (aimX >= 0 ? 1 : -1) : -1;
+  state.hero.phaseTimer = Math.max(state.hero.phaseTimer ?? 0, 0.16);
+  addFx(state, state.hero.x, state.hero.y, 26, "#5ec87888", 0.25);
+  return true;
+}
+
+function castGasSpew(state: GameState): boolean {
+  const perks = perksForState(state);
+  state.hero.cloudSpewTimer = 3.2 * (0.85 + 0.15 * perks.abilityDamageMul);
+  state.hero.cloudSpewDrop = 0;
+  addFx(state, state.hero.x, state.hero.y, 55, "#5ec87866", 0.4);
+  return true;
+}
+
+function tickCloudKit(state: GameState, dt: number): void {
+  const h = state.hero;
+  if (!h.alive) {
+    h.cloudDartActive = false;
+    h.cloudDartWindup = 0;
+    h.cloudSpewTimer = 0;
+    return;
+  }
+
+  // Wall Dart wind-up → ricochet (vertical or horizontal from cast aim)
+  if ((h.cloudDartWindup ?? 0) > 0) {
+    h.cloudDartWindup = Math.max(0, (h.cloudDartWindup ?? 0) - dt);
+    h.phaseTimer = Math.max(h.phaseTimer ?? 0, 0.05);
+    if ((h.cloudDartWindup ?? 0) <= 0) {
+      h.cloudDartActive = true;
+      h.cloudDartHits = 0;
+      if ((h.cloudDartAxis ?? "v") === "v") h.cloudDartDir = -1;
+      // horizontal keeps the dir chosen at cast from aim
+    }
+  }
+
+  if (h.cloudDartActive) {
+    const speed = 1280;
+    const dir = h.cloudDartDir ?? -1;
+    const axis = h.cloudDartAxis ?? "v";
+    const prevX = h.x;
+    const prevY = h.y;
+    if (axis === "h") {
+      moveHeroTo(state, h, h.x + dir * speed * dt, h.y);
+    } else {
+      moveHeroTo(state, h, h.x, h.y + dir * speed * dt);
+    }
+    h.phaseTimer = Math.max(h.phaseTimer ?? 0, 0.08);
+    // Progress along the intended axis — curved walls may slide on the other axis.
+    const progress = axis === "h" ? (h.x - prevX) * dir : (h.y - prevY) * dir;
+    if (progress < 0.9) {
+      dropCloudWallPuff(state, h.x, h.y);
+      h.cloudDartHits = (h.cloudDartHits ?? 0) + 1;
+      addFx(state, h.x, h.y, 22, "#a8f0b888", 0.2);
+      if ((h.cloudDartHits ?? 0) >= 4) {
+        h.cloudDartActive = false;
+        h.cloudDartDir = 0;
+        h.cloudDartAxis = undefined;
+      } else {
+        h.cloudDartDir = -dir;
+      }
+    }
+  }
+
+  // Gas Spew — drop clouds while free to move / dash
+  if ((h.cloudSpewTimer ?? 0) > 0) {
+    h.cloudSpewTimer = Math.max(0, (h.cloudSpewTimer ?? 0) - dt);
+    h.cloudSpewDrop = (h.cloudSpewDrop ?? 0) - dt;
+    if ((h.cloudSpewDrop ?? 0) <= 0) {
+      h.cloudSpewDrop = 0.34;
+      const perks = perksForState(state);
+      const rad = 58 * perks.abilityAreaMul;
+      spawnPoisonCloud(state, h.x, h.y, {
+        radius: rad,
+        life: 2.6,
+        poisonDps: attackDamage(state) * 0.26 * perks.abilityDamageMul,
+        poisonStacks: 2,
+        poisonDuration: 3,
+      });
+    }
+  }
+}
+
 const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = {
   dash: (s, m) => castDash(s, m),
   slide: (s, m) => castSlide(s, m),
@@ -746,6 +864,8 @@ const CASTERS: Record<AbilityKind, (state: GameState, move: Vec2) => boolean> = 
   detonate: (s) => castDetonate(s),
   momentumdash: (s, m) => castMomentumDash(s, m),
   kineticburst: (s) => castKineticBurst(s),
+  walldart: (s) => castWallDart(s),
+  gasspew: (s) => castGasSpew(s),
 };
 
 function castPlantMine(state: GameState): boolean {
@@ -783,20 +903,17 @@ function explodeMine(state: GameState, m: { x: number; y: number; damage: number
 }
 
 function castDetonate(state: GameState): boolean {
-  const perks = perksForState(state);
   if (!state.mines) state.mines = [];
-  if (state.mines.length === 0) {
-    // Cluster charge at aim
-    const dmg = attackDamage(state) * 3.2 * perks.abilityDamageMul;
-    const r = 90 * perks.abilityAreaMul;
-    damageEnemiesInRadius(state, state.aimWorldX, state.aimWorldY, r, dmg);
-    addFx(state, state.aimWorldX, state.aimWorldY, r, "#ff604088", 0.45);
-    state.shake = Math.max(state.shake, 0.28);
-    return true;
+  const armed = state.mines.filter((m) => m.armTimer <= 0);
+  if (armed.length === 0) {
+    // No armed mines: unusable — no explosion, no cooldown (tryCastAbility skips CD on false).
+    state.toast = "Detonate — no armed mines";
+    state.toastTimer = 0.9;
+    return false;
   }
   let killCredit = 0;
-  for (const m of state.mines) killCredit += explodeMine(state, m);
-  state.mines = [];
+  for (const m of armed) killCredit += explodeMine(state, m);
+  state.mines = state.mines.filter((m) => m.armTimer > 0);
   if (killCredit > 0 && heroHasPassive(state.hero.heroId, "demolition")) {
     state.hero.abilityCds[0] = Math.max(0, (state.hero.abilityCds[0] ?? 0) - 5.5 * 0.25);
   }
@@ -1034,6 +1151,10 @@ export function tickAbilityEffects(state: GameState, dt: number): void {
     damageEnemiesInRadius(state, state.hero.x, state.hero.y, rad, attackDamage(state) * 0.22 * drones * dt);
   }
 
+  if (resolveHero(state.hero.heroId).id === "cloud" || heroHasPassive(state.hero.heroId, "venom_cache")) {
+    tickCloudKit(state, dt);
+  }
+
   if ((state.wardBeaconTimer ?? 0) > 0) {
     state.wardBeaconTimer = Math.max(0, state.wardBeaconTimer - dt);
   }
@@ -1084,18 +1205,25 @@ function tryUseTeleporter(state: GameState, hero: HeroRuntime): void {
 function moveHeroTo(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
   const map = state.map;
-  const x = clamp(nx, r, MAP_W - r);
-  const y = clamp(ny, map.laneTop + r, map.laneBottom - r);
+  const resolved = resolveMovePlayable(map, hero.x, hero.y, nx, ny, r);
+  const x = resolved.x;
+  const y = resolved.y;
   if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
     hero.x = x;
     hero.y = y;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))) {
+  if (
+    pointInPlayable(map, x, hero.y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))
+  ) {
     hero.x = x;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))) {
+  if (
+    pointInPlayable(map, hero.x, y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))
+  ) {
     hero.y = y;
   }
 }

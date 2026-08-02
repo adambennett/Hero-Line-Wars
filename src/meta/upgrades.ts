@@ -27,6 +27,7 @@ export type MetaUpgradeId =
   | "unlock_gunner"
   | "unlock_sapper"
   | "unlock_vector"
+  | "unlock_cloud"
   | "crest_forge"
   | "bounty_board"
   | "veteran_pay"
@@ -385,6 +386,14 @@ export const META_UPGRADES: MetaUpgradeDef[] = [
     costs: [80],
     kind: "unlock",
     requiresChallenge: "momentum_master",
+  },
+  {
+    id: "unlock_cloud",
+    name: "Commission: Cloud",
+    blurb: "Unlock the poison ninja Cloud — dash, wall dart, gas spew.",
+    maxRank: 1,
+    costs: [70],
+    kind: "unlock",
   },
   {
     id: "unlock_challenge_items_a",

@@ -222,10 +222,22 @@ function fireLaser(
   state.damageFlash = Math.max(state.damageFlash, 0.4);
 }
 
+/** Switching is locked while the equipped weapon is reloading or between shots. */
+export function gunnerSwitchLocked(h: HeroRuntime): boolean {
+  if (!heroUsesGunnerKit(h.heroId)) return false;
+  ensureGunner(h);
+  return (h.gunnerReload ?? 0) > 0 || (h.gunnerWeaponCd ?? 0) > 0;
+}
+
 function cycleWeapon(state: GameState): void {
   const h = state.hero;
   ensureGunner(h);
   if ((h.gunnerSwapCd ?? 0) > 0) return;
+  if (gunnerSwitchLocked(h)) {
+    state.toast = (h.gunnerReload ?? 0) > 0 ? "Reloading — switch locked" : "Weapon busy — switch locked";
+    state.toastTimer = 0.8;
+    return;
+  }
   h.gunnerWeaponIndex = ((h.gunnerWeaponIndex ?? 0) + 1) % GUNNER_WEAPON_ORDER.length;
   const w = currentGunnerWeapon(h);
   const mods = gunnerWeaponMods(state, w.id);
@@ -365,7 +377,8 @@ export function gunnerWeaponLabel(h: HeroRuntime): string {
   if (!heroUsesGunnerKit(h.heroId)) return "";
   const w = currentGunnerWeapon(h);
   const ammo = h.gunnerAmmo ?? w.clip;
-  if ((h.gunnerReload ?? 0) > 0) return `${w.name} · REL ${(h.gunnerReload ?? 0).toFixed(1)}`;
+  if ((h.gunnerReload ?? 0) > 0)
+    return `${w.name} · REL ${(h.gunnerReload ?? 0).toFixed(1)} · LOCKED`;
   return `${w.name} · ${ammo}/${w.clip}`;
 }
 

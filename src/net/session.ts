@@ -8,16 +8,18 @@ import { HERO_LIST, type HeroId } from "../data/heroes";
 import type { MapId } from "../data/maps";
 import {
   assignTeam,
-  lobbyBalanced,
+  clampLobbyAiSeats,
+  lobbyCombatReady,
   lobbyFreeSlot,
-  lobbyFull,
-  lobbyReadyCount,
   lobbySeat,
+  lobbyTeamRoom,
+  newAiSeat,
   newLobby,
   setMode,
 } from "./lobby";
 import type {
   CombatIntent,
+  LobbyAiKind,
   LobbyState,
   MatchMode,
   MatchPrivacy,
@@ -689,9 +691,67 @@ export function localUnready(): void {
 
 export function canStartMatch(): boolean {
   if (S.mode !== "host" || !S.lobby) return false;
-  if (!lobbyFull(S.lobby)) return false;
-  if (!lobbyBalanced(S.lobby)) return false;
-  return lobbyReadyCount(S.lobby) >= modeCap(S.lobby.mode);
+  clampLobbyAiSeats(S.lobby);
+  // Humans may leave seats open when AI fillers cover the other side (1v2, etc.).
+  return lobbyCombatReady(S.lobby);
+}
+
+/** Host: replace the full AI filler list (e.g. after applying hub draft seats). */
+export function hostReplaceAiSeats(seats: import("./types").LobbyAiSeat[]): void {
+  if (S.mode !== "host" || !S.lobby) return;
+  S.lobby.aiSeats = seats.map((s) => ({
+    id: s.id || newAiSeat(s.team, s.ai, s.heroId).id,
+    team: s.team,
+    ai: s.ai,
+    heroId: s.heroId,
+  }));
+  clampLobbyAiSeats(S.lobby);
+  for (const s of S.lobby.slots) s.ready = false;
+  broadcastLobby();
+}
+
+/** Host: add an AI combatant on a team (max 3 humans+AI per team). */
+export function hostAddAiSeat(
+  team: MpTeam,
+  ai: LobbyAiKind = { kind: "classic" },
+  heroId?: import("./types").LobbyAiHeroPick,
+): boolean {
+  if (S.mode !== "host" || !S.lobby) return false;
+  if (lobbyTeamRoom(S.lobby, team) <= 0) return false;
+  if (!S.lobby.aiSeats) S.lobby.aiSeats = [];
+  S.lobby.aiSeats.push(newAiSeat(team, ai, heroId ?? "random"));
+  for (const s of S.lobby.slots) s.ready = false;
+  broadcastLobby();
+  return true;
+}
+
+export function hostRemoveAiSeat(id: string): boolean {
+  if (S.mode !== "host" || !S.lobby?.aiSeats) return false;
+  const before = S.lobby.aiSeats.length;
+  S.lobby.aiSeats = S.lobby.aiSeats.filter((a) => a.id !== id);
+  if (S.lobby.aiSeats.length === before) return false;
+  for (const s of S.lobby.slots) s.ready = false;
+  broadcastLobby();
+  return true;
+}
+
+export function hostUpdateAiSeat(
+  id: string,
+  patch: { ai?: LobbyAiKind; heroId?: import("./types").LobbyAiHeroPick; team?: MpTeam },
+): boolean {
+  if (S.mode !== "host" || !S.lobby?.aiSeats) return false;
+  const seat = S.lobby.aiSeats.find((a) => a.id === id);
+  if (!seat) return false;
+  if (patch.team != null && patch.team !== seat.team) {
+    if (lobbyTeamRoom(S.lobby, patch.team) <= 0) return false;
+    seat.team = patch.team;
+  }
+  if (patch.ai) seat.ai = patch.ai;
+  if (patch.heroId) seat.heroId = patch.heroId;
+  for (const s of S.lobby.slots) s.ready = false;
+  clampLobbyAiSeats(S.lobby);
+  broadcastLobby();
+  return true;
 }
 
 export { broadcastLobby };

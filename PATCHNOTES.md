@@ -1,5 +1,105 @@
 # Hero Line Wars — Patch Notes
 
+## 2026-08-01 · v0.0.3
+
+### Combat HUD
+- Gold panel, pause, and abilities dock to the **lane edges** (not the viewport
+  gutters). Abilities sit in one row under the right side of the lane.
+- Lane playfield uses tighter vertical margins so the board reads larger; the
+  bottom control-hint line is gone.
+
+### Pathfinding
+- Extra corner separation + a slightly thicker flow-field blocked radius so
+  creeps stop snagging on obstacle / high-ground corners (Island Hop, etc.).
+
+### Enemy lane view
+- Send / upgrade / economy UI always acts on **your** lane while the canvas can
+  show theirs; wave pill clarifies when you’re watching their fight.
+
+### Lobby AI roster (SP + MP)
+- Beyond Mode presets, add AI allies/enemies up to **3 combatants per team**.
+- Each AI seat has its own difficulty (Classic or a trained school tier) and
+  hero — asymmetric setups like 1v2 with Brutal + Classic are supported.
+- MP host can start once every human is ready and each fighting side has 1–3
+  bodies (AI fillers count); mode seat caps no longer block asymmetric starts.
+- AI roster selects use the same dark menu chrome as run options; lane columns
+  share aligned row heights (You row ↔ first enemy).
+
+### Fixes
+- Dual-lane with AI allies no longer soft-locks mid-run (AI drafts were pausing
+  the whole lane without auto-resolving). Enemy-lane view uses the purple rival
+  tint on the real sim again.
+- Pause → Settings → back returns to the pause menu instead of dumping you on
+  the main menu with no way back into the run.
+
+### New hero — Cloud
+- Poison ninja unlocked via Barracks (**Commission: Cloud**, no challenge).
+- **LMB Poison Dash** — zooms through enemies, phases contact damage during the
+  dash, and applies light poison DoT stacks (poison never heals you).
+- **RMB Wall Dart** — short wind-up, then rapid top↔bottom ricochets (2 hits
+  each side). Drops a small poison cloud on every wall hit. Low cooldown.
+- **MMB Gas Spew** — spew larger poison clouds for a few seconds while free to
+  move and dash; enemies in clouds stack poison.
+- **Passive: Venom Cache** — poisoned kills leave a tiny poison puff.
+- Hero level bonuses: Toxic Reserve, Wall Runner, Miasma Engine.
+
+### Gunner
+- Weapon switching is **locked while the equipped weapon reloads or cools
+  down** — the HUD label shows the lock.
+- Reload rebalance: LMG 4.5s → **10s**, Rockets 3.2s → **5.5s**, and every
+  other arsenal weapon reloads slightly longer. Machine-gun primary damage
+  7 → **5**.
+
+### Sapper
+- Detonate with **no armed mines** no longer explodes anything and spends no
+  cooldown; mines still arming stay planted. Grenade primary fires slightly
+  slower.
+
+### Maps & pathfinding
+- Shaped maps (Hex Bowl, Capsule Coast): walls now **slide you smoothly**
+  along the edge instead of teleporting you back inside. Dashes and knockbacks
+  respect map shapes too.
+- Enemies use real **flow-field pathfinding** — they navigate mazes (Mazing)
+  and shifting obstacles instead of wedging into corners. The emergency
+  "unstick" hop only fires when a creep is truly sealed in.
+
+### Multiplayer
+- Viewing the enemy lane now shows their **actual fight** — no more stale /
+  ghost enemies — and the View lane keybind works in multiplayer.
+
+### Menu redesign
+- Every menu screen now sits on a **shared grid layout system**: multi-column
+  Main Menu, grouped Settings / Controls cards, and denser SP / MP run setup.
+  Screens fit 1366×768 without scrollbars.
+- Map Editor: tools moved to a **toolbar above the canvas**; the template
+  picker and library live in a footer bar, so the options panel no longer
+  scrolls.
+- Online Lobby: consolidated run options with a collapsible **Creative**
+  section and a single footer action row.
+- New **live map preview** in SP and MP run setup. Compendium and preview
+  thumbnails render each map's true shape, including custom maps.
+- The Creative options fold shows an **"N active"** badge and auto-expands
+  only when something is non-default.
+
+### Combat HUD
+- Top chrome anchors to the **viewport edges** (not the centered lane box):
+  player economy left, rival panel right, wave pill centered, sends spanning
+  the full band between the side panels.
+- Only the **5 strongest** unlocked send packs are shown (hotkeys 1–5), laid
+  out in equal grid columns so chips no longer crush/overlap.
+- Dropped the redundant “Your lane / Enemy lane” stack under the wave number
+  and the send-bar caption; map name lives in the gold panel.
+
+### Fixes
+- Ability tooltips no longer get stuck on screen through pauses, run end, and
+  menus.
+- Map editor: the shape-change confirmation could softlock the client.
+- Main-menu music: hardens first-load unlock (window gesture hook, muted
+  autoplay fallback, Electron `no-user-gesture-required`) so BGM is not stuck
+  waiting for a submenu click.
+
+---
+
 ## 2026-08-01 · v0.0.2
 
 ### UI cleanup & design system

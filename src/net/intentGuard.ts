@@ -76,7 +76,7 @@ export function sanitizeIntent(raw: unknown): CombatIntent {
   out.rerollLevel = bool(r.rerollLevel);
   out.rerollRelic = bool(r.rerollRelic);
 
-  out.sendDigit = intIn(r.sendDigit, 1, 6);
+  out.sendDigit = intIn(r.sendDigit, 1, 5);
   out.shopSlot = intIn(r.shopSlot, 0, MAX_SHOP_SLOT);
   out.chooseChest = intIn(r.chooseChest, 0, MAX_CHEST_INDEX);
 

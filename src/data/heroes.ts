@@ -24,7 +24,8 @@ export type HeroId =
   | "hive"
   | "gunner"
   | "sapper"
-  | "vector";
+  | "vector"
+  | "cloud";
 
 export type AbilityKind =
   | "dash"
@@ -74,7 +75,9 @@ export type AbilityKind =
   | "plantmine"
   | "detonate"
   | "momentumdash"
-  | "kineticburst";
+  | "kineticburst"
+  | "walldart"
+  | "gasspew";
 
 /** Combat slots bound to mouse by default (see Settings → Controls). */
 export type AbilitySlot = "mobility" | "ultimate";
@@ -103,7 +106,8 @@ export type AttackStyle =
   | "drone"
   | "machinegun"
   | "grenade"
-  | "kinetic";
+  | "kinetic"
+  | "poisondash";
 /**
  * How basics / ults interact with attack range:
  * - free: fire along aim anywhere (no range circle / no engage gate)
@@ -958,7 +962,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
     speed: 200,
     maxHp: 118,
     attackRange: 165,
-    attackDamage: 7,
+    attackDamage: 5,
     attackCooldown: 0.12,
     projectileSpeed: 760,
     attackStyle: "machinegun",
@@ -982,7 +986,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "ultimate",
         name: "Swap Weapon",
         cooldown: 0.4,
-        hint: "Cycle Rockets → Bolt Sniper → Auto Sniper → Shotgun → BR → AR → LMG → Laser.",
+        hint: "Cycle Rockets → Bolt Sniper → Auto Sniper → Shotgun → BR → AR → LMG → Laser. Locked while reloading.",
       },
     ],
   },
@@ -997,7 +1001,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
     maxHp: 108,
     attackRange: 150,
     attackDamage: 14,
-    attackCooldown: 0.48,
+    attackCooldown: 0.6,
     projectileSpeed: 340,
     attackStyle: "grenade",
     aimMode: "free",
@@ -1020,7 +1024,7 @@ export const HEROES: Record<HeroId, HeroDef> = {
         slot: "ultimate",
         name: "Detonate",
         cooldown: 11,
-        hint: "Explode all mines for heavy AoE. Empty field drops a cluster charge at aim.",
+        hint: "Explode all armed mines for heavy AoE. Unusable with no armed mines.",
       },
     ],
   },
@@ -1062,6 +1066,44 @@ export const HEROES: Record<HeroId, HeroDef> = {
       },
     ],
   },
+  cloud: {
+    id: "cloud",
+    name: "Cloud",
+    blurb: "Poison ninja — dash through foes, ricochet the lane walls, blank them in gas.",
+    color: "#5ec878",
+    glowColor: "#a8f0b8",
+    radius: 15,
+    speed: 238,
+    maxHp: 88,
+    attackRange: 110,
+    attackDamage: 11,
+    attackCooldown: 0.62,
+    projectileSpeed: 0,
+    attackStyle: "poisondash",
+    aimMode: "free",
+    attackHint: "Poison Dash — zoom through foes; no contact damage; applies poison",
+    passive: {
+      id: "venom_cache",
+      name: "Venom Cache",
+      blurb: "Poisoned kills leave a tiny poison puff. Poison never heals you.",
+    },
+    abilities: [
+      {
+        id: "walldart",
+        slot: "mobility",
+        name: "Wall Dart",
+        cooldown: 2.8,
+        hint: "Brief pause, then zip top↔bottom twice. Drop a small poison cloud on each wall hit.",
+      },
+      {
+        id: "gasspew",
+        slot: "ultimate",
+        name: "Gas Spew",
+        cooldown: 13,
+        hint: "Spew poison clouds while moving/dashing for a few seconds. Enemies in clouds stack poison.",
+      },
+    ],
+  },
 };
 
 export const HERO_LIST: HeroDef[] = [
@@ -1089,6 +1131,7 @@ export const HERO_LIST: HeroDef[] = [
   HEROES.gunner,
   HEROES.sapper,
   HEROES.vector,
+  HEROES.cloud,
 ];
 
 export function heroRarity(_id: HeroId): Rarity {

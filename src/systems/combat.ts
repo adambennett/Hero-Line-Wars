@@ -1,10 +1,16 @@
 import { type AttackStyle } from "../data/heroes";
 import type { RelicId } from "../data/relics";
 import type { HighGroundZone } from "../data/maps";
-import { hasLineOfSight, rayObstacleHitT } from "../data/maps";
+import {
+  circleHitsObstacle,
+  findClearSpot,
+  hasLineOfSight,
+  rayObstacleHitT,
+  resolveMovePlayable,
+} from "../data/maps";
 import { dist, normalize, type Vec2 } from "../game/math";
 import { gameplayCheats } from "../meta/cheats";
-import type { EnemyUnit, GameState, Projectile } from "../game/state";
+import type { EnemyUnit, GameState, HexZone, Projectile } from "../game/state";
 import {
   hasRelic,
   killGoldRelicMul,
@@ -46,6 +52,134 @@ export function nearestEnemy(state: GameState, from?: Vec2, excludeId?: number):
 export function applySlow(e: EnemyUnit, mul: number, duration: number): void {
   e.slowMul = Math.min(e.slowMul ?? 1, mul);
   e.slowTimer = Math.max(e.slowTimer ?? 0, duration);
+}
+
+/** Light poison DoT stacks — never grants lifesteal/heal. */
+export function applyPoison(
+  e: EnemyUnit,
+  dpsPerStack: number,
+  duration: number,
+  stacks = 1,
+  maxStacks = 5,
+): void {
+  if (!e.alive || dpsPerStack <= 0 || stacks <= 0) return;
+  const next = Math.min(maxStacks, (e.poisonStacks ?? 0) + stacks);
+  e.poisonStacks = next;
+  e.dotTimer = Math.max(e.dotTimer ?? 0, duration);
+  e.dotDps = Math.max(e.dotDps ?? 0, dpsPerStack * next);
+}
+
+export function spawnPoisonCloud(
+  state: GameState,
+  x: number,
+  y: number,
+  opts: {
+    radius: number;
+    life: number;
+    poisonDps: number;
+    poisonStacks?: number;
+    poisonDuration?: number;
+  },
+): void {
+  const zone: HexZone = {
+    x,
+    y,
+    radius: opts.radius,
+    life: opts.life,
+    dps: 0,
+    kind: "poison",
+    poisonDps: opts.poisonDps,
+    poisonStacks: opts.poisonStacks ?? 1,
+    poisonDuration: opts.poisonDuration ?? 2.6,
+    poisonTick: 0,
+  };
+  state.hexZones.push(zone);
+  addFx(state, x, y, opts.radius, "#5ec87855", 0.35);
+}
+
+/** Shared SP / MP hex + poison cloud tick. */
+export function tickHexZones(state: GameState, dt: number): void {
+  for (const z of state.hexZones) {
+    z.life -= dt;
+    if (z.kind === "poison") {
+      z.poisonTick = (z.poisonTick ?? 0) - dt;
+      const ready = (z.poisonTick ?? 0) <= 0;
+      if (ready) z.poisonTick = 0.4;
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        if (dist(e, z) > z.radius + e.radius) continue;
+        if (ready) {
+          applyPoison(
+            e,
+            z.poisonDps ?? Math.max(1, z.dps),
+            z.poisonDuration ?? 2.6,
+            z.poisonStacks ?? 1,
+          );
+        }
+      }
+    } else {
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        if (dist(e, z) <= z.radius + e.radius) {
+          damageEnemy(state, e, z.dps * dt);
+        }
+      }
+    }
+  }
+  state.hexZones = state.hexZones.filter((z) => z.life > 0);
+}
+
+/** Cloud LMB: aim/move dash that phases contact and applies poison. */
+export function castPoisonDashBasic(state: GameState): boolean {
+  const aim = normalize(state.aimWorldX - state.hero.x, state.aimWorldY - state.hero.y);
+  let dx = aim.x;
+  let dy = aim.y;
+  if (Math.hypot(dx, dy) < 0.1) {
+    const t = nearestEnemy(state);
+    if (t) {
+      const n = normalize(t.x - state.hero.x, t.y - state.hero.y);
+      dx = n.x;
+      dy = n.y;
+    } else {
+      dx = 1;
+      dy = 0;
+    }
+  }
+  const distDash = 105;
+  const map = state.map;
+  const r = state.hero.radius;
+  const steps = Math.max(4, Math.ceil(distDash / 12));
+  const hit = new Set<number>();
+  const poisonDps = attackDamage(state) * 0.28;
+  let x = state.hero.x;
+  let y = state.hero.y;
+  for (let i = 1; i <= steps; i++) {
+    const tx = state.hero.x + dx * ((distDash * i) / steps);
+    const ty = state.hero.y + dy * ((distDash * i) / steps);
+    const resolved = resolveMovePlayable(map, x, y, tx, ty, r);
+    const nx = resolved.x;
+    const ny = resolved.y;
+    const blocked = map.obstacles.some((o) => circleHitsObstacle(nx, ny, r, o));
+    if (blocked) break;
+    x = nx;
+    y = ny;
+    for (const e of state.enemies) {
+      if (!e.alive || hit.has(e.id)) continue;
+      if (dist({ x, y }, e) <= 38 + e.radius) {
+        hit.add(e.id);
+        // Light contact hit — no lifesteal flag (poison never heals).
+        damageEnemy(state, e, attackDamage(state) * 0.4);
+        applyPoison(e, poisonDps, 2.8, 1);
+      }
+    }
+  }
+  const clear = findClearSpot(map, x, y, r);
+  state.hero.x = clear.x;
+  state.hero.y = clear.y;
+  state.hero.phaseTimer = Math.max(state.hero.phaseTimer ?? 0, 0.28);
+  addFx(state, state.hero.x, state.hero.y, 30, "#5ec878aa");
+  playSfx("cast");
+  return true;
 }
 
 export function attackDamage(state: GameState): number {
@@ -177,6 +311,20 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
   }
   if (heroHasPassive(state.hero.heroId, "nest_memory")) {
     state.hero.hiveDrones = Math.min(5, (state.hero.hiveDrones ?? 0) + 1);
+  }
+  if (
+    heroHasPassive(state.hero.heroId, "venom_cache") &&
+    ((e.poisonStacks ?? 0) > 0 || (e.dotTimer ?? 0) > 0)
+  ) {
+    const perks = perksForState(state);
+    const rad = 26 * perks.abilityAreaMul * (0.85 + 0.15 * perks.passiveMul);
+    spawnPoisonCloud(state, e.x, e.y, {
+      radius: rad,
+      life: 1.6 * perks.passiveMul,
+      poisonDps: attackDamage(state) * 0.18 * perks.passiveMul,
+      poisonStacks: 1,
+      poisonDuration: 2.2,
+    });
   }
   if ((state.shopOwned.blood_engine ?? 0) > 0) {
     state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
@@ -709,6 +857,9 @@ function fireStyle(
       });
       break;
     }
+    case "poisondash":
+      // Handled in tryBasicAttack via castPoisonDashBasic.
+      break;
     case "chaos":
       break;
   }
@@ -755,12 +906,20 @@ export function enemyInAttackRange(state: GameState): boolean {
 export function tryBasicAttack(state: GameState): boolean {
   const heroDef = resolveHero(state.hero.heroId);
   if (heroDef.attackStyle === "spin") return false;
+  // Cloud Wall Dart locks basics during wind-up / ricochet
+  if ((state.hero.cloudDartWindup ?? 0) > 0 || state.hero.cloudDartActive) return false;
   // Gyro kit can't attack while blades are detached
   if (
     heroUsesGyroKit(state.hero.heroId) &&
     (state.hero.bladeMode ?? "wrapped") !== "wrapped"
   ) {
     return false;
+  }
+  if (heroDef.attackStyle === "poisondash") {
+    if (!castPoisonDashBasic(state)) return false;
+    state.hero.attackCd = attackCooldown(state);
+    state.basicsFired += 1;
+    return true;
   }
   let facing: Vec2;
   if (heroDef.aimMode === "auto") {

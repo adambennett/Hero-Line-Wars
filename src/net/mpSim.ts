@@ -32,6 +32,7 @@ import {
   resolveHostileProjectile,
   steerSeekingProjectile,
   applyMagnetPull,
+  tickHexZones,
 } from "../systems/combat";
 import { tickGunnerWeapons } from "../systems/gunner";
 import { tryCastUtility, tickUtilityEffects } from "../systems/utility";
@@ -49,7 +50,8 @@ import {
   blockedByObstacle,
   mapRespawn,
   nearAnyShop,
-  clampInLane,
+  pointInPlayable,
+  resolveMovePlayable,
 } from "../data/maps";
 import { laneFogState } from "../game/fog";
 import {
@@ -69,11 +71,7 @@ import {
   resolveHero,
 } from "../custom/registry";
 import { rerollLevelDraft, rerollRelicDraft, openLevelDraft } from "../systems/xp";
-import {
-  anyBagPausedForDraft,
-  withPlayerBag,
-} from "./playerBag";
-import { isAiControllerSlot } from "./matchFactory";
+import { humanBagPausedForDraft, withPlayerBag } from "./playerBag";
 import { draftRelicChoices } from "../data/relics";
 import { applySecondWind } from "../systems/relics";
 import { setLaneSfxEnabled } from "../systems/audio";
@@ -96,25 +94,37 @@ function applyOutgoingCurseTo(from: GameState, to: GameState): void {
 import type { CombatIntent } from "./types";
 import { emptyIntent } from "./types";
 import type { MpMatch } from "./matchFactory";
-import { allLaneHeroes, heroForSlot } from "./matchFactory";
+import {
+  allLaneHeroes,
+  heroForSlot,
+  isAiControllerSlot,
+  neuralForHero,
+} from "./matchFactory";
 import { scriptedIntent, thinkNeural, type NeuralLaneAi } from "../ai/runtime";
 
 function moveHeroObj(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
   const map = state.map;
-  const clamped = clampInLane(map, nx, ny, r);
-  const x = clamped.x;
-  const y = clamped.y;
+  // Slide along shaped playable bounds instead of snapping (parity with SP moveHero).
+  const resolved = resolveMovePlayable(map, hero.x, hero.y, nx, ny, r);
+  const x = resolved.x;
+  const y = resolved.y;
   if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
     hero.x = x;
     hero.y = y;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))) {
+  if (
+    pointInPlayable(map, x, hero.y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))
+  ) {
     hero.x = x;
     return;
   }
-  if (!map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))) {
+  if (
+    pointInPlayable(map, hero.x, y, r) &&
+    !map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))
+  ) {
     hero.y = y;
   }
 }
@@ -465,9 +475,19 @@ function aiIntentForHero(
   dt: number,
 ): CombatIntent {
   let intent = emptyIntent();
-  withHero(state, hero, () => {
-    intent = resolveAiIntent(state, neural, dt);
-  });
+  const think = () => {
+    withHero(state, hero, () => {
+      intent = resolveAiIntent(state, neural, dt);
+    });
+  };
+  // Must focus this controller's bag so draft auto-picks see their level/relic
+  // choices — otherwise AI allies open drafts that freeze the lane forever.
+  const slot = hero.controllerSlot;
+  if (slot != null && state.playerBags) {
+    withPlayerBag(state, slot, think);
+  } else {
+    think();
+  }
   return intent;
 }
 
@@ -538,7 +558,7 @@ function updateLaneMp(
   intents: Map<number, CombatIntent>,
   dt: number,
   outboundSends: GameState["pendingSends"],
-  neural?: NeuralLaneAi | null,
+  neuralFor: (hero: HeroRuntime) => NeuralLaneAi | null,
   /** Unlimited dual-lane: hold next wave until both lanes are ready. */
   holdNextWave = false,
 ): void {
@@ -548,13 +568,20 @@ function updateLaneMp(
   // on top of a running match (see `game/pause.ts`).
   const draftsMayPause = canPauseSimulation(state);
 
-  if (draftsMayPause && anyBagPausedForDraft(state)) {
+  // Only human drafts freeze the lane. AI bags keep resolving in the background
+  // so ally/enemy filler seats can't soft-lock waves (red-screen freeze).
+  if (draftsMayPause && humanBagPausedForDraft(state)) {
     state.elapsed += dt;
+    // Keep feedback overlays decaying while the human picks a draft.
+    state.damageFlash = Math.max(0, state.damageFlash - dt);
+    state.vignette = Math.max(0, state.vignette - dt);
+    state.hitFlash = Math.max(0, state.hitFlash - dt);
+    state.shake = Math.max(0, state.shake - dt);
     for (const h of allLaneHeroes(state)) {
       const slot = h.controllerSlot;
       let intent: CombatIntent;
       if (state.aiControlled || isAiControllerSlot(slot)) {
-        intent = aiIntentForHero(state, h, neural, dt);
+        intent = aiIntentForHero(state, h, neuralFor(h), dt);
       } else if (slot != null) {
         intent = intents.get(slot) ?? emptyIntent();
       } else {
@@ -615,17 +642,7 @@ function updateLaneMp(
     state.fogVisionRadiusResolved = fog.visionRadius;
   }
 
-  // Hex DoT zones
-  for (const z of state.hexZones) {
-    z.life -= dt;
-    for (const e of state.enemies) {
-      if (!e.alive) continue;
-      if (dist(e, z) <= z.radius + e.radius) {
-        damageEnemy(state, e, z.dps * dt);
-      }
-    }
-  }
-  state.hexZones = state.hexZones.filter((z) => z.life > 0);
+  tickHexZones(state, dt);
 
   if (state.toastTimer > 0) {
     state.toastTimer = Math.max(0, state.toastTimer - dt);
@@ -664,7 +681,7 @@ function updateLaneMp(
     const slot = h.controllerSlot;
     let intent: CombatIntent;
     if (state.aiControlled || isAiControllerSlot(slot)) {
-      intent = aiIntentForHero(state, h, neural, dt);
+      intent = aiIntentForHero(state, h, neuralFor(h), dt);
     } else if (slot != null) {
       intent = intents.get(slot) ?? emptyIntent();
     } else {
@@ -710,7 +727,7 @@ function updateLaneMp(
       state.spawning = false;
       afterWaveClearMp(state);
     }
-  } else if (!draftsMayPause || !anyBagPausedForDraft(state)) {
+  } else if (!draftsMayPause || !humanBagPausedForDraft(state)) {
     state.waveTimer -= dt;
     if (state.waveTimer <= 0) {
       if (holdNextWave) {
@@ -734,7 +751,8 @@ function updateLaneMp(
 /** Lane is between waves and ready to roll the next one (timer expired). */
 function laneReadyToStartWave(state: GameState): boolean {
   if (state.status !== "playing") return false;
-  if (anyBagPausedForDraft(state)) return false;
+  // AI drafts must not block wave cadence — only a human draft holds the lane.
+  if (humanBagPausedForDraft(state)) return false;
   if (state.spawning || state.enemies.length > 0) return false;
   return state.waveTimer <= 0;
 }
@@ -753,9 +771,9 @@ export function stepMpMatch(
   const syncWaves = match.lanes[0].wavesToWin <= 0 || match.lanes[1].wavesToWin <= 0;
 
   setLaneSfxEnabled(match.viewTeam === 0);
-  updateLaneMp(match.lanes[0], intents, dt, out0, match.laneAi[0], syncWaves);
+  updateLaneMp(match.lanes[0], intents, dt, out0, (h) => neuralForHero(match, 0, h), syncWaves);
   setLaneSfxEnabled(match.viewTeam === 1);
-  updateLaneMp(match.lanes[1], intents, dt, out1, match.laneAi[1], syncWaves);
+  updateLaneMp(match.lanes[1], intents, dt, out1, (h) => neuralForHero(match, 1, h), syncWaves);
   setLaneSfxEnabled(true);
 
   // Player sends from lane0 hit lane1 and vice versa

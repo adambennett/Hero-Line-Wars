@@ -10,6 +10,22 @@ export type MatchPrivacy = "private" | "public";
 
 export type MpTeam = 0 | 1;
 
+/** Per-AI difficulty — classic scripted, or a trained school checkpoint tier. */
+export type LobbyAiKind =
+  | { kind: "classic" }
+  | { kind: "neural"; school: string; tier: "rookie" | "steady" | "sharp" | "brutal" };
+
+/** Concrete hero, or roll at match start. */
+export type LobbyAiHeroPick = HeroId | "random";
+
+/** Host-placed AI filler. Team size = humans on that team + AI seats (max 3). */
+export type LobbyAiSeat = {
+  id: string;
+  team: MpTeam;
+  ai: LobbyAiKind;
+  heroId: LobbyAiHeroPick;
+};
+
 export type LobbySeat = {
   slot: number;
   team: MpTeam;
@@ -22,6 +38,8 @@ export type LobbySeat = {
 export type LobbyState = {
   mode: MatchMode;
   slots: LobbySeat[];
+  /** Optional AI fillers on either team (beyond human seats from the mode). */
+  aiSeats?: LobbyAiSeat[];
   code?: string;
   mapChoice: MapId | string | "random";
   maxTurrets: number;
@@ -317,7 +335,7 @@ export type LaneSnap = {
     openDuration: number;
     life: number;
   }[];
-  hexZones?: { x: number; y: number; radius: number; life: number }[];
+  hexZones?: { x: number; y: number; radius: number; life: number; kind?: "hex" | "poison" }[];
   mapOrbs?: { x: number; y: number; radius: number; fuse: number }[];
   teleporters?: {
     a: { x: number; y: number } | null;

@@ -1,8 +1,18 @@
 import { HERO_LIST, type HeroId } from "../data/heroes";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { DEFAULT_MAX_TURRETS } from "../data/turrets";
-import type { LobbySeat, LobbyState, MatchMode, MpTeam } from "./types";
+import type {
+  LobbyAiHeroPick,
+  LobbyAiKind,
+  LobbyAiSeat,
+  LobbySeat,
+  LobbyState,
+  MatchMode,
+  MpTeam,
+} from "./types";
 import { isPveMode, modeCap, teamNeed } from "./types";
+
+export const MAX_TEAM_COMBATANTS = 3;
 
 export function newLobby(mode: MatchMode, hostName: string, heroId: HeroId = HERO_LIST[0]!.id): LobbyState {
   return {
@@ -17,6 +27,7 @@ export function newLobby(mode: MatchMode, hostName: string, heroId: HeroId = HER
         here: true,
       },
     ],
+    aiSeats: [],
     mapChoice: "random",
     maxTurrets: DEFAULT_MAX_TURRETS,
     startingGold: STARTING_GOLD,
@@ -73,6 +84,40 @@ export function lobbyTeamCount(lobby: LobbyState, team: MpTeam): number {
   return lobby.slots.filter((s) => s.team === team).length;
 }
 
+/** Humans + host-placed AI on a team (cap 3). */
+export function lobbyCombatantCount(lobby: LobbyState, team: MpTeam): number {
+  const ais = (lobby.aiSeats ?? []).filter((a) => a.team === team).length;
+  return lobbyTeamCount(lobby, team) + ais;
+}
+
+export function lobbyAiOnTeam(lobby: LobbyState, team: MpTeam): LobbyAiSeat[] {
+  return (lobby.aiSeats ?? []).filter((a) => a.team === team);
+}
+
+export function lobbyTeamRoom(lobby: LobbyState, team: MpTeam): number {
+  return Math.max(0, MAX_TEAM_COMBATANTS - lobbyCombatantCount(lobby, team));
+}
+
+/** Trim AI seats so no team exceeds 3 combatants (humans keep priority). */
+export function clampLobbyAiSeats(lobby: LobbyState): void {
+  const seats = lobby.aiSeats ?? [];
+  const kept: LobbyAiSeat[] = [];
+  const roomLeft: [number, number] = [
+    MAX_TEAM_COMBATANTS - lobbyTeamCount(lobby, 0),
+    MAX_TEAM_COMBATANTS - lobbyTeamCount(lobby, 1),
+  ];
+  for (const a of seats) {
+    if (isPveMode(lobby.mode) && a.team === 1) {
+      // PvE foe fillers still count against team 1's 3-hero lane cap.
+    }
+    if (roomLeft[a.team]! > 0) {
+      kept.push(a);
+      roomLeft[a.team]!--;
+    }
+  }
+  lobby.aiSeats = kept;
+}
+
 export function lobbyBalanced(lobby: LobbyState): boolean {
   if (isPveMode(lobby.mode)) {
     return lobby.slots.length >= modeCap(lobby.mode) && lobby.slots.every((s) => s.team === 0);
@@ -81,8 +126,50 @@ export function lobbyBalanced(lobby: LobbyState): boolean {
   return lobbyTeamCount(lobby, 0) === need && lobbyTeamCount(lobby, 1) === need;
 }
 
+/**
+ * Start-ready combatant shape: each fighting side has 1–3 bodies.
+ * AI seats count; human seats need not fill the mode cap.
+ */
+export function lobbyCombatReady(lobby: LobbyState): boolean {
+  if (lobby.slots.length < 1) return false;
+  if (lobby.slots.some((s) => !s.ready)) return false;
+  if (isPveMode(lobby.mode)) {
+    if (!lobby.slots.every((s) => s.team === 0)) return false;
+    return lobbyCombatantCount(lobby, 0) >= 1 && lobbyCombatantCount(lobby, 0) <= MAX_TEAM_COMBATANTS;
+  }
+  const a = lobbyCombatantCount(lobby, 0);
+  const b = lobbyCombatantCount(lobby, 1);
+  return a >= 1 && b >= 1 && a <= MAX_TEAM_COMBATANTS && b <= MAX_TEAM_COMBATANTS;
+}
+
 export function lobbyFull(lobby: LobbyState): boolean {
   return lobby.slots.length >= modeCap(lobby.mode);
+}
+
+export function newAiSeat(
+  team: MpTeam,
+  ai: LobbyAiKind = { kind: "classic" },
+  heroId: LobbyAiHeroPick = "random",
+): LobbyAiSeat {
+  return {
+    id: `ai_${Math.random().toString(36).slice(2, 10)}`,
+    team,
+    ai,
+    heroId,
+  };
+}
+
+/** Resolve an AI hero pick at match start (`random` rolls, avoiding duplicates when possible). */
+export function resolveAiHeroPick(
+  pick: LobbyAiHeroPick,
+  seed: number,
+  avoid: Iterable<HeroId> = [],
+): HeroId {
+  if (pick !== "random") return pick;
+  const blocked = new Set(avoid);
+  const pool = HERO_LIST.filter((h) => !blocked.has(h.id));
+  const list = pool.length ? pool : HERO_LIST;
+  return list[Math.abs(seed) % list.length]!.id;
 }
 
 export function lobbyReadyCount(lobby: LobbyState): number {
@@ -120,5 +207,11 @@ export function setMode(lobby: LobbyState, mode: MatchMode): void {
         else a++;
       }
     }
+  } else {
+    // PvE: AI allies stay on team 0; foe AI seats stay on team 1.
+    for (const a of lobby.aiSeats ?? []) {
+      if (a.team !== 0 && a.team !== 1) a.team = 0;
+    }
   }
+  clampLobbyAiSeats(lobby);
 }

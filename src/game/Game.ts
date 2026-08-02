@@ -236,6 +236,11 @@ export class Game {
       onRunOptionsChanged: (opts) => {
         this.runDefaults = { ...this.runDefaults, ...opts };
       },
+      onResumePause: () => {
+        if (!this.state || this.pauseMode !== "settings") return;
+        this.menus.hide();
+        this.showPauseMenu();
+      },
     });
 
     this.refreshHint();
@@ -243,8 +248,9 @@ export class Game {
       this.canvas.focus({ preventScroll: true });
     };
     this.upgradeBaseBtn.addEventListener("click", () => {
-      if (!this.state || this.state.paused) return;
-      tryUpgradeBase(this.state);
+      const lane = this.actingLane();
+      if (!lane || lane.paused) return;
+      tryUpgradeBase(lane);
       this.refreshSendBar();
       focusGame();
     });
@@ -258,12 +264,7 @@ export class Game {
     });
     this.laneFlipBtn.addEventListener("click", () => {
       if (this.mpMatch) {
-        this.mpMatch.viewTeam = (1 - this.mpMatch.viewTeam) as 0 | 1;
-        this.state = this.mpMatch.lanes[this.mpMatch.viewTeam];
-        this.reportViewTeam();
-        this.laneFlipBtn.textContent =
-          this.mpMatch.viewTeam === this.mpMatch.myTeam ? "View lane" : "Your lane";
-        this.laneFlipBtn.classList.toggle("active", this.mpMatch.viewTeam !== this.mpMatch.myTeam);
+        this.toggleMpLaneView();
         playSfx("ui");
         focusGame();
         return;
@@ -324,7 +325,11 @@ export class Game {
     });
     window.addEventListener(
       "pointerdown",
-      () => unlockAudio(),
+      () => {
+        unlockAudio();
+        // Title-screen BGM often needs this first gesture after a cold load.
+        if (this.menus.isVisible()) this.menus.nudgeMenuMusic();
+      },
       { once: true },
     );
 
@@ -346,7 +351,7 @@ export class Game {
       this.tooltip.classList.remove("hidden");
       this.positionTooltip(ev.clientX, ev.clientY);
     };
-    const hide = () => this.tooltip.classList.add("hidden");
+    const hide = () => this.hideTooltip();
     const move = (ev: MouseEvent) => {
       if (!this.tooltip.classList.contains("hidden")) {
         this.positionTooltip(ev.clientX, ev.clientY);
@@ -362,6 +367,33 @@ export class Game {
       if (t) hide();
     });
     document.addEventListener("mousemove", move);
+    // Cursor left the window — mouseout won't fire on a removed HUD node.
+    document.addEventListener("mouseleave", hide);
+  }
+
+  private hideTooltip(): void {
+    this.tooltip.classList.add("hidden");
+    this.tooltip.innerHTML = "";
+  }
+
+  /**
+   * HUD ability slots are re-rendered via innerHTML, so the hovered [data-tip]
+   * node can vanish without ever firing mouseout — the classic "stuck tooltip".
+   * Each frame, if the tooltip is visible but the cursor is no longer over a
+   * [data-tip] element (HUD re-render, pause menu, run end, back to menu),
+   * hide it.
+   */
+  private validateTooltip(): void {
+    if (this.tooltip.classList.contains("hidden")) return;
+    const x = this.input.mouseClientX;
+    const y = this.input.mouseClientY;
+    const stack = document.elementsFromPoint(x, y);
+    for (const el of stack) {
+      if (this.tooltip.contains(el)) continue;
+      if (el.closest("[data-tip]")) return;
+      break;
+    }
+    this.hideTooltip();
   }
 
   private positionTooltip(x: number, y: number): void {
@@ -371,9 +403,8 @@ export class Game {
   }
 
   private refreshHint(): void {
-    const kb = loadSettings().keybinds;
-    this.hintEl.textContent =
-      `Move · ${formatBinding(kb.attack)} attack · ${formatBinding(kb.mobility)} mobility · ${formatBinding(kb.ultimate)} ult · ${formatBinding(kb.utility)} utility · sends · U upgrade · shop · Esc pause · Pad supported`;
+    this.hintEl.textContent = "";
+    this.hintEl.style.display = "none";
   }
 
   private showMainMenu(): void {
@@ -434,10 +465,24 @@ export class Game {
 
     const opp = resolveSelectedOpponent();
     const teamSize = merged.teamSize ?? 1;
+    const allies = merged.aiAllies ?? [];
+    const enemies = merged.aiEnemies ?? [];
+    const wantsDual =
+      !merged.endless &&
+      (allies.length > 0 ||
+        enemies.length > 1 ||
+        enemies.some((e) => e.ai.kind === "neural") ||
+        teamSize > 1 ||
+        opp.kind === "neural");
 
-    // Dual-lane when team size > 1 (AI allies) or neural opponent selected (not endless)
-    if (!merged.endless && (teamSize > 1 || opp.kind === "neural")) {
-      this.beginSoloVsAi(heroId, merged, opp.kind === "neural" ? opp : null, teamSize);
+    // Dual-lane when AI allies, multi-enemy, neural foe, or team-size preset > 1
+    if (wantsDual) {
+      this.beginSoloVsAi(
+        heroId,
+        merged,
+        opp.kind === "neural" ? opp : null,
+        teamSize,
+      );
       return;
     }
 
@@ -484,6 +529,8 @@ export class Game {
     const neural = opp
       ? createNeuralLaneAi(opp.genome, Math.max(0, opp.hesitation / agg), opp.label)
       : null;
+    const allies = opts.aiAllies;
+    const enemies = opts.aiEnemies;
     this.mpMatch = buildSoloVsAiMatch({
       playerHeroId: heroId,
       mapId: opts.mapId,
@@ -497,6 +544,9 @@ export class Game {
       playerModifiers: playerMods,
       enemyModifiers: enemyMods,
       teamSize,
+      allies,
+      enemies,
+      allyAiAggression: opts.allyAiAggression,
       chestOpenMul: opts.chestOpenMul,
       chestDespawnSec: opts.chestDespawnSec,
       chestSpawnChance: opts.chestSpawnChance,
@@ -566,37 +616,53 @@ export class Game {
     const laneBottomCss = mapTop + map.laneBottom * s;
     const laneW = MAP_W * s;
     const laneLeft = mapLeft;
-    const pad = 10;
-    const barStack = 36;
+    const laneRight = laneLeft + laneW;
+    const pad = 8;
+    const barStack = 34;
+    const topPad = 8;
 
-    const sendW = Math.min(laneW, window.innerWidth - 40);
+    // Gold / rival panels sit on the lane's left/right edges (not floating in
+    // the empty viewport gutter). Sends fill the band between them.
+    const sideW = Math.min(260, Math.max(200, laneW * 0.2));
+
+    this.hudPanel.style.left = `${laneLeft}px`;
+    this.hudPanel.style.top = `${topPad}px`;
+    this.hudPanel.style.width = `${sideW}px`;
+    this.hudPanel.style.maxWidth = `${sideW}px`;
+    this.hudPanel.style.right = "auto";
+
+    this.opponentPanel.style.top = `${topPad}px`;
+    this.opponentPanel.style.left = `${laneRight - sideW}px`;
+    this.opponentPanel.style.right = "auto";
+    this.opponentPanel.style.width = `${sideW}px`;
+    this.opponentPanel.style.maxWidth = `${sideW}px`;
+
+    this.waveBannerEl.style.left = `${laneLeft + laneW / 2}px`;
+    this.waveBannerEl.style.right = "auto";
+    this.waveBannerEl.style.width = "auto";
+    this.waveBannerEl.style.maxWidth = "none";
+    this.waveBannerEl.style.transform = "translateX(-50%)";
+    this.waveBannerEl.style.top = `${topPad}px`;
+
+    const sendLeft = laneLeft + sideW + 10;
+    const sendW = Math.max(240, laneRight - sideW - 10 - sendLeft);
+    this.sendBar.style.left = `${sendLeft}px`;
     this.sendBar.style.width = `${sendW}px`;
-    this.sendBar.style.left = `${(window.innerWidth - sendW) / 2}px`;
+    this.sendBar.style.top = `${topPad + 40}px`;
+    this.sendBar.style.transform = "";
 
+    this.mapNameEl.textContent = "";
+    this.mapNameEl.style.display = "none";
+    this.hintEl.textContent = "";
+    this.hintEl.style.display = "none";
+
+    const sendBottom = topPad + 40 + 58;
     this.xpBar.style.width = `${laneW}px`;
     this.xpBar.style.left = `${laneLeft}px`;
-    this.xpBar.style.top = `${Math.max(pad, laneTopCss - barStack - 6)}px`;
+    this.xpBar.style.top = `${Math.max(sendBottom + 2, laneTopCss - barStack - 4)}px`;
 
-    const xpTop = parseFloat(this.xpBar.style.top) || laneTopCss - barStack;
-    this.sendBar.style.top = `${Math.max(pad + 44, xpTop - 78)}px`;
-
-    // Wave banner sits directly above the send menu (centered).
-    const sendTop = parseFloat(this.sendBar.style.top) || pad + 44;
-    this.waveBannerEl.style.width = `${sendW}px`;
-    this.waveBannerEl.style.left = `${(window.innerWidth - sendW) / 2}px`;
-    this.waveBannerEl.style.top = `${Math.max(8, sendTop - 52)}px`;
-
-    // Top-left stats panel sits just above the XP bar (aligned to lane left).
-    this.hudPanel.style.left = `${laneLeft}px`;
-    this.hudPanel.style.top = `${Math.max(pad + 22, xpTop - this.hudPanel.offsetHeight - 8)}px`;
-
-    // Subtle map name — way top-left of the screen.
-    this.mapNameEl.style.left = `${Math.max(10, laneLeft)}px`;
-    this.mapNameEl.style.top = `8px`;
-
-    // Vertical base HP rail — same height as the playable lane strip (between XP and HP bars).
     const railH = Math.max(60, laneBottomCss - laneTopCss);
-    this.baseHpRail.style.left = `${Math.max(4, laneLeft - 20)}px`;
+    this.baseHpRail.style.left = `${Math.max(4, laneLeft - 18)}px`;
     this.baseHpRail.style.top = `${laneTopCss}px`;
     this.baseHpRail.style.height = `${railH}px`;
 
@@ -604,16 +670,21 @@ export class Game {
     this.hpBar.style.left = `${laneLeft}px`;
     this.hpBar.style.top = `${laneBottomCss + pad}px`;
 
-    const belowHp = laneBottomCss + pad + barStack + 10;
+    const belowHp = laneBottomCss + pad + barStack + 8;
     this.pauseBtn.style.left = `${laneLeft}px`;
     this.pauseBtn.style.top = `${belowHp}px`;
 
-    const rightPad = Math.max(pad, window.innerWidth - laneLeft - laneW);
-    this.abilityEl.style.right = `${rightPad}px`;
+    // Abilities: one row, right-aligned to the lane edge (never past it).
+    this.abilityEl.style.left = "auto";
+    this.abilityEl.style.right = `${Math.max(0, window.innerWidth - laneRight)}px`;
     this.abilityEl.style.top = `${belowHp}px`;
+    this.abilityEl.style.maxWidth = `${Math.min(420, laneW * 0.55)}px`;
+    this.abilityEl.style.flexWrap = "nowrap";
+    this.abilityEl.style.justifyContent = "flex-end";
 
     this.invBtn.style.left = `${laneLeft + laneW / 2}px`;
     this.invBtn.style.right = "auto";
+    this.invBtn.style.transform = "translateX(-50%)";
     this.invBtn.style.top = `${belowHp}px`;
   }
 
@@ -698,22 +769,7 @@ export class Game {
   private openPauseSettings(): void {
     this.pauseMode = "settings";
     this.overlay.classList.add("hidden");
-    this.menus.show("settings", { allowMenuMusic: false });
-    // Hook: when menus go to main from in-run settings, bounce back to the
-    // in-run menu instead of dumping the player on the title screen.
-    const root = document.querySelector("#menus")!;
-    const obs = new MutationObserver(() => {
-      if (this.pauseMode !== "settings" || !this.state) {
-        obs.disconnect();
-        return;
-      }
-      if (root.querySelector(".menu-title")?.textContent === "Hero Line Wars") {
-        this.menus.hide();
-        this.showPauseMenu();
-        obs.disconnect();
-      }
-    });
-    obs.observe(root, { childList: true, subtree: true });
+    this.menus.show("settings", { allowMenuMusic: false, resumePause: true });
   }
 
   private confirmAbandon(): void {
@@ -892,24 +948,28 @@ export class Game {
 
   private buildSendBar(): void {
     this.sendItemsEl.innerHTML = "";
-    if (!this.state) return;
+    const lane = this.actingLane();
+    if (!lane) return;
     const label = document.querySelector(".send-bar-label");
-    if (label) {
-      label.textContent = this.state.endless
-        ? "Send into your next wave (raises income — you fight them)"
-        : "Send to enemy lane (raises your income)";
-    }
-    for (const pack of availableSendPacks(this.state)) {
+    if (label instanceof HTMLElement) label.hidden = true;
+    const packs = availableSendPacks(lane);
+    this.sendItemsEl.style.setProperty("--send-count", String(Math.max(1, packs.length)));
+    for (const pack of packs) {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "send-chip";
       row.dataset.packId = pack.id;
+      const shortName = pack.name.replace(/\s*Pack\s*$/i, "").trim();
       const tip = `<strong>${pack.name}</strong><br/>${pack.detail}<br/>Base ${pack.blurb}<br/><em>Cost scales with base upgrades</em>`;
       row.dataset.tip = tip;
-      row.innerHTML = `<span class="send-key">${pack.digit}</span><span class="send-name">${pack.name}</span><span class="send-cost">${pack.cost}g</span>`;
+      row.innerHTML =
+        `<span class="send-key">${pack.digit}</span>` +
+        `<span class="send-meta"><span class="send-name">${shortName}</span>` +
+        `<span class="send-cost">${pack.cost}g</span></span>`;
       row.addEventListener("click", () => {
-        if (!this.state || this.state.paused) return;
-        buySendPack(this.state, pack.id);
+        const act = this.actingLane();
+        if (!act || act.paused) return;
+        buySendPack(act, pack.id);
         this.refreshSendBar();
       });
       this.sendItemsEl.appendChild(row);
@@ -917,42 +977,51 @@ export class Game {
   }
 
   private refreshSendBar(): void {
-    if (!this.state) return;
-    const unlockKey = `${this.state.baseLevel}:${availableSendPacks(this.state)
-      .map((p) => p.id)
-      .join(",")}`;
+    const lane = this.actingLane();
+    if (!lane) return;
+    if (this.mpMatch) focusBag(lane, this.mpMatch.mySlot);
+    const packs = availableSendPacks(lane);
+    const unlockKey = `${lane.baseLevel}:${packs.map((p) => p.id).join(",")}`;
     if (unlockKey !== this.lastSendUnlockKey) {
       this.lastSendUnlockKey = unlockKey;
       this.buildSendBar();
     }
 
-    const packs = availableSendPacks(this.state);
     const chips = this.sendItemsEl.querySelectorAll<HTMLButtonElement>(".send-chip");
     chips.forEach((row, i) => {
       const pack = packs[i];
       if (!pack) return;
-      const cost = sendPackCost(this.state!, pack.id);
+      const cost = sendPackCost(lane, pack.id);
       const costEl = row.querySelector(".send-cost");
       if (costEl) costEl.textContent = `${cost}g`;
-      row.disabled = this.state!.gold < cost || this.state!.paused;
+      row.disabled = lane.gold < cost || lane.paused;
       const full = SEND_PACKS.find((p) => p.id === pack.id)!;
-      row.dataset.tip = `<strong>${full.name}</strong><br/>${full.detail}<br/>Current cost ${cost}g · Base Lv ${this.state!.baseLevel}`;
+      row.dataset.tip = `<strong>${full.name}</strong><br/>${full.detail}<br/>Current cost ${cost}g · Base Lv ${lane.baseLevel}`;
     });
 
-    const cost = upgradeBaseCost(this.state);
-    this.upgradeBaseBtn.disabled = this.state.gold < cost || this.state.paused;
-    this.upgradeBaseBtn.textContent = `Upgrade Base · ${cost}g (Lv ${this.state.baseLevel} → ${this.state.baseLevel + 1})`;
+    const cost = upgradeBaseCost(lane);
+    this.upgradeBaseBtn.disabled = lane.gold < cost || lane.paused;
+    const upLabel = this.upgradeBaseBtn.querySelector(".up-label");
+    const upCostEl = this.upgradeBaseBtn.querySelector(".up-cost");
+    if (upLabel && upCostEl) {
+      upLabel.textContent = `Base ${lane.baseLevel}→${lane.baseLevel + 1}`;
+      upCostEl.textContent = `${cost}g`;
+    } else {
+      this.upgradeBaseBtn.innerHTML =
+        `<span class="up-label">Base ${lane.baseLevel}→${lane.baseLevel + 1}</span>` +
+        `<span class="up-cost">${cost}g</span>`;
+    }
     this.upgradeBaseBtn.dataset.tip =
-      this.state.baseLevel >= 4
-        ? "No max level — each upgrade further strengthens unlocked send packs (cost, income, HP)."
-        : "Raises base level: unlocks packs and strengthens existing send costs, income, and HP.";
+      lane.baseLevel >= 4
+        ? `Upgrade base · ${cost}g. No max level — each upgrade further strengthens unlocked send packs.`
+        : `Upgrade base · ${cost}g. Unlocks packs and strengthens existing send costs, income, and HP.`;
 
-    const xp = xpProgress(this.state);
-    this.xpLevelEl.textContent = `Lv ${this.state.level}`;
+    const xp = xpProgress(lane);
+    this.xpLevelEl.textContent = `Lv ${lane.level}`;
     this.xpTextEl.textContent = `${Math.floor(xp.current)} / ${xp.needed}`;
     this.xpFillEl.style.width = `${Math.round(xp.ratio * 100)}%`;
 
-    const hero = this.state.hero;
+    const hero = lane.hero;
     const hp = Math.max(0, Math.ceil(hero.alive ? hero.hp : 0));
     const maxHp = Math.max(1, Math.ceil(hero.maxHp));
     this.hpLabelEl.textContent = hero.alive ? "HP" : "DOWN";
@@ -1335,6 +1404,8 @@ export class Game {
       this.incomeEl.textContent = "";
     }
 
+    this.validateTooltip();
+
     requestAnimationFrame((t) => this.frame(t));
   }
 
@@ -1423,6 +1494,8 @@ export class Game {
     this.menus.hide();
     this.mpHost = isHost;
     this.remoteIntents.clear();
+    this.remoteViews.clear();
+    this.lastReportedView = null;
     this.mpUiIntent = emptyIntent();
     this.mpDisconnectHandled = false;
     this.state = null;
@@ -1543,6 +1616,36 @@ export class Game {
     }
   }
 
+  /**
+   * Flip which lane the local player watches in MP. Clients drop the stale
+   * entity copy of a lane that was only receiving HUD summaries so the view
+   * shows the real sim (fresh full snaps arrive within a round trip) instead
+   * of ghost enemies frozen at old positions.
+   */
+  private toggleMpLaneView(): void {
+    const match = this.mpMatch;
+    if (!match) return;
+    match.viewTeam = (1 - match.viewTeam) as 0 | 1;
+    const lane = match.lanes[match.viewTeam];
+    if (!this.mpHost && !match.soloOffline && lane.snapIsSummary) {
+      lane.enemies = [];
+      lane.projectiles = [];
+      lane.fx = [];
+      lane.beam = null;
+    }
+    this.state = lane;
+    this.reportViewTeam();
+    this.updateMpLaneFlipBtn();
+  }
+
+  private updateMpLaneFlipBtn(): void {
+    const match = this.mpMatch;
+    if (!match) return;
+    const viewingOpponent = match.viewTeam !== match.myTeam;
+    this.laneFlipBtn.textContent = viewingOpponent ? "Your lane" : "View lane";
+    this.laneFlipBtn.classList.toggle("active", viewingOpponent);
+  }
+
   /** Client → host: tell the host which lane we are watching. */
   private reportViewTeam(): void {
     const match = this.mpMatch;
@@ -1578,6 +1681,7 @@ export class Game {
     if (!this.menus.isVisible()) {
       if (this.input.consumeAction("pause")) this.togglePause();
       if (this.input.consumeAction("inventory")) this.toggleInventory();
+      if (this.input.consumeAction("laneFlip")) this.toggleMpLaneView();
     }
 
     const local = gatherLocalIntent(this.input, aim, controlled);
@@ -1646,6 +1750,11 @@ export class Game {
       }
     }
 
+    // Rival purple palette while watching their real dual-lane sim
+    this.mpMatch.lanes[0].spectateRivalTint = false;
+    this.mpMatch.lanes[1].spectateRivalTint = false;
+    this.state.spectateRivalTint = this.mpMatch.viewTeam !== this.mpMatch.myTeam;
+
     draw(this.ctx, this.state, view);
     this.layoutLaneChrome();
     this.syncHudMp();
@@ -1675,25 +1784,60 @@ export class Game {
     bindMatchHandlers(null);
   }
 
+  /** Lane the local player acts on (sends / shop / gold) — never the spectated lane. */
+  private actingLane(): GameState | null {
+    if (this.mpMatch) return this.mpMatch.lanes[this.mpMatch.myTeam];
+    return this.state;
+  }
+
   private syncHudMp(): void {
     if (!this.mpMatch || !this.state) return;
+    const match = this.mpMatch;
+    const myLane = match.lanes[match.myTeam];
+    const viewLane = match.lanes[match.viewTeam];
+    const watchingThem = match.viewTeam !== match.myTeam;
+
+    // Economy / abilities / sends always reflect YOUR lane.
+    const prev = this.state;
+    this.state = myLane;
+    focusBag(myLane, match.mySlot);
     this.syncHud();
-    const other = this.mpMatch.lanes[(1 - this.mpMatch.myTeam) as 0 | 1];
-    this.oppNameEl.textContent = this.mpMatch.opponentLabel
-      ? this.mpMatch.opponentLabel
+    this.state = prev;
+
+    // Wave pill shows the lane you're looking at.
+    const s = viewLane;
+    const tier = waveTierLabel(s.waveTier);
+    if (s.wave === 0) {
+      this.waveNumberEl.textContent = watchingThem ? "Their lane · ready…" : "Get ready…";
+    } else if (!s.spawning && s.enemies.length === 0) {
+      this.waveNumberEl.textContent = watchingThem
+        ? `Their wave ${s.wave} · next ${Math.max(0, s.waveTimer).toFixed(1)}s`
+        : `Wave ${s.wave} · next ${Math.max(0, s.waveTimer).toFixed(1)}s`;
+    } else {
+      this.waveNumberEl.textContent = watchingThem ? `Their wave ${s.wave}` : `Wave ${s.wave}`;
+    }
+    if (tier && (s.spawning || s.enemies.length > 0)) {
+      this.waveTierEl.textContent = tier;
+      this.waveTierEl.classList.remove("hidden");
+      this.waveTierEl.classList.toggle("boss", s.waveTier === "boss");
+      this.waveTierEl.classList.toggle("elite", s.waveTier === "elite");
+    } else {
+      this.waveTierEl.textContent = "";
+      this.waveTierEl.classList.add("hidden");
+    }
+
+    const other = match.lanes[(1 - match.myTeam) as 0 | 1];
+    this.oppNameEl.textContent = match.opponentLabel
+      ? match.opponentLabel
       : other.aiControlled
         ? `AI · ${resolveHero(other.hero.heroId).name}`
         : `Enemy · ${resolveHero(other.hero.heroId).name}`;
     const sendIn =
       other.summaryIncoming ?? other.pendingSends.reduce((n, p) => n + p.enemies, 0);
-    const myLane = this.mpMatch.lanes[this.mpMatch.myTeam];
-    const myLeft = laneEnemiesRemaining(myLane);
     const theirLeft = laneEnemiesRemaining(other);
-    this.laneEnemyCountsEl.innerHTML =
-      `<span class="yours">Your lane ${myLeft}</span>` +
-      `<span class="sep">·</span>` +
-      `<span class="theirs">Enemy lane ${theirLeft}</span>`;
+    this.laneEnemyCountsEl.innerHTML = "";
     this.oppStatsEl.innerHTML = [
+      watchingThem ? `<div class="opp-alert">Watching their lane</div>` : "",
       `<div>HP ${Math.ceil(other.hero.hp)}/${Math.ceil(other.hero.maxHp)} · Lv ${other.level}</div>`,
       `<div>Base ${Math.ceil(other.baseHp)} · Wave ${other.wave}</div>`,
       `<div>Gold ${Math.floor(other.gold)} · +${other.incomePerSec.toFixed(1)}/s</div>`,
@@ -1792,8 +1936,6 @@ export class Game {
       this.waveNumberEl.textContent = s.levelDraft
         ? `Level up`
         : `Wave ${s.wave} cleared`;
-    } else if (s.paused) {
-      this.waveNumberEl.textContent = "Paused";
     } else if (!s.spawning && s.enemies.length === 0) {
       const waitingOpp =
         this.mpMatch &&
@@ -1820,37 +1962,29 @@ export class Game {
       this.waveTierEl.classList.add("hidden");
     }
 
-    // Dual-lane enemy counts (classic uses abstract opponent; MP overwrites in syncHudMp)
-    if (!this.mpMatch) {
-      const myLeft = laneEnemiesRemaining(s);
-      if (s.endless) {
-        this.laneEnemyCountsEl.innerHTML =
-          `<span class="yours">Your lane ${myLeft}</span>` +
-          (aiSend > 0 ? `<span class="sep">·</span><span class="theirs">Queued ${aiSend}</span>` : "");
-      } else {
-        const theirLeft = opponentEnemiesRemaining(s.opponent);
-        this.laneEnemyCountsEl.innerHTML =
-          `<span class="yours">Your lane ${myLeft}</span>` +
-          `<span class="sep">·</span>` +
-          `<span class="theirs">Enemy lane ${theirLeft}</span>`;
-      }
-    }
+    // Lane counts belong on the side panels — keep the wave pill one line.
+    this.laneEnemyCountsEl.innerHTML = "";
+    const myLeft = laneEnemiesRemaining(s);
 
-    // Simplified top-left panel (no map / wave / base·hero HP labels)
+    this.mapNameEl.textContent = "";
     this.statsEl.innerHTML = [
-      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${s.ascension > 0 ? ` · A${s.ascension}` : ""}${s.endless ? " · Endless" : ""}${
+      `<div class="hud-map">${s.map.name}</div>`,
+      `<div class="hud-line"><strong>${hero.name}</strong> · Lv ${s.level}${
+        s.ascension > 0 ? ` · A${s.ascension}` : ""
+      }${s.endless ? " · Endless" : ""}</div>`,
+      `<div class="hud-line">Base Lv ${s.baseLevel} · Lane ${myLeft}${
         s.livesPerRun > 0
           ? ` · Lives ${s.runLivesLeft}`
           : s.livesPerWave > 0
             ? ` · W.lives ${s.waveLivesLeft}`
             : ""
       }</div>`,
-      `<div class="hud-line">Base Lv ${s.baseLevel}${
+      `<div class="hud-line">${
         s.endless
           ? aiSend
-            ? ` · Queued ${aiSend}`
-            : ""
-          : `${incoming ? ` · Sent ${incoming}` : ""}${aiSend ? ` · Incoming ${aiSend}` : ""}`
+            ? `Queued to next wave: ${aiSend}`
+            : "No sends queued"
+          : `${incoming ? `Sent ${incoming}` : "No outbound"}${aiSend ? ` · Incoming ${aiSend}` : ""}`
       }</div>`,
     ].join("");
 
@@ -1882,8 +2016,13 @@ export class Game {
       incoming > 0 ? `<div class="opp-alert">Your sends inbound: ${incoming}</div>` : "",
     ].join("");
 
-    this.laneFlipBtn.textContent = s.viewOpponentLane ? "Your lane" : "View lane";
-    this.laneFlipBtn.classList.toggle("active", s.viewOpponentLane);
+    // MP owns the flip-button label (viewTeam); SP uses the abstract-lane flag.
+    if (this.mpMatch) {
+      this.updateMpLaneFlipBtn();
+    } else {
+      this.laneFlipBtn.textContent = s.viewOpponentLane ? "Your lane" : "View lane";
+      this.laneFlipBtn.classList.toggle("active", s.viewOpponentLane);
+    }
 
     this.bannerEl.textContent = "";
     this.bannerEl.className = "";

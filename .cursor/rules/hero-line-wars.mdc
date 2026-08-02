@@ -124,30 +124,69 @@ APIs are stubbed in `tests/setup.ts`; keep new logic importable without a DOM.
 - Settings: `rejectPeerCustoms` — when on, refuse MP starts that require custom maps/heroes so payloads are never registered for that match.
 - Session customs are match-scoped (`registerSessionCustoms`); do not auto-write peer defs into the local library unless the player explicitly imports/saves.
 
-## UI / UX design philosophy
+## UI / UX design philosophy (shared layout system — prescriptive)
 
-Menus are a **lane-wars war room**, not a generic dashboard and not a phone list. Preserve the **dark steel / amber-teal** identity (`--hlw-*` tokens in `src/style.css`). Never purple-on-white, cream-serif-terracotta, or broadsheet chrome.
+Menus are a **lane-wars war room**, not a generic dashboard and not a phone list. Preserve the **dark steel / amber-teal** identity. Never purple-on-white, cream-serif-terracotta, or broadsheet chrome. Fonts stay Orbitron / Rajdhani on brand surfaces.
 
-### Layout
+### Tokens (use these, never hardcode replacements)
 
-- Prefer **panels and grids** that use available width. Desktop targets: 1366×768, 1920×1080, 4K / ultrawide. Shell widths use `--hlw-shell-sm|md|lg|xl` (they grow at ≥1920 / ≥2560 / ≥3840).
-- Reusable shells: `prefs-shell` + `prefs-layout` (Settings / Controls / Cheats / AI Lab / Compendium), `meta-shell` + `meta-hub` (Barracks / Challenges), `stats-shell`, `info-shell`, `workshop-shell`, `mp-shell`, `sp-run-layout`.
-- Form grids: `run-grid` + `run-field` (cols-2/3/4), `setting-row`, `creative-check-grid`, `ai-lab-layout`, `cheats-toggle-grid`, `meta-card-grid`.
-- Avoid a single skinny column of stacked cards when the viewport can fit two or more columns.
-- Confirm with **in-game modals** (`menu-confirm-overlay`), never `window.confirm`.
+`--hlw-*` in `src/style.css`: `--hlw-bg`, `--hlw-panel`, `--hlw-border`, `--hlw-label`, `--hlw-text`, `--hlw-amber`, `--hlw-teal`, `--hlw-danger`, `--hlw-radius`, `--hlw-radius-lg`, shell widths `--hlw-shell-sm|md|lg|xl` (grow at ≥1920 / ≥2560 / ≥3840). New chrome derives from these tokens; per-screen hex constants are a review flag.
 
-### Copy
+### Scroll policy (hard rule)
 
-- One short `menu-lead` under titles. Put depth in **tooltips** (`title=` / `runTip`) or `<details class="help-fold">`, not paragraphs of body text.
-- Labels stay terse; blurbs clamp on compact hero cards. Game Info stays skimmable.
+**Every menu screen must fit 1366×768 with no shell scrollbar** in its default state. The only permitted scroll surfaces:
+
+- Compendium card list (unbounded content)
+- Career Stats tab body
+- Barracks / Challenges card grids (unbounded content)
+- An **open** `details.opt-fold` (user opted in)
+- Workshop side panel as a safety overflow only — its default content must fit
+
+If a screen grows past the budget: group into columns, fold advanced options into `details.opt-fold`, or shorten copy. **Never** fix overflow by shrinking fonts below 0.7rem or letting a fixed overlay hide controls. Density trims for short viewports live in the `@media (max-height: 840px)` block — spacing only, not font size.
+
+### Layout system — which shell/component for what
+
+| Surface | Use |
+|---|---|
+| Screen chrome | `menu-shell` + modifier: `prefs-shell` (Settings/Controls/Cheats/AI Lab/Compendium), `meta-shell` + `meta-hub` (Barracks/Challenges), `stats-shell`, `info-shell`, `workshop-shell` + `workshop-layout` (editors), `mp-shell`, `tight` (SP setup, editors) |
+| Main menu | `main-menu-grid` with grouped `main-group` sections (Play / Progress / Workshop / Library / system row) — never one flat button column |
+| Run setup (SP + MP) | `sp-run-layout` (setup left, hero picker right) · `panel-head` (title + Reset/Randomize actions) · **one** dense `run-grid cols-3/cols-4` for core fields · `map-preview` (shape-aware canvas via `src/ui/mapThumbs.ts`) · creative options in `details.opt-fold` (collapsed unless non-default; summary shows `opt-count`) |
+| Settings | `settings-groups` → 3 `settings-group` cards (Audio / Gameplay / Display & motion), `setting-row` rows |
+| Controls | `bind-sections` → `bind-section` cards (Gamepad / Combat / Movement / Utility) |
+| Editors | tools in a `workshop-toolbar` **above the canvas** inside `workshop-main`; identity + specials (`me-specials-grid`) + actions in `workshop-side`; template picker + library in `workshop-footer-bar` spanning both columns. The side panel must not scroll by default. |
+| Form fields | `run-grid` + `run-field` (cols-2/3/4), `setting-row`, `creative-check-grid`, `cheats-toggle-grid`, `ai-lab-layout`, `meta-card-grid`, `hero-grid compact` (auto-fill minmax) |
+| Advanced/optional groups | `details.opt-fold` (+ `.opt-fold-body`, `opt-count`); long-form help in `details.help-fold` |
+| Confirmations | `menu-confirm-overlay` rendered from screen `render()` state (see softlock note below), never `window.confirm` |
+
+Layout rules:
+
+- Kill single-column node stacks wherever ≥2 columns fit. Grids use `repeat(auto-fill, minmax(…))` or explicit `cols-N` with media fallbacks — never fixed pixel columns.
+- Modals/overlays must be produced by the screen's normal `render()` output so a re-render tears them down. **Never** append an overlay to the menu root outside the shell (this caused the map-editor shape-confirm softlock).
+- Dark styled inputs only — never bare native light controls.
+
+### Copy rules
+
+- One `menu-lead` line under a title, ≤ ~90 chars. Field labels ≤ 3 words. Button labels ≤ 3 words.
+- Depth goes in `title=` tooltips (`runTip` for run options) or a `help-fold` — **no paragraphs of body text** on functional screens. Game Info is the only prose screen and stays skimmable (info-grid blocks of 1–2 sentences).
+- Hero card blurbs clamp to 1 line in compact grids.
 
 ### Motion & buttons
 
-- Shared hover: class **`shine-btn`** (shine sweep + label nudge). Implemented once in `style.css` — do **not** re-copy `::before` rules per widget.
-- Apply `shine-btn` to primary/secondary menu CTAs and selectable hero cards. Labels that animate should wrap in `.btn-label` (or `strong` on hero cards).
-- **Do not** put `shine-btn` on: gameplay HUD, `.tiny` tools, `.danger` / destructive (Quit, Delete, Reset defaults, Stop), or `:disabled` controls (CSS also guards these).
-- Reduce motion: Settings `reduceMotion` → `syncMotionPreference()` toggles `html.reduce-motion`; also honor `prefers-reduced-motion`. Kills shine, brand idle, and aurora/waves. Menu particle FX already take `reduceMotion` in `mainMenuFx`.
-- Vary submenu FX lightly (`mainMenuFx`); don't clone one effect everywhere. Dark styled inputs only — never bare native light controls.
+- Shared hover: **`shine-btn`** (shine sweep + `.btn-label` nudge), implemented once in `style.css` — never re-copy `::before` rules per widget.
+- `shine-btn` goes on: primary/secondary menu CTAs, selectable hero cards, Randomize.
+- `shine-btn` **never** goes on: gameplay HUD, `.tiny` tools, `.danger`/destructive (Quit, Delete, Reset, Stop), `:disabled`, icon-only controls (CSS also guards these).
+- Reduce motion: Settings `reduceMotion` → `syncMotionPreference()` toggles `html.reduce-motion`; also honor `prefers-reduced-motion`. Kills shine, brand idle, aurora/waves; `mainMenuFx` takes `reduceMotion`.
+- Menu music starts on the first user gesture (autoplay-block retry lives in `systems/music.ts` — window-level `pointerup`/`click`/`keydown` capture re-arm). Don't regress this to requiring a submenu visit.
+
+### Anti-patterns (auto-model failure modes — reject on sight)
+
+- A single centered column of stacked buttons/cards with dead space either side.
+- Walls of explanatory text instead of tooltips/folds.
+- Padding/font tweaks presented as a "redesign" while structure stays 1-column.
+- Per-screen bespoke styles duplicating what a shared component already does.
+- Native light-theme controls (`window.confirm`, unstyled selects/checkboxes).
+- Fixed overlays appended outside the shell that survive re-renders.
+- "Fitting" a screen by adding a scrollbar instead of restructuring.
 
 ### What not to do
 

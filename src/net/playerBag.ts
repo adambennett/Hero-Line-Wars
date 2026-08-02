@@ -253,31 +253,50 @@ export function withPlayerBag<T>(state: GameState, slot: number, fn: () => T): T
   }
 }
 
+function bagHasOpenDraft(bag: {
+  pausedForDraft: boolean;
+  relicDraft: unknown;
+  levelDraft: unknown;
+  utilityDraft: unknown;
+  curseDraft: unknown;
+  chestDraft: unknown;
+  baseBranchDraft: unknown;
+}): boolean {
+  return !!(
+    bag.pausedForDraft &&
+    (bag.relicDraft ||
+      bag.levelDraft ||
+      bag.utilityDraft ||
+      bag.curseDraft ||
+      bag.chestDraft ||
+      bag.baseBranchDraft)
+  );
+}
+
 /** True if any per-player bag (or lane) is paused on a draft. */
 export function anyBagPausedForDraft(state: GameState): boolean {
   if (!state.playerBags) {
-    return !!(
-      state.pausedForDraft &&
-      (state.relicDraft ||
-        state.levelDraft ||
-        state.utilityDraft ||
-        state.curseDraft ||
-        state.chestDraft ||
-        state.baseBranchDraft)
-    );
+    return bagHasOpenDraft(state);
   }
   for (const bag of Object.values(state.playerBags)) {
-    if (
-      bag.pausedForDraft &&
-      (bag.relicDraft ||
-        bag.levelDraft ||
-        bag.utilityDraft ||
-        bag.curseDraft ||
-        bag.chestDraft ||
-        bag.baseBranchDraft)
-    ) {
-      return true;
-    }
+    if (bagHasOpenDraft(bag)) return true;
+  }
+  return false;
+}
+
+/**
+ * Draft freeze for the lane sim — only human bags count.
+ * AI seats (negative controller slots) auto-resolve drafts via intents and
+ * must not soft-lock the wave / leave the red damage overlay stuck.
+ */
+export function humanBagPausedForDraft(state: GameState): boolean {
+  if (!state.playerBags) {
+    return bagHasOpenDraft(state);
+  }
+  for (const [key, bag] of Object.entries(state.playerBags)) {
+    const slot = Number(key);
+    if (!Number.isFinite(slot) || slot < 0) continue;
+    if (bagHasOpenDraft(bag)) return true;
   }
   return false;
 }
