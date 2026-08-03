@@ -157,7 +157,7 @@ export const GUNNER_WEAPONS: Record<GunnerWeaponId, GunnerWeaponDef> = {
     aoeRadius: 0,
     pierce: 0,
     pelletCount: 1,
-    spread: 0.28,
+    spread: 0.44,
     fireMode: "auto",
     moveMul: 0.55,
     color: "#e0b060",

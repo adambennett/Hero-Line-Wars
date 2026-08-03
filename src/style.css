@@ -1790,6 +1790,14 @@ select.menu-input option {
   grid-template-columns: 1.4fr 1fr 0.9fr;
 }
 
+.main-group-btns.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.main-group-btns.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .menu-btn.play-card {
   display: flex;
   flex-direction: column;
@@ -1912,7 +1920,9 @@ html.reduce-motion .shine-btn:hover > strong,
     grid-template-columns: 1fr;
   }
 
-  .main-group-btns {
+  .main-group-btns,
+  .main-group-btns.cols-2,
+  .main-group-btns.cols-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1920,7 +1930,9 @@ html.reduce-motion .shine-btn:hover > strong,
 @media (max-width: 640px) {
   .main-group-btns,
   .main-group-btns.play-btns,
-  .main-group-btns.system-btns {
+  .main-group-btns.system-btns,
+  .main-group-btns.cols-2,
+  .main-group-btns.cols-3 {
     grid-template-columns: 1fr;
   }
 
@@ -2024,7 +2036,9 @@ html.reduce-motion .shine-btn:hover > strong,
 .prefs-layout .menu-footer,
 .prefs-layout .comp-list,
 .prefs-layout .comp-toolbar,
-.prefs-layout .choice-row {
+.prefs-layout .choice-row,
+.prefs-layout .patch-pager,
+.prefs-layout .patch-body {
   width: 100%;
   max-width: none;
 }
@@ -3235,6 +3249,118 @@ html.reduce-motion .shine-btn:hover > strong,
   align-items: stretch;
   padding-left: clamp(18px, 4vw, 48px);
   padding-right: clamp(18px, 4vw, 48px);
+}
+
+/* In-game patch notes — one version per page, body scrolls */
+.menu-shell.prefs-shell:has(.patch-layout) {
+  overflow: hidden;
+}
+
+.patch-layout {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.patch-pager {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--hlw-radius);
+  border: 1px solid var(--hlw-border);
+  background: rgba(18, 26, 44, 0.92);
+}
+
+.patch-arrow {
+  min-width: 2.6rem;
+  padding-left: 0.65rem;
+  padding-right: 0.65rem;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.patch-page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.45rem 0.85rem;
+  margin: 0;
+  text-align: center;
+  color: var(--hlw-label);
+  font-size: 0.92rem;
+}
+
+.patch-page-meta strong {
+  font-family: "Orbitron", "Rajdhani", sans-serif;
+  letter-spacing: 0.06em;
+  color: var(--hlw-amber);
+  font-size: 1.05rem;
+}
+
+.patch-page-count {
+  color: #7e93b5;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.patch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.35rem 0.15rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.patch-section {
+  margin: 0.85rem 0 0.35rem;
+  font-family: "Orbitron", "Rajdhani", sans-serif;
+  font-size: 0.92rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hlw-teal);
+}
+
+.patch-section:first-child {
+  margin-top: 0.15rem;
+}
+
+.patch-list {
+  margin: 0 0 0.35rem;
+  padding-left: 1.15rem;
+  color: var(--hlw-text);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.patch-list li + li {
+  margin-top: 0.35rem;
+}
+
+.patch-list strong,
+.patch-p strong,
+.patch-section strong {
+  color: #e8eef8;
+  font-weight: 700;
+}
+
+.patch-p {
+  margin: 0.25rem 0;
+  color: #b0c4d8;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.patch-empty {
+  margin: 1rem 0;
+  color: #7f93b5;
+  font-size: 0.95rem;
 }
 
 .info-layout {

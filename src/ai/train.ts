@@ -19,6 +19,36 @@ import { MAP_LIST, type MapId } from "../data/maps";
 import { buildSoloVsAiMatch, type MpMatch } from "../net/matchFactory";
 import { stepMpMatch } from "../net/mpSim";
 import type { CombatIntent } from "../net/types";
+import { composeRunModifiers } from "../meta/modifiers";
+import type { RunOptions } from "../game/state";
+
+/** Creative / ascension knobs applied to every training duel. */
+export type TrainRunOptions = Pick<
+  RunOptions,
+  | "ascension"
+  | "enemyDensityMul"
+  | "enemyHpMul"
+  | "enemySpeedMul"
+  | "incomeMul"
+  | "respawnMul"
+  | "startingBaseLevel"
+  | "doubleElites"
+  | "disableElites"
+  | "disableBosses"
+  | "disableRelics"
+  | "disableShop"
+  | "disableSends"
+  | "disableChests"
+  | "disableArtifacts"
+  | "glassCannon"
+  | "goldRush"
+  | "wildChests"
+  | "crampedLane"
+  | "fogAlways"
+  | "fogThicknessPct"
+  | "fogVisionRadius"
+  | "suddenDeathBaseHp"
+>;
 
 export type TrainConfig = {
   recipe: RecipeId;
@@ -27,6 +57,8 @@ export type TrainConfig = {
   trials: number;
   /** Max simulated seconds per duel (base-death wins earlier). */
   maxSeconds: number;
+  /** Run / creative options mirrored from solo setup. */
+  runOptions?: Partial<TrainRunOptions>;
 };
 
 export type TrainProgress = {
@@ -72,6 +104,39 @@ function pickMap(seed: number): MapId {
   return MAP_LIST[Math.abs(seed) % MAP_LIST.length]!.id as MapId;
 }
 
+function matchOptsFromTrain(run?: Partial<TrainRunOptions>) {
+  const ascension = run?.ascension ?? 0;
+  const mods = composeRunModifiers(ascension, {}, false);
+  return {
+    playerModifiers: mods,
+    enemyModifiers: mods,
+    ascension,
+    enemyDensityMul: run?.enemyDensityMul,
+    enemyHpMul: run?.enemyHpMul,
+    enemySpeedMul: run?.enemySpeedMul,
+    incomeMul: run?.incomeMul,
+    respawnMul: run?.respawnMul,
+    startingBaseLevel: run?.startingBaseLevel,
+    doubleElites: run?.doubleElites,
+    disableElites: run?.disableElites,
+    disableBosses: run?.disableBosses,
+    disableRelics: run?.disableRelics,
+    disableShop: run?.disableShop,
+    disableSends: run?.disableSends,
+    disableChests: run?.disableChests,
+    disableArtifacts: run?.disableArtifacts,
+    glassCannon: run?.glassCannon,
+    goldRush: run?.goldRush,
+    wildChests: run?.wildChests,
+    crampedLane: run?.crampedLane,
+    fogAlways: run?.fogAlways,
+    fogThicknessPct: run?.fogThicknessPct,
+    fogVisionRadius: run?.fogVisionRadius,
+    suddenDeathBaseHp:
+      run?.suddenDeathBaseHp && run.suddenDeathBaseHp > 0 ? run.suddenDeathBaseHp : undefined,
+  };
+}
+
 /** Headless unlimited-wave duel: trainee on lane 0 vs scripted (or rival genome) on lane 1. */
 export function simulateDuel(
   trainee: Genome,
@@ -81,6 +146,7 @@ export function simulateDuel(
     rival?: Genome | null;
     traineeHesitation?: number;
     rivalHesitation?: number;
+    runOptions?: Partial<TrainRunOptions>;
   },
 ): { match: MpMatch; traineeWon: boolean; timedOut: boolean } {
   const heroA = pickHero(opts.seed);
@@ -95,6 +161,7 @@ export function simulateDuel(
     startingGold: 60,
     wavesToWin: 0, // unlimited — base death only
     friendlyFire: false,
+    ...matchOptsFromTrain(opts.runOptions),
   });
 
   // Both lanes AI-driven for training
@@ -160,6 +227,7 @@ export async function runTraining(
   abort = false;
   const cfg: TrainConfig = { ...DEFAULT_CFG, ...partial };
   const recipe = cfg.recipe;
+  const runOptions = cfg.runOptions;
   let pop: Genome[] = Array.from({ length: cfg.pop }, () => randomGenome(recipe));
   const checkpoints: TrainResult["checkpoints"] = [];
   const history: TrainResult["history"] = [];
@@ -181,6 +249,7 @@ export async function runTraining(
         const { match, traineeWon, timedOut } = simulateDuel(pop[i]!, {
           seed: gen * 1000 + i * 17 + t * 3,
           maxSeconds: cfg.maxSeconds,
+          runOptions,
         });
         fit += fitness(match, recipe, traineeWon, timedOut);
         matches += 1;

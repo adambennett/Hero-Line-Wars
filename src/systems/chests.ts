@@ -19,6 +19,7 @@ import { MAP_W } from "../data/constants";
 import { clampToPlayable, playBounds, shrinkPlayBounds } from "../game/playBounds";
 import { openOrQueueDraft, syncDraftFlags } from "./drafts";
 import { withPlayerBag } from "../net/playerBag";
+import { tryLevelUp } from "./xp";
 
 const RARITY_WEIGHTS: { rarity: ChestRarity; w: number; openSec: number }[] = [
   { rarity: "common", w: 55, openSec: 1.4 },
@@ -37,96 +38,258 @@ function rollChestRarity(): { rarity: ChestRarity; openSec: number } {
   return { rarity: "common", openSec: 1.4 };
 }
 
-function rollRewardOption(rarity: ChestRarity): ChestRewardOption {
+/** Wave-scaled multiplier so chest payouts stay relevant in long runs. */
+export function chestWaveScale(wave: number): number {
+  const w = Math.max(1, wave);
+  return 1 + (w - 1) * 0.12;
+}
+
+function scaledGold(base: number, wave: number): number {
+  return Math.max(1, Math.round(base * chestWaveScale(wave)));
+}
+
+function rewardKey(opt: ChestRewardOption): string {
+  switch (opt.kind) {
+    case "gold":
+      return "gold";
+    case "xp":
+      return "xp";
+    case "heal":
+      return "heal";
+    case "reroll":
+      return "reroll";
+    case "base_repair":
+      return "base_repair";
+    case "item":
+      return `item:${opt.itemId}`;
+    case "relic":
+      return `relic:${opt.relicId}`;
+  }
+}
+
+function rollGoldReward(state: GameState, rarity: ChestRarity): ChestRewardOption {
   const roll = Math.random();
+  let base = 14;
+  let blurb = "Quick pocket change.";
+  if (rarity === "uncommon") {
+    base = roll < 0.5 ? 28 : 38;
+    blurb = "A solid haul.";
+  } else if (rarity === "rare") {
+    base = 52 + Math.floor(Math.random() * 18);
+    blurb = "Heavy purse.";
+  } else if (rarity === "mythic") {
+    base = 80 + Math.floor(Math.random() * 30);
+    blurb = "Mythic haul.";
+  } else {
+    base = 12 + Math.floor(Math.random() * 10);
+  }
+  const amount = scaledGold(base, state.wave);
+  return { kind: "gold", amount, label: `+${amount} Gold`, blurb };
+}
+
+function rollXpReward(state: GameState, rarity: ChestRarity): ChestRewardOption {
+  const base =
+    rarity === "common"
+      ? 18
+      : rarity === "uncommon"
+        ? 32
+        : rarity === "rare"
+          ? 55
+          : 85;
+  const amount = scaledGold(base, state.wave);
+  return {
+    kind: "xp",
+    amount,
+    label: `+${amount} XP`,
+    blurb: "Instant hero experience.",
+  };
+}
+
+function rollHealReward(state: GameState, rarity: ChestRarity): ChestRewardOption {
+  const pct =
+    rarity === "common"
+      ? 0.22
+      : rarity === "uncommon"
+        ? 0.32
+        : rarity === "rare"
+          ? 0.45
+          : 0.6;
+  const amount = Math.round(state.hero.maxHp * pct);
+  return {
+    kind: "heal",
+    amount,
+    label: `Heal ${amount} HP`,
+    blurb: "Restore hero health now.",
+  };
+}
+
+function rollRerollReward(rarity: ChestRarity): ChestRewardOption {
+  const amount = rarity === "common" || rarity === "uncommon" ? 1 : rarity === "rare" ? 2 : 3;
+  return {
+    kind: "reroll",
+    amount,
+    label: `+${amount} Reroll${amount > 1 ? "s" : ""}`,
+    blurb: "Extra level or relic draft reroll.",
+  };
+}
+
+function rollBaseRepairReward(state: GameState, rarity: ChestRarity): ChestRewardOption {
+  const base =
+    rarity === "common"
+      ? 12
+      : rarity === "uncommon"
+        ? 22
+        : rarity === "rare"
+          ? 36
+          : 55;
+  const amount = scaledGold(base, state.wave);
+  return {
+    kind: "base_repair",
+    amount,
+    label: `+${amount} Base HP`,
+    blurb: "Patch your lane base.",
+  };
+}
+
+function rollItemReward(rarity: ChestRarity): ChestRewardOption | null {
+  const pool =
+    rarity === "common" || rarity === "uncommon"
+      ? SHOP_ITEMS.filter((i) => i.category === "gear" && i.rarity === "common")
+      : SHOP_ITEMS.filter(
+          (i) => i.category === "gear" && (i.rarity === "uncommon" || i.rarity === "rare"),
+        );
+  if (!pool.length) return null;
+  const item = pool[Math.floor(Math.random() * pool.length)]!;
+  return {
+    kind: "item",
+    itemId: item.id,
+    label: item.name,
+    blurb: item.effect,
+  };
+}
+
+function rollRelicReward(state: GameState, rarity: ChestRarity): ChestRewardOption | null {
+  const allowHigh = rarity === "rare" || rarity === "mythic";
+  const choices = draftRelicChoices(state.relics, 3).filter((id) => {
+    const r = RELICS[id].rarity;
+    if (rarity === "mythic") return r === "common" || r === "uncommon" || r === "rare";
+    if (allowHigh) return r === "common" || r === "uncommon";
+    return r === "common";
+  });
+  const id = (choices[0] ?? draftRelicChoices(state.relics, 1)[0]) as RelicId | undefined;
+  if (!id) return null;
+  return {
+    kind: "relic",
+    relicId: id,
+    label: RELICS[id].name,
+    blurb: RELICS[id].blurb,
+  };
+}
+
+type RewardFamily = "gold" | "xp" | "heal" | "reroll" | "base_repair" | "item" | "relic";
+
+function familiesForRarity(rarity: ChestRarity): RewardFamily[] {
   if (rarity === "common") {
-    const gold = 18 + Math.floor(Math.random() * 16);
-    return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "Quick pocket change." };
+    return ["gold", "xp", "heal", "reroll", "base_repair"];
   }
   if (rarity === "uncommon") {
-    if (roll < 0.55) {
-      const gold = 35 + Math.floor(Math.random() * 25);
-      return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "A solid haul." };
-    }
-    const pool = SHOP_ITEMS.filter((i) => i.category === "gear" && i.rarity === "common");
-    const item = pool[Math.floor(Math.random() * pool.length)];
-    if (item) {
-      return {
-        kind: "item",
-        itemId: item.id,
-        label: item.name,
-        blurb: item.effect,
-      };
-    }
-    return { kind: "gold", amount: 40, label: "+40 Gold", blurb: "Fallback purse." };
+    return ["gold", "xp", "heal", "reroll", "base_repair", "item"];
   }
   if (rarity === "rare") {
-    if (roll < 0.4) {
-      const gold = 70 + Math.floor(Math.random() * 40);
-      return { kind: "gold", amount: gold, label: `+${gold} Gold`, blurb: "Heavy purse." };
-    }
-    const pool = SHOP_ITEMS.filter(
-      (i) => i.category === "gear" && (i.rarity === "uncommon" || i.rarity === "rare"),
-    );
-    const item = pool[Math.floor(Math.random() * pool.length)];
-    if (item) {
-      return {
-        kind: "item",
-        itemId: item.id,
-        label: item.name,
-        blurb: item.effect,
-      };
-    }
-    return { kind: "gold", amount: 80, label: "+80 Gold", blurb: "Fallback purse." };
+    return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic"];
   }
-  // mythic
-  if (roll < 0.55) {
-    const choices = draftRelicChoices([], 1).filter((id) => {
-      const r = RELICS[id].rarity;
-      return r === "common" || r === "uncommon";
-    });
-    const id = (choices[0] ?? draftRelicChoices([], 1)[0]) as RelicId | undefined;
-    if (id) {
-      return {
-        kind: "relic",
-        relicId: id,
-        label: RELICS[id].name,
-        blurb: RELICS[id].blurb,
-      };
-    }
+  return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic"];
+}
+
+function rollFamilyReward(
+  state: GameState,
+  rarity: ChestRarity,
+  family: RewardFamily,
+): ChestRewardOption | null {
+  switch (family) {
+    case "gold":
+      return rollGoldReward(state, rarity);
+    case "xp":
+      return rollXpReward(state, rarity);
+    case "heal":
+      return rollHealReward(state, rarity);
+    case "reroll":
+      return rollRerollReward(rarity);
+    case "base_repair":
+      return rollBaseRepairReward(state, rarity);
+    case "item":
+      return rollItemReward(rarity);
+    case "relic":
+      return rollRelicReward(state, rarity);
   }
-  const g = 100 + Math.floor(Math.random() * 60);
-  return { kind: "gold", amount: g, label: `+${g} Gold`, blurb: "Mythic haul." };
 }
 
 function buildChestDraft(state: GameState, rarity: ChestRarity): ChestRewardOption[] {
-  const rollFor = (): ChestRewardOption => {
-    if (rarity === "mythic" && Math.random() < 0.55) {
-      const choices = draftRelicChoices(state.relics, 1).filter((id) => {
-        const r = RELICS[id].rarity;
-        return r === "common" || r === "uncommon";
-      });
-      const id = (choices[0] ?? draftRelicChoices(state.relics, 1)[0]) as RelicId | undefined;
-      if (id) {
-        return {
-          kind: "relic",
-          relicId: id,
-          label: RELICS[id].name,
-          blurb: RELICS[id].blurb,
-        };
-      }
+  const families = [...familiesForRarity(rarity)];
+  // Shuffle families Fisher–Yates
+  for (let i = families.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [families[i], families[j]] = [families[j]!, families[i]!];
+  }
+
+  const options: ChestRewardOption[] = [];
+  const used = new Set<string>();
+
+  for (const family of families) {
+    if (options.length >= 2) break;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const opt = rollFamilyReward(state, rarity, family);
+      if (!opt) continue;
+      const key = rewardKey(opt);
+      if (used.has(key)) continue;
+      used.add(key);
+      options.push(opt);
+      break;
     }
-    return rollRewardOption(rarity);
-  };
-  const a = rollFor();
-  let b = rollFor();
-  for (let i = 0; i < 6 && a.label === b.label; i++) b = rollFor();
-  return [a, b];
+  }
+
+  // Guaranteed two unique choices — fall back to distinct gold tiers if pool exhausted.
+  while (options.length < 2) {
+    const fallback = rollGoldReward(state, rarity);
+    fallback.label = `${fallback.label} (alt)`;
+    const key = rewardKey(fallback) + options.length;
+    if (!used.has(key)) {
+      used.add(key);
+      options.push(fallback);
+    } else {
+      options.push({
+        kind: "xp",
+        amount: scaledGold(20, state.wave),
+        label: `+${scaledGold(20, state.wave)} XP`,
+        blurb: "Bonus experience.",
+      });
+    }
+  }
+
+  return options.slice(0, 2);
+}
+
+/** @internal tests */
+export function __testBuildChestDraft(state: GameState, rarity: ChestRarity): ChestRewardOption[] {
+  return buildChestDraft(state, rarity);
 }
 
 export function applyChestReward(state: GameState, opt: ChestRewardOption): void {
   if (opt.kind === "gold") {
     state.gold += opt.amount;
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "xp") {
+    state.xp += opt.amount;
+    tryLevelUp(state);
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "heal") {
+    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + opt.amount);
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "reroll") {
+    state.rerollTokens += opt.amount;
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "base_repair") {
+    state.baseHp = Math.min(state.map.base.maxHp, state.baseHp + opt.amount);
     state.toast = `Chest: ${opt.label}`;
   } else if (opt.kind === "item") {
     const prevOffer = state.shopOffer;

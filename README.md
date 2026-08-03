@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, Barracks / Stats / Challenges, Workshop editors, **AI Lab**, Compendium, Game Info, Settings, and Quit. Menus use a shared dark steel / amber-teal layout system (grids + `.shine-btn` hover); Reduce motion in Settings turns hover shine and idle FX off.
+Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, Barracks / Stats / Challenges, Workshop editors, **AI Lab**, Compendium, **Patch Notes**, Game Info, Settings, and Quit. Menus use a shared dark steel / amber-teal layout system (grids + `.shine-btn` hover); Reduce motion in Settings turns hover shine and idle FX off.
 
 | Control | Action |
 |---------|--------|
@@ -37,7 +37,7 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 - **Barracks** — Spend **War Crests** (earned at run end) on permanent upgrades and hero commissions (Coil / Thorn start locked).
 - **Ascension** — A0–A12 cumulative modifiers (StS-style). Win at your highest unlocked level to open the next; Crests scale with Ascension.
 - **Multiplayer** — PeerJS lobbies (private code or public find-match). Modes: **1v1 / 2v2 / 3v3** PvP and **2p / 3p PvE**. Host-authoritative sim; allies share a physical lane but keep **independent** gold, shop, items, relics, and drafts. Mid-match disconnect shows an end overlay (no mid-match reconnect).
-- **AI Lab** — In-browser genetic training on unlimited-wave duels (base death wins). Recipes + checkpoints save as difficulty tiers for solo/PvE.
+- **AI Lab** — In-browser genetic training on unlimited-wave duels (base death wins). Training can use the same **run / creative options** as solo (ascension, double elites, etc.). Recipes + checkpoints save as difficulty tiers for solo/PvE.
 
 ## Systems
 

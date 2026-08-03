@@ -143,7 +143,7 @@ function fireWeapon(state: GameState, w: GunnerWeaponDef): void {
         const t = pellets === 1 ? 0 : (i / (pellets - 1) - 0.5) * 2;
         a += t * w.spread * (pellets > 1 ? 1 : 0);
         if (w.id === "lmg" || w.id === "ar" || w.id === "shotgun") {
-          a += (Math.random() * 2 - 1) * w.spread * (w.id === "lmg" ? 1 : 0.35);
+          a += (Math.random() * 2 - 1) * w.spread * (w.id === "lmg" ? 1.65 : 0.35);
         }
       } else if (w.spread > 0) {
         a += (Math.random() * 2 - 1) * w.spread;
@@ -159,7 +159,7 @@ function fireWeapon(state: GameState, w: GunnerWeaponDef): void {
         color: w.color,
         pierceLeft: w.pierce,
         aoeRadius: w.aoeRadius > 0 ? w.aoeRadius : undefined,
-        life: w.aoeRadius > 0 ? 1.4 : 0.85,
+        life: w.aoeRadius > 0 ? 1.4 : w.id === "lmg" ? 0.42 : 0.85,
       });
     }
     addFx(state, h.x + facing.x * 22, h.y + facing.y * 22, 16, `${w.color}88`, 0.12);

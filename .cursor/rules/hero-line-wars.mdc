@@ -13,8 +13,12 @@ WC3-style **hero line wars** (not a MOBA). 2D top-down Canvas, wave line, sends,
 - Targets: `build:pages` → `dist/`; `build:release` → single-file HTML; `desktop:dist` → Electron (`DESKTOP.md`). Thin Electron shell over the same Vite build.
 - Pages: `.github/workflows/deploy-pages.yml` builds + deploys `dist/` on `master` (repo Settings → Pages → Source: GitHub Actions).
 - Art generators: `tools/generate-*-art.mjs` → `public/art/{relics,items}/`.
-- **Version:** main menu shows `package.json` `version` (Vite `define` → `__APP_VERSION__`). When shipping a build or a meaningful change set, **bump `package.json` version** if it hasn’t been since the last commit.
-- **Patch notes:** every player/agent-facing change gets an entry in `PATCHNOTES.md` (newest first, headed with the new version) — same approach as LaneBreakers. Update this rule, `README.md`, and patch notes when behavior changes.
+- **Version + patch notes (required on meaningful change sets):** main menu shows `package.json` `version` (Vite `define` → `__APP_VERSION__`). Same approach as LaneBreakers — do this in the **same pass** as the feature/fix work, not as an optional follow-up.
+  - **One bump per uncommitted change set.** If `package.json` version is still what HEAD (last commit) has, bump it once (patch semver: `0.0.N` → `0.0.N+1`) and open **one** new `PATCHNOTES.md` section headed with today’s date + that version (newest first).
+  - **Do not bump again** for later prompts in the same uncommitted batch. Append bullets under the **existing** top section for that version. A brand-new version section each chat/prompt is wrong and over-fragments the changelog.
+  - Only start a **new** version section when the previous bumped version is already committed (or the user explicitly asks for a fresh release cut).
+  - Every player-facing / agent-facing behavior change gets a concise bullet in that section. Update this rule and `README.md` when conventions or advertised features change.
+  - Subagents / multitask workers must include version + patch notes in their deliverable when they touch gameplay or ship surface — omitting them is incomplete work.
 
 ## Where to change what
 
@@ -139,6 +143,7 @@ Menus are a **lane-wars war room**, not a generic dashboard and not a phone list
 - Compendium card list (unbounded content)
 - Career Stats tab body
 - Barracks / Challenges card grids (unbounded content)
+- Patch Notes version body (one version per page; pager stays fixed)
 - An **open** `details.opt-fold` (user opted in)
 - Workshop side panel as a safety overflow only — its default content must fit
 
@@ -148,8 +153,9 @@ If a screen grows past the budget: group into columns, fold advanced options int
 
 | Surface | Use |
 |---|---|
-| Screen chrome | `menu-shell` + modifier: `prefs-shell` (Settings/Controls/Cheats/AI Lab/Compendium), `meta-shell` + `meta-hub` (Barracks/Challenges), `stats-shell`, `info-shell`, `workshop-shell` + `workshop-layout` (editors), `mp-shell`, `tight` (SP setup, editors) |
+| Screen chrome | `menu-shell` + modifier: `prefs-shell` (Settings/Controls/Cheats/AI Lab/Compendium/Patch Notes), `meta-shell` + `meta-hub` (Barracks/Challenges), `stats-shell`, `info-shell`, `workshop-shell` + `workshop-layout` (editors), `mp-shell`, `tight` (SP setup, editors) |
 | Main menu | `main-menu-grid` with grouped `main-group` sections (Play / Progress / Workshop / Library / system row) — never one flat button column |
+| Patch Notes | `prefs-layout patch-layout` · version pager (← newer / → older) · scrollable `.patch-body` sourced from root `PATCHNOTES.md` via `src/data/patchNotes.ts` |
 | Run setup (SP + MP) | `sp-run-layout` (setup left, hero picker right) · `panel-head` (title + Reset/Randomize actions) · **one** dense `run-grid cols-3/cols-4` for core fields · `map-preview` (shape-aware canvas via `src/ui/mapThumbs.ts`) · creative options in `details.opt-fold` (collapsed unless non-default; summary shows `opt-count`) |
 | Settings | `settings-groups` → 3 `settings-group` cards (Audio / Gameplay / Display & motion), `setting-row` rows |
 | Controls | `bind-sections` → `bind-section` cards (Gamepad / Combat / Movement / Utility) |
@@ -167,7 +173,7 @@ Layout rules:
 ### Copy rules
 
 - One `menu-lead` line under a title, ≤ ~90 chars. Field labels ≤ 3 words. Button labels ≤ 3 words.
-- Depth goes in `title=` tooltips (`runTip` for run options) or a `help-fold` — **no paragraphs of body text** on functional screens. Game Info is the only prose screen and stays skimmable (info-grid blocks of 1–2 sentences).
+- Depth goes in `title=` tooltips (`runTip` for run options) or a `help-fold` — **no paragraphs of body text** on functional screens. Game Info and Patch Notes are the prose/library screens (Info stays skimmable; Notes paginate by version).
 - Hero card blurbs clamp to 1 line in compact grids.
 
 ### Motion & buttons
@@ -199,7 +205,7 @@ Layout rules:
 
 - **Do** extend data + the system that already applies that kind of effect.
 - **Do** keep Artifact shop entries separate from gear icon pipelines.
-- **Do** update `.cursor/rules/hero-line-wars.mdc`, `README.md`, and `PATCHNOTES.md` (+ version bump) when behavior changes.
+- **Do** update `PATCHNOTES.md` (+ **one** version bump per uncommitted batch — see Version + patch notes above), and this rule / `README.md` when conventions or advertised features change.
 - **Don't** casually add new combat resources, currencies, or net message kinds without matching SP/MP and existing sync patterns.
 - **Don't** fork a second game loop for desktop or single-file builds.
 - **Don't** reintroduce shared-lane economy gating, client-side draft mutation in MP, or host-forced `viewTeam`.

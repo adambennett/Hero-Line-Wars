@@ -48,7 +48,7 @@ import {
   type AiSelection,
   type AiStore,
 } from "../ai/store";
-import { isTraining, runTraining, stopTraining, type TrainProgress } from "../ai/train";
+import { isTraining, runTraining, stopTraining, type TrainProgress, type TrainRunOptions } from "../ai/train";
 import {
   ASCENSIONS,
   ascensionLabel,
@@ -102,6 +102,7 @@ import { paintMapThumb, paintMapThumbCanvases } from "./mapThumbs";
 import { resolveMapShape, shapeLabel } from "../game/playBounds";
 import { relicArtImg } from "../data/relicArt";
 import { itemArtImg } from "../data/itemArt";
+import { PATCH_NOTE_PAGES, patchNotesBodyHtml } from "../data/patchNotes";
 
 export type { MatchMode, MatchPrivacy } from "../net/types";
 
@@ -110,6 +111,7 @@ export type MenuScreen =
   | "singleplayer"
   | "compendium"
   | "game-info"
+  | "patch-notes"
   | "settings"
   | "controls"
   | "ai-lab"
@@ -126,6 +128,7 @@ const SCREEN_LABELS: Record<MenuScreen, string> = {
   singleplayer: "Singleplayer",
   compendium: "Compendium",
   "game-info": "Game Info",
+  "patch-notes": "Patch Notes",
   settings: "Settings",
   controls: "Controls",
   "ai-lab": "AI Lab",
@@ -311,12 +314,30 @@ export class MenuController {
   private spWildChests = false;
   private spCrampedLane = false;
   private spAllyAi = 1;
+  /** AI Lab training duel run / creative options (mirrors solo setup). */
+  private aiTrainAscension = 0;
+  private aiTrainEnemyDensity = 1;
+  private aiTrainEnemyHp = 1;
+  private aiTrainEnemySpeed = 1;
+  private aiTrainIncomeMul = 1;
+  private aiTrainRespawnMul = 1;
+  private aiTrainStartingBase = 0;
+  private aiTrainSuddenDeath = 0;
+  private aiTrainDoubleElites = false;
+  private aiTrainDisableElites = false;
+  private aiTrainDisableBosses = false;
+  private aiTrainGlassCannon = false;
+  private aiTrainGoldRush = false;
+  private aiTrainFogAlways = false;
+  private aiTrainCrampedLane = false;
   private settings: ClientSettingsFull = loadSettings();
   private compendiumTab: CompTab = "heroes";
   private compSearch = "";
   private compRarity: Rarity | "all" = "all";
   private compSort: "name" | "rarity" = "rarity";
   private toast = "";
+  /** Index into PATCH_NOTE_PAGES (0 = newest). */
+  private patchPageIndex = 0;
   private rebinding: BindableAction | null = null;
   private rebindingPad = false;
   private unbindListen: (() => void) | null = null;
@@ -390,6 +411,7 @@ export class MenuController {
     if (screen !== "controls") this.stopRebindListen();
     if (screen !== this.screen) this.prevScreen = this.screen;
     this.screen = screen;
+    if (screen === "patch-notes") this.patchPageIndex = 0;
     this.render();
     // Retry BGM on every screen change — first navigation often carries the
     // user-gesture browsers need after an autoplay block on cold load.
@@ -444,6 +466,19 @@ export class MenuController {
     if (action === "stats-tab") {
       this.statsTab = (t.dataset.tab as StatsTab) || "overview";
       this.render();
+      return;
+    }
+    if (action === "patch-prev" || action === "patch-next") {
+      const n = PATCH_NOTE_PAGES.length;
+      if (n > 0) {
+        const delta = action === "patch-prev" ? -1 : 1;
+        this.patchPageIndex = (this.patchPageIndex + delta + n) % n;
+        this.render();
+        const shell = this.root.querySelector(".menu-shell");
+        if (shell) shell.scrollTop = 0;
+        const body = this.root.querySelector(".patch-body");
+        if (body) body.scrollTop = 0;
+      }
       return;
     }
 
@@ -935,6 +970,36 @@ export class MenuController {
       setSelectedOpponent(parseAiSelectValue(el.value));
     } else if (el.dataset.field === "ai-opponent") {
       setSelectedOpponent(parseAiSelectValue(el.value));
+    } else if (el.dataset.field === "ai-train-ascension") {
+      this.aiTrainAscension = Number(el.value) || 0;
+    } else if (el.dataset.field === "ai-train-enemy-density") {
+      this.aiTrainEnemyDensity = Number(el.value) || 1;
+    } else if (el.dataset.field === "ai-train-enemy-hp") {
+      this.aiTrainEnemyHp = Number(el.value) || 1;
+    } else if (el.dataset.field === "ai-train-enemy-speed") {
+      this.aiTrainEnemySpeed = Number(el.value) || 1;
+    } else if (el.dataset.field === "ai-train-income") {
+      this.aiTrainIncomeMul = Number(el.value) || 1;
+    } else if (el.dataset.field === "ai-train-respawn") {
+      this.aiTrainRespawnMul = Number(el.value) || 1;
+    } else if (el.dataset.field === "ai-train-start-base") {
+      this.aiTrainStartingBase = Number(el.value) || 0;
+    } else if (el.dataset.field === "ai-train-sudden") {
+      this.aiTrainSuddenDeath = Number(el.value) || 0;
+    } else if (el.dataset.field === "ai-train-dbl-elite") {
+      this.aiTrainDoubleElites = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-no-elite") {
+      this.aiTrainDisableElites = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-no-boss") {
+      this.aiTrainDisableBosses = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-glass") {
+      this.aiTrainGlassCannon = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-gold-rush") {
+      this.aiTrainGoldRush = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-fog") {
+      this.aiTrainFogAlways = (el as HTMLInputElement).checked;
+    } else if (el.dataset.field === "ai-train-cramped") {
+      this.aiTrainCrampedLane = (el as HTMLInputElement).checked;
     }
   }
 
@@ -953,15 +1018,115 @@ export class MenuController {
     if (startBtn) startBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = false;
 
-    const result = await runTraining({ recipe, gens, pop, trials, maxSeconds }, (p) => {
-      this.trainProgress = p;
-      const st = this.root.querySelector("#ai-status");
-      if (st) st.textContent = p.message;
-    });
+    const result = await runTraining(
+      { recipe, gens, pop, trials, maxSeconds, runOptions: this.collectAiTrainRunOptions() },
+      (p) => {
+        this.trainProgress = p;
+        const st = this.root.querySelector("#ai-status");
+        if (st) st.textContent = p.message;
+      },
+    );
 
     if (result) saveTrainingResult(name, recipe, result);
     this.trainProgress = null;
     if (this.screen === "ai-lab") this.render();
+  }
+
+  private collectAiTrainRunOptions(): Partial<TrainRunOptions> {
+    return {
+      ascension: this.aiTrainAscension,
+      enemyDensityMul: this.aiTrainEnemyDensity,
+      enemyHpMul: this.aiTrainEnemyHp,
+      enemySpeedMul: this.aiTrainEnemySpeed,
+      incomeMul: this.aiTrainIncomeMul,
+      respawnMul: this.aiTrainRespawnMul,
+      startingBaseLevel: this.aiTrainStartingBase,
+      doubleElites: this.aiTrainDoubleElites,
+      disableElites: this.aiTrainDisableElites,
+      disableBosses: this.aiTrainDisableBosses,
+      glassCannon: this.aiTrainGlassCannon,
+      goldRush: this.aiTrainGoldRush,
+      fogAlways: this.aiTrainFogAlways,
+      crampedLane: this.aiTrainCrampedLane,
+      suddenDeathBaseHp: this.aiTrainSuddenDeath > 0 ? this.aiTrainSuddenDeath : undefined,
+    };
+  }
+
+  private aiTrainRunOptionsHtml(): string {
+    const tip = (key: RunOptionTipKey) => ` title="${escapeHtml(runTip(key))}"`;
+    const meta = loadMetaStore();
+    const ascOpts = Array.from({ length: meta.ascensionUnlocked + 1 }, (_, i) => {
+      const def = ASCENSIONS[i]!;
+      return `<option value="${i}" ${this.aiTrainAscension === i ? "selected" : ""}>A${i} · ${escapeHtml(def.name)}</option>`;
+    }).join("");
+    const creativeSelect = (
+      field: string,
+      label: string,
+      tipKey: RunOptionTipKey,
+      pool: readonly number[],
+      current: number,
+      fmt: (n: number) => string,
+    ) => `
+            <label class="run-field"><span>${label}</span>
+              <select data-field="${field}"${tip(tipKey)}>${pool.map((n) => `<option value="${n}" ${current === n ? "selected" : ""}>${fmt(n)}</option>`).join("")}</select>
+            </label>`;
+    const d = RUN_OPTION_DEFAULTS;
+    const creativeActive =
+      [
+        this.aiTrainDoubleElites,
+        this.aiTrainDisableElites,
+        this.aiTrainDisableBosses,
+        this.aiTrainGlassCannon,
+        this.aiTrainGoldRush,
+        this.aiTrainFogAlways,
+        this.aiTrainCrampedLane,
+      ].filter(Boolean).length +
+      [
+        this.aiTrainAscension !== d.ascension,
+        this.aiTrainEnemyDensity !== d.enemyDensityMul,
+        this.aiTrainEnemyHp !== d.enemyHpMul,
+        this.aiTrainEnemySpeed !== d.enemySpeedMul,
+        this.aiTrainIncomeMul !== d.incomeMul,
+        this.aiTrainRespawnMul !== d.respawnMul,
+        this.aiTrainStartingBase !== d.startingBaseLevel,
+        this.aiTrainSuddenDeath !== d.suddenDeathBaseHp,
+      ].filter(Boolean).length;
+    const flags: Array<[string, string, boolean, RunOptionTipKey]> = [
+      ["ai-train-dbl-elite", "Double elites", this.aiTrainDoubleElites, "doubleElites"],
+      ["ai-train-no-elite", "No elites", this.aiTrainDisableElites, "noElites"],
+      ["ai-train-no-boss", "No bosses", this.aiTrainDisableBosses, "noBosses"],
+      ["ai-train-glass", "Glass cannon", this.aiTrainGlassCannon, "glassCannon"],
+      ["ai-train-gold-rush", "Gold rush", this.aiTrainGoldRush, "goldRush"],
+      ["ai-train-fog", "Fog always", this.aiTrainFogAlways, "fogAlways"],
+      ["ai-train-cramped", "Cramped lane", this.aiTrainCrampedLane, "crampedLane"],
+    ];
+    const checkboxes = flags
+      .map(
+        ([field, label, on, tipKey]) =>
+          `<label class="setting-row"${tip(tipKey)}><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
+      )
+      .join("");
+    return `
+            <details class="opt-fold"${creativeActive > 0 ? " open" : ""}>
+              <summary>Training run options${creativeActive > 0 ? ` <span class="opt-count">${creativeActive} active</span>` : ""}</summary>
+              <div class="opt-fold-body">
+                <p class="menu-note">Applied to every training duel — stack Ascension + creative modifiers to breed harder schools.</p>
+                <label class="setting-row">
+                  <span>Ascension</span>
+                  <select data-field="ai-train-ascension"${tip("ascension")}>${ascOpts}</select>
+                </label>
+                <div class="run-grid cols-4">
+                  ${creativeSelect("ai-train-enemy-density", "Enemy density", "enemyDensity", RUN_OPTION_POOLS.enemyDensityMul, this.aiTrainEnemyDensity, (n) => `${n}×`)}
+                  ${creativeSelect("ai-train-enemy-hp", "Enemy HP", "enemyHp", RUN_OPTION_POOLS.enemyHpMul, this.aiTrainEnemyHp, (n) => `${n}×`)}
+                  ${creativeSelect("ai-train-enemy-speed", "Enemy speed", "enemySpeed", RUN_OPTION_POOLS.enemySpeedMul, this.aiTrainEnemySpeed, (n) => `${n}×`)}
+                  ${creativeSelect("ai-train-income", "Income", "income", RUN_OPTION_POOLS.incomeMul, this.aiTrainIncomeMul, (n) => `${n}×`)}
+                  ${creativeSelect("ai-train-respawn", "Respawn", "respawn", RUN_OPTION_POOLS.respawnMul, this.aiTrainRespawnMul, (n) => `${n}×`)}
+                  ${creativeSelect("ai-train-start-base", "Start base Lv", "startBase", RUN_OPTION_POOLS.startingBaseLevel, this.aiTrainStartingBase, (n) => `${n}`)}
+                  ${creativeSelect("ai-train-sudden", "Sudden death HP", "suddenDeath", RUN_OPTION_POOLS.suddenDeathBaseHp, this.aiTrainSuddenDeath, (n) => (n === 0 ? "Off" : `${n}`))}
+                </div>
+                <div class="creative-check-grid">${checkboxes}</div>
+              </div>
+            </details>`;
   }
 
   private quit(): void {
@@ -995,6 +1160,9 @@ export class MenuController {
         break;
       case "game-info":
         body = this.renderGameInfo();
+        break;
+      case "patch-notes":
+        body = this.renderPatchNotes();
         break;
       case "settings":
         body = this.renderSettings();
@@ -1036,7 +1204,8 @@ export class MenuController {
       this.screen === "controls" ||
       this.screen === "cheats" ||
       this.screen === "ai-lab" ||
-      this.screen === "compendium";
+      this.screen === "compendium" ||
+      this.screen === "patch-notes";
     const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}${prefsScreen ? " prefs-shell" : ""}`;
 
     const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
@@ -1412,8 +1581,9 @@ export class MenuController {
 
         <section class="main-group library">
           <h2 class="main-group-label">Library</h2>
-          <div class="main-group-btns cols-2">
+          <div class="main-group-btns cols-3">
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="compendium"><span class="btn-label">Compendium</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="patch-notes"><span class="btn-label">Patch Notes</span></button>
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="game-info"><span class="btn-label">Game Info</span></button>
           </div>
         </section>
@@ -2344,6 +2514,44 @@ export class MenuController {
     `;
   }
 
+  private renderPatchNotes(): string {
+    const pages = PATCH_NOTE_PAGES;
+    const n = pages.length;
+    const idx = n === 0 ? 0 : Math.min(this.patchPageIndex, n - 1);
+    this.patchPageIndex = idx;
+    const page = pages[idx];
+    const pager =
+      n <= 1
+        ? page
+          ? `<p class="patch-page-meta">${escapeHtml(page.heading)}</p>`
+          : `<p class="patch-empty">No patch notes found.</p>`
+        : `<div class="patch-pager" role="navigation" aria-label="Patch note versions">
+            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-prev" title="Newer" aria-label="Newer version">←</button>
+            <div class="patch-page-meta">
+              <strong>${escapeHtml(page!.version)}</strong>
+              <span>${escapeHtml(page!.date)}</span>
+              <span class="patch-page-count">${idx + 1} / ${n}</span>
+            </div>
+            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-next" title="Older" aria-label="Older version">→</button>
+          </div>`;
+
+    const body = page
+      ? `<div class="patch-body">${patchNotesBodyHtml(page.bodyMd)}</div>`
+      : `<p class="patch-empty">No patch notes found.</p>`;
+
+    return `
+      <div class="prefs-layout patch-layout">
+        <header class="menu-header compact">
+          ${this.backButton("main")}
+          <h1 class="menu-title">Patch Notes</h1>
+          <p class="menu-lead">Newest first — flip versions with the arrows.</p>
+        </header>
+        ${pager}
+        ${body}
+      </div>
+    `;
+  }
+
   private renderSettings(): string {
     const s = this.settings;
     const fxOpts = (["full", "reduced", "off"] as DamageScreenFx[])
@@ -2618,6 +2826,7 @@ export class MenuController {
               <span>School name</span>
               <input id="ai-name" maxlength="24" value="balanced" />
             </label>
+            ${this.aiTrainRunOptionsHtml()}
             <p class="menu-note" id="ai-status">${escapeHtml(
               prog
                 ? prog.message

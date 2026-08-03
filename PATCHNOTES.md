@@ -1,5 +1,33 @@
 # Hero Line Wars — Patch Notes
 
+## 2026-08-03 · v0.0.4
+
+### Balance — Cloud
+- Faster default move speed (**238 → 272**) and more max HP (**88 → 108**).
+
+### Balance — Gunner
+- Machine-gun primary range roughly **halved** (attack range + projectile lifetime).
+- LMG: much wider bullet spread and shorter projectile lifetime so spray is less
+  dominant at mid/long range.
+
+### Chests
+- Drafts always offer **two unique reward families** (no duplicate gold/gold).
+- New small rewards: **XP**, **heal** (% max HP), **reroll tokens**, and **base
+  repair**.
+- Gold / XP / base-repair amounts **scale with wave** so late chests stay relevant.
+
+### AI Lab
+- **Training run options** panel (ascension, double elites, density/HP/speed,
+  income, fog, cramped lane, and other creative toggles) so you can train
+  schools against harsh setups.
+
+### Desktop
+- Electron upgraded to **^42.3.3** (CVE-clean line; resolves to 42.8.x).
+
+### Patch Notes (in-game)
+- Main menu **Library → Patch Notes** opens the changelog. Newest version first;
+  pager arrows flip between versions (one page each).
+
 ## 2026-08-01 · v0.0.3
 
 ### Combat HUD

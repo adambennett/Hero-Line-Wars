@@ -279,7 +279,11 @@ export type TeleporterState = {
 export type ChestRewardOption =
   | { kind: "gold"; amount: number; label: string; blurb: string }
   | { kind: "item"; itemId: ShopItemId; label: string; blurb: string }
-  | { kind: "relic"; relicId: RelicId; label: string; blurb: string };
+  | { kind: "relic"; relicId: RelicId; label: string; blurb: string }
+  | { kind: "xp"; amount: number; label: string; blurb: string }
+  | { kind: "heal"; amount: number; label: string; blurb: string }
+  | { kind: "reroll"; amount: number; label: string; blurb: string }
+  | { kind: "base_repair"; amount: number; label: string; blurb: string };
 
 export type BladeMode = "wrapped" | "flying" | "sling" | "rewinding" | "reforming";
 

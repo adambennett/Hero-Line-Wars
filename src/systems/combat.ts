@@ -809,7 +809,7 @@ function fireStyle(
         kind: "bolt",
         color: "#c8d090",
         fromBasic: true,
-        life: 0.55,
+        life: 0.28,
       });
       break;
     }

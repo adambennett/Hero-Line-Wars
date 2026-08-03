@@ -71,7 +71,7 @@ export function openUtilityDraft(state: GameState): void {
   openOrQueueDraft(state, { kind: "utility", choices: draftUtilities(3) });
 }
 
-function tryLevelUp(state: GameState): void {
+export function tryLevelUp(state: GameState): void {
   while (state.xp >= xpToNextLevel(state.level)) {
     state.xp -= xpToNextLevel(state.level);
     state.level += 1;
