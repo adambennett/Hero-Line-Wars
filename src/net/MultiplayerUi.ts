@@ -28,7 +28,6 @@ import {
   hostAddAiSeat,
   hostRemoveAiSeat,
   hostReplaceAiSeats,
-  hostSetMode,
   hostSetOpts,
   hostStartMatch,
   hostUpdateAiSeat,
@@ -1412,7 +1411,7 @@ export class MultiplayerUi {
     });
     this.root.querySelector("#mp-start")?.addEventListener("click", () => {
       if (!canStartMatch()) return;
-      hostSetMode(lobby.mode);
+      // Avoid hostSetMode(mode): setMode always cleared ready and blocked start.
       this.pushHostOpts();
       const mapId = resolveMapChoice(this.mapChoice);
       const msg = hostStartMatch(

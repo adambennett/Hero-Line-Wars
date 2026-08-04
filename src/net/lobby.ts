@@ -187,6 +187,8 @@ export function assignTeam(lobby: LobbyState): MpTeam {
 }
 
 export function setMode(lobby: LobbyState, mode: MatchMode): void {
+  // Same mode: leave seats/ready intact (callers may re-sync current mode).
+  if (lobby.mode === mode) return;
   lobby.mode = mode;
   const cap = modeCap(mode);
   lobby.slots = lobby.slots.filter((s) => s.slot < cap);

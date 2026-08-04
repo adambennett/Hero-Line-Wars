@@ -1,5 +1,10 @@
 # Hero Line Wars — Patch Notes
 
+## 2026-08-04 · v0.0.5
+
+### Bug Fix
+- Fixed Multiplayer lobbies not being possible to start due to a bug with the "Start Match" button.
+ 
 ## 2026-08-03 · v0.0.4
 
 ### Balance — Cloud
