@@ -877,31 +877,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
   }
   drawHpBar(ctx, view, base.x, base.y, base.radius, state.baseHp, base.maxHp);
 
-  // Respawn precision minigame — bar under the downed hero / respawn pad.
-  if (!state.hero.alive && state.respawnMinigame && state.respawnTimer > 1) {
-    const g = state.respawnMinigame;
-    const pad = mapRespawn(map);
-    const barW = 140;
-    const barH = 14;
-    const bx = pad.x - barW / 2;
-    const by = pad.y + pad.radius + 18;
-    ctx.save();
-    ctx.fillStyle = "#0c1424cc";
-    ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 4);
-    ctx.fillStyle = "#1a2840";
-    ctx.fillRect(bx, by, barW, barH);
-    ctx.fillStyle = g.lastHit === false && g.feedback > 0 ? "#ff6b6b88" : "#3d9a6a";
-    ctx.fillRect(bx + g.zoneStart * barW, by, (g.zoneEnd - g.zoneStart) * barW, barH);
-    ctx.fillStyle = "#e8eef8";
-    ctx.fillRect(bx + g.cursor * barW - 2, by - 4, 4, barH + 8);
-    ctx.strokeStyle = "#5a7aaa";
-    ctx.strokeRect(bx, by, barW, barH);
-    ctx.fillStyle = "#9eb0ce";
-    ctx.font = "11px Rajdhani, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("SPACE", pad.x, by + barH + 14);
-    ctx.restore();
-  }
+  // Respawn precision minigame lives in HTML (#hud-respawn-stack), stacked under the timer.
 
   // Wave / boss banner is HTML (#wave-banner) above the send menu — keep canvas clear.
   drawFeedbackOverlay(ctx, state);

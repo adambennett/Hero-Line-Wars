@@ -47,7 +47,16 @@
           </aside>
         </div>
         <div id="hud-banner"></div>
-        <div id="hud-respawn" class="hidden"></div>
+        <div id="hud-respawn-stack" class="hidden">
+          <div id="hud-respawn"></div>
+          <div id="hud-respawn-minigame" class="hidden" aria-hidden="true">
+            <div class="respawn-mg-track">
+              <div class="respawn-mg-zone"></div>
+              <div class="respawn-mg-cursor"></div>
+            </div>
+            <div class="respawn-mg-hint">Space — shave respawn</div>
+          </div>
+        </div>
         <div id="hud-bottom">
           <div id="hud-toast"></div>
           <div id="hud-hint"></div>
@@ -102,9 +111,12 @@
       <div id="relic-draft" class="hidden">
         <div class="relic-draft-card">
           <h2 id="draft-title">Choose a Relic</h2>
-          <p id="draft-blurb">Pick one build-defining power for the rest of the run.</p>
+          <p id="draft-blurb" class="draft-blurb"></p>
           <div id="relic-choices"></div>
-          <button type="button" id="relic-skip" class="menu-btn ghost wide hidden">Skip</button>
+          <div id="draft-actions" class="draft-actions hidden">
+            <button type="button" id="relic-skip" class="menu-btn ghost draft-action-btn">Skip</button>
+            <button type="button" id="draft-reroll" class="menu-btn ghost draft-action-btn" disabled>No reroll tokens</button>
+          </div>
         </div>
       </div>
 

@@ -94,6 +94,33 @@ export type CustomMapDef = {
   relayBeacons?: RelayBeaconPad[];
 };
 
+export type CustomHeroAdvanced = {
+  /** Extra shots when basic fires (shotgun-like). */
+  projectileCount?: number;
+  /** Spread cone in degrees for multi-shot basics. */
+  attackSpreadDeg?: number;
+  /** Ability damage multiplier (mobility + ultimate). */
+  abilityPowerMul?: number;
+  /** Passive-effect strength scale (where applicable). */
+  passivePowerMul?: number;
+  /** Basic pierce extra hits. */
+  basicPierce?: number;
+  /** Basic bounce extra chains. */
+  basicBounce?: number;
+  /** Life steal on basic hits 0–1. */
+  lifesteal?: number;
+  /** Extra move speed multiplier on kit speed. */
+  moveSpeedMul?: number;
+  /** Custom ability display names / hints */
+  mobilityName?: string;
+  mobilityHint?: string;
+  ultimateName?: string;
+  ultimateHint?: string;
+  passiveName?: string;
+  passiveBlurb?: string;
+  attackHintCustom?: string;
+};
+
 export type CustomHeroDef = {
   id: string;
   name: string;
@@ -112,6 +139,8 @@ export type CustomHeroDef = {
   attackHint: string;
   passive: HeroPassive;
   abilities: [AbilityDef, AbilityDef];
+  /** Deep customization for Advanced editor mode. */
+  advanced?: CustomHeroAdvanced;
 };
 
 export type CustomMapBundle = {

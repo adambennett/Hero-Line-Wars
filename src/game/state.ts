@@ -16,9 +16,10 @@ import {
 } from "../data/enemies";
 import { type HeroId } from "../data/heroes";
 import {
-  circleHitsObstacle,
   reshuffleObstacles,
   blockedByObstacle,
+  blockedByNewObstacle,
+  overlappedObstacles,
   resolveMapChoice,
   mapRespawn,
   nearAnyShop,
@@ -50,6 +51,14 @@ import {
   pressRespawnMinigame,
   tickRespawnMinigame,
 } from "../systems/respawnMinigame";
+import {
+  applyCreativeWaveStart,
+  applyWallBounce,
+  creativeFromRunOptions,
+  maybeRandomizeMap,
+  shouldOfferRelicForWave,
+  slipSlideDelta,
+} from "../systems/creativeRuntime";
 import { tickDefenseRegen } from "../systems/defense";
 import { draftRelicChoices, type RelicId } from "../data/relics";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
@@ -86,7 +95,7 @@ import { applySecondWind, applyWaveRider, pickRelic, tryPhoenixRevive } from "..
 import { beginWaveShop, tickShopRotation } from "../systems/shop";
 import { buySendPack, consumePendingSends, availableSendPacks } from "../systems/send";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
-import { chooseLevelPassive, openLevelDraft } from "../systems/xp";
+import { chooseLevelPassive, openLevelDraft, skipLevelDraft } from "../systems/xp";
 import { applyUtilityChoice, tickUtilityEffects, tryCastUtility } from "../systems/utility";
 import { updateTurrets } from "../systems/turrets";
 import { tryPlacePendingArtifact } from "../systems/turrets";
@@ -569,6 +578,37 @@ export type RunOptions = {
   artifactPlacement?: "free" | "locked";
   /** Apply Barracks combat meta upgrades this run. */
   allowBarracks?: boolean;
+  /** Creative v0.0.6 extras — see `meta/creativeOptions`. */
+  relicDrop?: import("../meta/creativeOptions").RelicDropMode;
+  enemyProjectileDmgMul?: number;
+  enemyCollisionDmgMul?: number;
+  playerDmgLmbMul?: number;
+  playerDmgRmbMul?: number;
+  playerDmgMmbMul?: number;
+  wallBounciness?: number;
+  playerSpeedMul?: number;
+  playerSizeMul?: number;
+  enemySizeMul?: number;
+  critLottery?: import("../meta/creativeOptions").CritLotteryMode;
+  enemyMutation?: import("../meta/creativeOptions").EnemyMutationMode;
+  randomizeUtilityWave?: boolean;
+  doubleAllProjectiles?: boolean;
+  immuneToProjectiles?: boolean;
+  randomizeHeroWave?: boolean;
+  randomizeMapWave?: boolean;
+  artifactDamageDoubled?: boolean;
+  artifactsFree?: boolean;
+  itemsFree?: boolean;
+  infiniteRerolls?: boolean;
+  thornsAura?: boolean;
+  bloodTax?: boolean;
+  echoBarrage?: boolean;
+  pacifistPays?: boolean;
+  berserkerEdge?: boolean;
+  slipNSlide?: boolean;
+  vampiricCreeps?: boolean;
+  corpseExplosion?: boolean;
+  bounceHouse?: boolean;
   /** Humans in the whole game (both lanes). Drives pause + cheat policy. */
   humanPlayers?: number;
   /**
@@ -822,6 +862,38 @@ export type GameState = {
   goldRush: boolean;
   wildChests: boolean;
   crampedLane: boolean;
+  relicDrop: import("../meta/creativeOptions").RelicDropMode;
+  enemyProjectileDmgMul: number;
+  enemyCollisionDmgMul: number;
+  playerDmgLmbMul: number;
+  playerDmgRmbMul: number;
+  playerDmgMmbMul: number;
+  wallBounciness: number;
+  playerSpeedMul: number;
+  playerSizeMul: number;
+  enemySizeMul: number;
+  critLottery: import("../meta/creativeOptions").CritLotteryMode;
+  enemyMutation: import("../meta/creativeOptions").EnemyMutationMode;
+  randomizeUtilityWave: boolean;
+  doubleAllProjectiles: boolean;
+  immuneToProjectiles: boolean;
+  randomizeHeroWave: boolean;
+  randomizeMapWave: boolean;
+  artifactDamageDoubled: boolean;
+  artifactsFree: boolean;
+  itemsFree: boolean;
+  infiniteRerolls: boolean;
+  thornsAura: boolean;
+  bloodTax: boolean;
+  echoBarrage: boolean;
+  pacifistPays: boolean;
+  berserkerEdge: boolean;
+  slipNSlide: boolean;
+  vampiricCreeps: boolean;
+  corpseExplosion: boolean;
+  bounceHouse: boolean;
+  /** While casting, abilities multiply via this slot (mobility/ultimate). */
+  abilityDamageSlot?: "basic" | "mobility" | "ultimate" | null;
   /**
    * Rewards earned while another draft of the same kind is still open.
    * Per-player (mirrored into `PlayerBag`) so nothing is replaced or discarded.
@@ -850,7 +922,7 @@ export function createState(
   heroId: HeroId = "ranger",
   opts?: Partial<RunOptions>,
 ): GameState {
-  const mapId = resolveMapChoice(opts?.mapId ?? "random");
+  const mapId = resolveMapChoice(opts?.mapId ?? "random", opts?.contentFilters?.maps);
   const map = structuredClone(resolveMap(mapId));
   if (opts?.crampedLane) {
     shrinkPlayBounds(map, 48, 90);
@@ -895,7 +967,9 @@ export function createState(
   if (opts?.enemySpeedMul) mods.enemySpeedMul *= opts.enemySpeedMul;
   if (opts?.enemyDensityMul) mods.enemyCountMul *= opts.enemyDensityMul;
   if (opts?.incomeMul) mods.incomeMul *= opts.incomeMul;
-  if (opts?.respawnMul) mods.respawnMul *= opts.respawnMul;
+  // 0× respawn = always instant; still honor higher multipliers.
+  if (opts?.respawnMul != null && opts.respawnMul !== 1) mods.respawnMul *= opts.respawnMul;
+  const creative = creativeFromRunOptions(opts);
   if (opts?.sharedFriendlyFire) {
     /* flag used by combat — mirrored via friendlyFire below if needed */
   }
@@ -940,7 +1014,7 @@ export function createState(
       y: mapRespawn(map).y,
       hp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
       maxHp: def.maxHp + (mods.applyPlayerMeta ? mods.startingHpFlat : 0),
-      radius: def.radius,
+      radius: Math.max(4, def.radius * creative.playerSizeMul),
       alive: true,
       attackCd: 0,
       abilityCds: def.abilities.map(() => 0),
@@ -1082,7 +1156,7 @@ export function createState(
     chestSpawnChance: opts?.disableChests
       ? 0
       : (opts?.chestSpawnChance ?? 0.08) * (mods.chestSpawnMul ?? 1),
-    rerollTokens: cheats?.infiniteRerolls ? 99 : 0,
+    rerollTokens: cheats?.infiniteRerolls || creative.infiniteRerolls ? 99 : 0,
     shopBuys: 0,
     chestsOpened: 0,
     bossesKilled: 0,
@@ -1153,6 +1227,8 @@ export function createState(
     goldRush: !!opts?.goldRush,
     wildChests: !!opts?.wildChests,
     crampedLane: !!opts?.crampedLane,
+    ...creative,
+    abilityDamageSlot: null,
     draftQueue: [],
     humanPlayers,
     playerBags: undefined,
@@ -1192,6 +1268,7 @@ function startWave(state: GameState): void {
   spawnWaveSpecials(state, plan);
   applyWaveRider(state);
   resetWaveLives(state);
+  applyCreativeWaveStart(state);
 }
 
 export function resetWaveLives(state: GameState): void {
@@ -1280,10 +1357,12 @@ export function heroMoveSpeed(state: GameState): number {
   // Cloud Wall Dart: locked during wind-up and ricochet
   if ((state.hero.cloudDartWindup ?? 0) > 0 || state.hero.cloudDartActive) return 0;
   if ((state.hero.slowTimer ?? 0) > 0) spd *= state.hero.slowMul ?? 1;
+  spd *= state.playerSpeedMul ?? 1;
   return spd;
 }
 
 function respawnDelay(state: GameState): number {
+  if (state.modifiers.respawnMul === 0) return 0;
   const t =
     RESPAWN.baseSec + state.wave * RESPAWN.waveFactor + state.deathCount * RESPAWN.deathFactor;
   return Math.min(RESPAWN.maxSec, t) * state.modifiers.respawnMul;
@@ -1384,7 +1463,7 @@ function respawnHero(state: GameState): void {
   state.hero.attackCd = 0.4;
   state.hero.barrierTimer = 0;
   state.hero.whirlwindTimer = 0;
-  state.hero.radius = def.radius;
+  state.hero.radius = Math.max(4, def.radius * state.playerSizeMul);
   state.respawnMinigame = null;
   // Platebound / Aegis Lattice refresh defensive pools on respawn.
   if (def.passive.id === "platebound") {
@@ -1403,27 +1482,31 @@ function respawnHero(state: GameState): void {
 function moveHero(state: GameState, nx: number, ny: number): void {
   const r = state.hero.radius;
   const map = state.map;
+  const prevX = state.hero.x;
+  const prevY = state.hero.y;
+  // Soft unstick: walls we already overlap (giant heroes, spawn pads) don't block until we're clear.
+  const stuck = overlappedObstacles(map, prevX, prevY, r);
   // Slide along shaped playable bounds instead of snapping (hex teleport bug).
   const resolved = resolveMovePlayable(map, state.hero.x, state.hero.y, nx, ny, r);
-  const x = resolved.x;
-  const y = resolved.y;
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
+  let x = resolved.x;
+  let y = resolved.y;
+  if (!blockedByNewObstacle(map, x, y, r, stuck)) {
     state.hero.x = x;
     state.hero.y = y;
-    return;
-  }
-  if (
+  } else if (
     pointInPlayable(map, x, state.hero.y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(x, state.hero.y, r, o))
+    !blockedByNewObstacle(map, x, state.hero.y, r, stuck)
   ) {
     state.hero.x = x;
-    return;
-  }
-  if (
+  } else if (
     pointInPlayable(map, state.hero.x, y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(state.hero.x, y, r, o))
+    !blockedByNewObstacle(map, state.hero.x, y, r, stuck)
   ) {
     state.hero.y = y;
+  }
+  const wall = applyWallBounce(state, state.hero, prevX, prevY, stuck);
+  if (wall === "death") {
+    state.hero.hp = 0;
   }
 }
 
@@ -1438,7 +1521,7 @@ function updateProjectiles(state: GameState, dt: number): void {
       if (p.life <= 0) {
         if (p.hostile && (p.aoeRadius ?? 0) > 0) {
           resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
-            if (h === state.hero) applyPlayerDamage(state, dmg);
+            if (h === state.hero) applyPlayerDamage(state, dmg, { fromProjectile: true });
           });
         } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
           explodeFriendlyAoe(state, p);
@@ -1457,7 +1540,7 @@ function updateProjectiles(state: GameState, dt: number): void {
     if (blockedByObstacle(state.map, p.x, p.y, p.radius)) {
       if (p.hostile && (p.aoeRadius ?? 0) > 0) {
         resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
-          if (h === state.hero) applyPlayerDamage(state, dmg);
+          if (h === state.hero) applyPlayerDamage(state, dmg, { fromProjectile: true });
         });
       } else if (!p.hostile && (p.aoeRadius ?? 0) > 0) {
         explodeFriendlyAoe(state, p);
@@ -1470,7 +1553,7 @@ function updateProjectiles(state: GameState, dt: number): void {
     if (p.hostile) {
       if (state.hero.alive && dist(p, state.hero) <= state.hero.radius + p.radius) {
         resolveHostileProjectile(state, p, [state.hero], (h, dmg) => {
-          if (h === state.hero) applyPlayerDamage(state, dmg);
+          if (h === state.hero) applyPlayerDamage(state, dmg, { fromProjectile: true });
         });
       }
       continue;
@@ -1531,7 +1614,11 @@ function updateProjectiles(state: GameState, dt: number): void {
 const MAP_H_PAD = MAP_H + 40;
 
 function afterWaveClear(state: GameState, input: Input): boolean {
-  if (state.waveTier === "elite" || state.waveTier === "boss") {
+  maybeRandomizeMap(state);
+  if (
+    !state.disableRelics &&
+    shouldOfferRelicForWave(state.relicDrop ?? "elites_bosses", state.waveTier)
+  ) {
     const choices = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
     if (choices.length > 0) {
       openOrQueueDraft(state, { kind: "relic", choices });
@@ -1614,6 +1701,7 @@ export function update(state: GameState, input: Input, dt: number): void {
   }
   income += state.baseBranchMods.incomeFlat;
   if (state.utilityIncomeBoost > 0) income += state.utilityIncomeAmount;
+  if (state.pacifistPays) income *= 3;
   const gained = income * dt;
   state.gold += gained;
   state.goldFromIncome += gained;
@@ -1763,7 +1851,8 @@ export function update(state: GameState, input: Input, dt: number): void {
     const axis = input.moveAxis();
     const dir = normalize(axis.x, axis.y);
     const speed = heroMoveSpeed(state);
-    moveHero(state, state.hero.x + dir.x * speed * dt, state.hero.y + dir.y * speed * dt);
+    const delta = slipSlideDelta(state.hero, dir.x, dir.y, speed, dt, !!state.slipNSlide);
+    moveHero(state, state.hero.x + delta.x, state.hero.y + delta.y);
 
     state.hero.attackCd = Math.max(0, state.hero.attackCd - dt);
     for (let i = 0; i < state.hero.abilityCds.length; i++) {
@@ -1916,6 +2005,11 @@ export function skipRelic(state: GameState): void {
   afterDraftResolved(state);
   state.toast = "Relic skipped";
   state.toastTimer = 1.4;
+}
+
+export function skipLevelUp(state: GameState): void {
+  skipLevelDraft(state);
+  afterDraftResolved(state);
 }
 
 export function chooseLevelUp(state: GameState, id: LevelPassiveId): void {

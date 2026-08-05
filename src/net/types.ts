@@ -92,6 +92,37 @@ export type LobbyState = {
   allowBarracks?: boolean;
   respawnMinigame?: boolean;
   sendLocation?: "own" | "enemy";
+  /** Creative extras — see creativeOptions. */
+  relicDrop?: import("../meta/creativeOptions").RelicDropMode;
+  enemyProjectileDmgMul?: number;
+  enemyCollisionDmgMul?: number;
+  playerDmgLmbMul?: number;
+  playerDmgRmbMul?: number;
+  playerDmgMmbMul?: number;
+  wallBounciness?: number;
+  playerSpeedMul?: number;
+  playerSizeMul?: number;
+  enemySizeMul?: number;
+  critLottery?: import("../meta/creativeOptions").CritLotteryMode;
+  enemyMutation?: import("../meta/creativeOptions").EnemyMutationMode;
+  randomizeUtilityWave?: boolean;
+  doubleAllProjectiles?: boolean;
+  immuneToProjectiles?: boolean;
+  randomizeHeroWave?: boolean;
+  randomizeMapWave?: boolean;
+  artifactDamageDoubled?: boolean;
+  artifactsFree?: boolean;
+  itemsFree?: boolean;
+  infiniteRerolls?: boolean;
+  thornsAura?: boolean;
+  bloodTax?: boolean;
+  echoBarrage?: boolean;
+  pacifistPays?: boolean;
+  berserkerEdge?: boolean;
+  slipNSlide?: boolean;
+  vampiricCreeps?: boolean;
+  corpseExplosion?: boolean;
+  bounceHouse?: boolean;
 };
 
 /** Host-synced creative / run extras carried on lobby + start. */
@@ -138,6 +169,36 @@ export type MpRunExtras = {
   allowBarracks?: boolean;
   respawnMinigame?: boolean;
   sendLocation?: "own" | "enemy";
+  relicDrop?: import("../meta/creativeOptions").RelicDropMode;
+  enemyProjectileDmgMul?: number;
+  enemyCollisionDmgMul?: number;
+  playerDmgLmbMul?: number;
+  playerDmgRmbMul?: number;
+  playerDmgMmbMul?: number;
+  wallBounciness?: number;
+  playerSpeedMul?: number;
+  playerSizeMul?: number;
+  enemySizeMul?: number;
+  critLottery?: import("../meta/creativeOptions").CritLotteryMode;
+  enemyMutation?: import("../meta/creativeOptions").EnemyMutationMode;
+  randomizeUtilityWave?: boolean;
+  doubleAllProjectiles?: boolean;
+  immuneToProjectiles?: boolean;
+  randomizeHeroWave?: boolean;
+  randomizeMapWave?: boolean;
+  artifactDamageDoubled?: boolean;
+  artifactsFree?: boolean;
+  itemsFree?: boolean;
+  infiniteRerolls?: boolean;
+  thornsAura?: boolean;
+  bloodTax?: boolean;
+  echoBarrage?: boolean;
+  pacifistPays?: boolean;
+  berserkerEdge?: boolean;
+  slipNSlide?: boolean;
+  vampiricCreeps?: boolean;
+  corpseExplosion?: boolean;
+  bounceHouse?: boolean;
 };
 
 export type NetMode = "host" | "client" | null;
@@ -157,6 +218,7 @@ export type CombatIntent = {
   shopSlot: number | null;
   chooseRelic: RelicId | null;
   skipRelic: boolean;
+  skipLevel: boolean;
   chooseLevel: LevelPassiveId | null;
   chooseUtility: import("../data/utilities").UtilityId | null;
   chooseCurse: import("../data/curses").CurseId | null;
@@ -478,6 +540,7 @@ export function emptyIntent(): CombatIntent {
     shopSlot: null,
     chooseRelic: null,
     skipRelic: false,
+    skipLevel: false,
     chooseLevel: null,
     chooseUtility: null,
     chooseCurse: null,

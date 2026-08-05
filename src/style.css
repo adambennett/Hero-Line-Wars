@@ -1,3 +1,33 @@
+/* Themed scrollbars — match steel/blue panel chrome */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a5580 #121a2c;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #0e1624;
+  border-radius: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #3d5e90, #2a4268);
+  border-radius: 8px;
+  border: 2px solid #0e1624;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #5a82bc, #3a5580);
+}
+
+*::-webkit-scrollbar-corner {
+  background: #0e1624;
+}
+
 :root {
   /* Design tokens — dark steel / amber-teal lane-wars palette */
   --hlw-bg: #0b1020;
@@ -459,25 +489,99 @@ body,
   z-index: 5;
 }
 
-#hud-respawn {
+/* Centered stack: timer on top, precision minigame bar directly under it. */
+#hud-respawn-stack {
   position: absolute;
   top: 46%;
   left: 50%;
   transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  pointer-events: none;
+  z-index: 6;
+}
+
+#hud-respawn-stack.hidden {
+  display: none;
+}
+
+#hud-respawn {
+  position: static;
   padding: 12px 22px;
   border-radius: 10px;
   border: 1px solid #5a3040;
-  background: #1a1018cc;
+  background: #1a1018ee;
   color: #ffb0b0;
   font-size: 20px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-shadow: 0 2px 6px #000a;
   pointer-events: none;
+  white-space: nowrap;
 }
 
 #hud-respawn.hidden {
   display: none;
+}
+
+#hud-respawn-minigame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(440px, 72vw);
+  opacity: 1;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.55));
+}
+
+#hud-respawn-minigame.hidden {
+  display: none;
+}
+
+.respawn-mg-track {
+  position: relative;
+  width: 100%;
+  height: 36px;
+  border-radius: 8px;
+  border: 2px solid #7a9ad0;
+  background: #0c1424f5;
+  box-shadow: inset 0 0 0 1px #1a2840, 0 0 0 3px #0a1018cc;
+  overflow: hidden;
+}
+
+.respawn-mg-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #3d9a6a;
+  opacity: 0.92;
+}
+
+.respawn-mg-track.miss .respawn-mg-zone {
+  background: #ff6b6b;
+}
+
+.respawn-mg-cursor {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 5px;
+  margin-left: -2.5px;
+  border-radius: 2px;
+  background: #f0f4fc;
+  box-shadow: 0 0 8px #9ec4ffff;
+}
+
+.respawn-mg-hint {
+  font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #d0dcf0;
+  text-shadow: 0 2px 6px #000c;
 }
 
 #lane-chrome {
@@ -768,8 +872,33 @@ body,
   background: #1e3048;
 }
 
-#relic-skip {
+#relic-skip,
+#draft-reroll {
+  margin-top: 0;
+}
+
+.draft-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
   margin-top: 14px;
+}
+
+.draft-actions.hidden {
+  display: none;
+}
+
+.draft-action-btn {
+  width: 100%;
+  min-height: 2.6rem;
+}
+
+.draft-blurb:empty {
+  display: none;
+}
+
+.relic-draft-card > p.draft-blurb:empty {
+  margin: 0;
 }
 
 #tooltip {
@@ -1642,9 +1771,10 @@ select.menu-input option {
   align-items: center;
   margin-left: auto;
   margin-right: auto;
-  padding: 28px clamp(16px, 2.5vw, 40px) 36px;
+  padding: 28px clamp(12px, 1.8vw, 28px) 36px;
   font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
-  width: min(var(--hlw-shell-xl), 98vw);
+  /* A touch wider than default xl so four Workshop chips stay thin, full-label. */
+  width: min(calc(var(--hlw-shell-xl) + 96px), 99vw);
   max-width: 100%;
   overflow-x: hidden;
   box-sizing: border-box;
@@ -1822,14 +1952,16 @@ select.menu-input option {
 }
 
 /* Main menu deck: Play banner row, then three group panels side by side,
-   then a slim system row. No single-column stacks on wide screens. */
+   then a slim system row. Workshop is wider so four thin chips fit
+   "Game Type Editor" without ellipsis. */
 .main-menu-grid {
   width: 100%;
   max-width: 100%;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.95rem 1.15rem;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.4fr) minmax(0, 0.92fr);
+  gap: 0.95rem 1rem;
   box-sizing: border-box;
+  align-items: start;
 }
 
 .main-group {
@@ -1893,28 +2025,43 @@ select.menu-input option {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-/* Same short landscape chips in Progress / Workshop / Library */
+/* Thin single-row chips like Progress / Library (Workshop is 4-across).
+   overflow:hidden clips shine; min-width:0 prevents grid blowout. */
 .main-group.progress .menu-btn,
 .main-group.library .menu-btn,
 .main-group.workshop .menu-btn {
-  min-height: 2.55rem;
-  max-height: 2.55rem;
-  padding: 0.45rem 0.7rem;
-  font-size: 0.98rem;
+  min-height: 2.4rem;
+  max-height: 2.4rem;
+  height: 2.4rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.86rem;
   display: flex;
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .main-group.progress .menu-btn .btn-label,
 .main-group.library .menu-btn .btn-label,
 .main-group.workshop .menu-btn .btn-label {
-  font-size: 0.98rem;
+  font-size: 0.86rem;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   max-width: 100%;
+  letter-spacing: 0.01em;
+}
+
+/* Disable letter-spacing grow so "Game Type Editor" never needs ellipsis on hover */
+.main-group.progress .shine-btn:hover:not(:disabled) .btn-label,
+.main-group.library .shine-btn:hover:not(:disabled) .btn-label,
+.main-group.workshop .shine-btn:hover:not(:disabled) .btn-label {
+  animation: none;
+  letter-spacing: 0.01em;
 }
 
 .menu-btn.play-card {
@@ -4214,11 +4361,50 @@ button.setting-row.setting-nav span:first-child {
   box-sizing: border-box;
 }
 
+/* Hero Editor: use almost the full viewport — no idle side gutters. */
+.menu-shell.workshop-shell.hero-editor-shell {
+  max-width: min(98vw, 2560px);
+  width: 100%;
+  padding-left: clamp(10px, 1.2vw, 22px);
+  padding-right: clamp(10px, 1.2vw, 22px);
+  overflow: auto;
+}
+
 .menu-shell.workshop-shell > .menu-header.compact {
   width: 100%;
   max-width: none;
   flex-shrink: 0;
   margin-bottom: 10px;
+}
+
+/* Header row: back | titles | Basic/Advanced — saves vertical space */
+.menu-shell.hero-editor-shell > .menu-header.he-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  text-align: left;
+  width: 100%;
+  max-width: none;
+  margin-bottom: 0.55rem;
+}
+
+.menu-shell.hero-editor-shell .he-header-titles {
+  min-width: 0;
+  text-align: center;
+}
+
+.menu-shell.hero-editor-shell .he-header-titles .menu-title {
+  margin: 0;
+}
+
+.menu-shell.hero-editor-shell .he-header-titles .menu-lead {
+  margin: 0.15rem 0 0;
+}
+
+.menu-shell.hero-editor-shell .he-mode-toggle {
+  justify-self: end;
+  margin: 0;
 }
 
 .workshop-layout {
@@ -4234,8 +4420,67 @@ button.setting-row.setting-nav span:first-child {
 }
 
 .workshop-layout.hero-editor {
-  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem 0.85rem;
+  align-items: stretch;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* Compact mode switch — never a grid column (that stretched buttons full height). */
+.he-mode-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.he-mode-toggle .menu-btn {
+  width: auto;
+  min-width: 6.75rem;
+  min-height: 2.15rem;
+  max-height: 2.15rem;
+  padding: 0.35rem 0.9rem;
+  flex: 0 0 auto;
+}
+
+.workshop-layout.hero-editor .workshop-form-cols {
+  /* Size to the tallest form column — never clip/overlap Kit summary. */
+  flex: 0 0 auto;
+  min-height: min-content;
+  height: auto;
+  max-height: none;
+  align-items: stretch;
+  align-content: start;
+}
+
+.workshop-layout.hero-editor .workshop-kit-preview,
+.workshop-layout.hero-editor .workshop-footer-bar {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 0;
+}
+
+/* Advanced: Identity | Kit | Combat | Text — spread across the wide shell */
+.workshop-form-cols.he-advanced-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  height: auto;
+}
+
+@media (max-width: 1400px) {
+  .workshop-form-cols.he-advanced-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workshop-form-cols.he-advanced-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .workshop-form-cols {
@@ -4258,6 +4503,47 @@ button.setting-row.setting-nav span:first-child {
   max-height: 100%;
   overflow: auto;
   min-height: 0;
+}
+
+/* Hero Editor panels grow with content — no nested scroll columns,
+   and the form row must expand fully so nothing paints over Kit summary. */
+.menu-shell.hero-editor-shell .workshop-form-cols {
+  height: auto;
+  min-height: min-content;
+  flex: 0 0 auto;
+}
+
+.menu-shell.hero-editor-shell .workshop-form-col {
+  max-height: none;
+  overflow: visible;
+  height: auto;
+  min-height: 0;
+  position: relative;
+  z-index: 0;
+}
+
+.menu-shell.hero-editor-shell .workshop-kit-preview {
+  display: grid;
+  grid-template-columns: auto repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.4rem 0.75rem;
+  align-items: stretch;
+  max-height: none;
+  overflow: visible;
+}
+
+.menu-shell.hero-editor-shell .workshop-kit-preview h2 {
+  grid-column: 1 / -1;
+  margin: 0 0 0.15rem;
+}
+
+.menu-shell.hero-editor-shell .workshop-kit-preview .inv-row {
+  margin: 0;
+  min-width: 0;
+}
+
+.menu-shell.hero-editor-shell .workshop-footer-bar {
+  max-height: none;
+  overflow: visible;
 }
 
 .workshop-form-col h3 {
@@ -4486,10 +4772,6 @@ button.setting-row.setting-nav span:first-child {
 }
 
 @media (max-width: 1100px) {
-  .workshop-layout.hero-editor {
-    grid-template-columns: 1fr;
-  }
-
   .workshop-form-cols {
     grid-template-columns: 1fr;
   }
@@ -4500,9 +4782,12 @@ button.setting-row.setting-nav span:first-child {
     overflow: auto;
   }
 
-  .workshop-layout,
-  .workshop-layout.hero-editor {
+  .workshop-layout {
     grid-template-columns: 1fr;
+    flex: none;
+  }
+
+  .workshop-layout.hero-editor {
     flex: none;
   }
 

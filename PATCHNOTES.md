@@ -97,6 +97,58 @@ A large content and systems update:
   **0 ally / 1 enemy**.
 - Lobbies pick a game type first; deeper rules live in the editor.
 
+### Creative run options (Game Types)
+- Many new creative dropdowns and toggles: relic drop timing, enemy/player damage
+  × ladders (Primary/Mobility/Ultimate + Instant Kill), wall bounciness, player/enemy size & speed,
+  expanded enemy speed list, Enemy density up to **50×**, Respawn **0×** (always instant), chest open
+  **Instant** / despawn **Never**, Crit Lottery, Enemy Mutation, plus spicy
+  toggles (double projectiles, immune projectiles, free items/artifacts,
+  randomize hero/map/utility each wave, thorns, blood tax, corpse explosion,
+  and more). Wired through combat, shops, waves, and MP lobby extras.
+
+### New built-in content
+- **Maps:** Grandma's House — tight square deathbox with four Artifact slots.
+  Excluded from **Random** map rolls (and Fiesta map scramble) unless a game type
+  filter only allows it; still pickable by name in other modes.
+- **Game types (order):** Outlast, Race, Survival, Endless, Brutal,
+  Fiesta Outlast, Fiesta Race, Fiesta Survival, Giant Explosive Race,
+  Grandma's House (map locked; density 5×; chaos multipliers).
+
+### Workshop safety
+- Map / Hero / Game Type editors require a confirm dialog before deleting custom
+  library content.
+
+### Draft UI
+- Level and relic choose-3: **Skip** and **Reroll** share one bottom row
+  (Skip left, Reroll right). Reroll label is `Reroll (X)` or `No reroll tokens`.
+- Level-up title is only **Level Up! (Lv X)** — no reroll count or “choose
+  passive” subtitle.
+- Base branch title is **Base Upgrade (Lv X)** (subtitle removed).
+
+### Menus & polish
+- Main-menu Workshop / Progress / Library chips keep shine clipped per button
+  (no cross-button sweep) and fit four Workshop labels without overlap.
+- Player damage run options labeled **Primary / Mobility / Ultimate** (not mouse
+  buttons — remaps apply).
+- Theme-styled scrollbars (dark blue track / steel thumb) instead of OS white.
+- Survival built-in description: `Ten lives, invincible bases, unlimited waves.`
+- Game Type Editor no longer duplicates the description blurb under the type chips.
+- Respawn minigame is a large HTML bar stacked directly under the centered
+  respawn timer (uses remapped Utility key for the shave prompt).
+- Hero Editor **Basic / Advanced** as compact mode chips (not stretched column
+  buttons); Advanced exposes deep combat knobs (spread, projectile extras,
+  ability power, pierce/bounce, ability text, wider stat clamps).
+
+### Fixes
+- **Enemy size** run option now applies on every spawn. It was only taking effect
+  when Enemy Mutation was also set, so **Giant Explosive Race** shipped with
+  normal-sized creeps.
+- Heroes no longer get pinned inside a wall they spawn or respawn inside — that
+  obstacle stops colliding until you step clear of it (giant heroes, tight maps).
+- Respawning keeps your size multiplier instead of snapping back to base radius.
+- Player/enemy size options cap at **5×**; the old 10× and 20× entries are gone
+  (saved game types are clamped on load).
+
 ## 2026-08-04 · v0.0.5
 
 ### Bug Fix

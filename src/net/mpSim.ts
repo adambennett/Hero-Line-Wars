@@ -9,6 +9,7 @@ import {
   laneOutOfRunLives,
   resetWaveLives,
   skipRelic,
+  skipLevelUp,
   waveVictoryReached,
   type GameState,
   type HeroRuntime,
@@ -46,8 +47,9 @@ import { applyWaveRider, tryPhoenixRevive } from "../systems/relics";
 import { pickEnemyKind } from "../data/enemies";
 import { MAP_W, WAVE_SCALE } from "../data/constants";
 import {
-  circleHitsObstacle,
   blockedByObstacle,
+  blockedByNewObstacle,
+  overlappedObstacles,
   mapRespawn,
   nearAnyShop,
   pointInPlayable,
@@ -105,26 +107,22 @@ import { scriptedIntent, thinkNeural, type NeuralLaneAi } from "../ai/runtime";
 function moveHeroObj(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
   const map = state.map;
+  // Soft unstick: walls we already overlap don't block until we're clear (parity with SP moveHero).
+  const stuck = overlappedObstacles(map, hero.x, hero.y, r);
   // Slide along shaped playable bounds instead of snapping (parity with SP moveHero).
   const resolved = resolveMovePlayable(map, hero.x, hero.y, nx, ny, r);
   const x = resolved.x;
   const y = resolved.y;
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
+  if (!blockedByNewObstacle(map, x, y, r, stuck)) {
     hero.x = x;
     hero.y = y;
     return;
   }
-  if (
-    pointInPlayable(map, x, hero.y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))
-  ) {
+  if (pointInPlayable(map, x, hero.y, r) && !blockedByNewObstacle(map, x, hero.y, r, stuck)) {
     hero.x = x;
     return;
   }
-  if (
-    pointInPlayable(map, hero.x, y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))
-  ) {
+  if (pointInPlayable(map, hero.x, y, r) && !blockedByNewObstacle(map, hero.x, y, r, stuck)) {
     hero.y = y;
   }
 }
@@ -244,6 +242,7 @@ function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
   }
   if (intent.chooseRelic) chooseRelic(state, intent.chooseRelic);
   if (intent.skipRelic) skipRelic(state);
+  if (intent.skipLevel) skipLevelUp(state);
   if (intent.chooseLevel) chooseLevelUp(state, intent.chooseLevel);
   if (intent.chooseUtility) chooseUtility(state, intent.chooseUtility);
   if (intent.chooseCurse) chooseCurse(state, intent.chooseCurse);
@@ -871,6 +870,7 @@ export function gatherLocalIntent(
     shopSlot,
     chooseRelic: null,
     skipRelic: false,
+    skipLevel: false,
     chooseLevel: null,
     chooseUtility: null,
     chooseCurse: null,

@@ -158,7 +158,8 @@ export function updateTurrets(state: GameState, dt: number): void {
     (hasRelic(state, "architects_favor") ? 1.25 : 1) *
     (state.baseBranchMods?.artifactDamageMul ?? 1) *
     (state.utilityTurretBoost > 0 ? 1.4 : 1) *
-    forgeMul;
+    forgeMul *
+    (state.artifactDamageDoubled ? 2 : 1);
   const cdMul =
     (hasRelic(state, "turret_overclock") ? 0.7 : 1) * (state.baseBranchMods?.artifactFireMul ?? 1);
 

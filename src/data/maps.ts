@@ -34,7 +34,8 @@ export type MapId =
   | "orb_foundry"
   | "mazing"
   | "hex_bowl"
-  | "capsule_coast";
+  | "capsule_coast"
+  | "grandma_house";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -846,7 +847,35 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 980, y: MID_Y, radius: 42, damageBonus: 0.14 },
     ],
   }),
+  grandma_house: finalizeMap({
+    id: "grandma_house",
+    name: "Grandma's House",
+    blurb: "Box of death. Good luck.",
+    shape: "square",
+    laneTop: 20,
+    laneBottom: 680,
+    laneLeft: 120,
+    laneRight: 1480,
+    base: { x: 516, y: 64, radius: 46, maxHp: 120 },
+    shops: [{ x: 511, y: 641, radius: 38, interactRange: 58 }],
+    respawn: { x: 1093, y: 48, radius: 28 },
+    spawner: { x: 1101, y: 647, radius: 30 },
+    highGrounds: [],
+    obstacles: [],
+    turretSlots: [
+      { x: 652, y: 376 },
+      { x: 906, y: 371 },
+      { x: 788, y: 257 },
+      { x: 787, y: 484 },
+    ],
+  }),
 };
+
+/**
+ * Special maps that never win when the lobby map pick is "Random".
+ * Explicit selection or a gametype filter that only allows them can still play them.
+ */
+export const MAPS_EXCLUDED_FROM_RANDOM: readonly string[] = ["grandma_house"];
 
 export const MAP_LIST: MapDef[] = Object.values(MAPS);
 
@@ -857,14 +886,46 @@ export function getMap(id: MapId | string): MapDef {
   return MAPS.classic;
 }
 
-export function pickRandomMap(): MapId {
-  const list = MAP_LIST.filter((m) => isMapUnlocked(m.id as MapId));
-  const pool = list.length ? list : MAP_LIST;
+function mapPoolForRandom(disabled: Set<string>): MapDef[] {
+  const unlocked = MAP_LIST.filter(
+    (m) => isMapUnlocked(m.id as MapId) && !disabled.has(String(m.id)),
+  );
+  if (unlocked.length) return unlocked;
+  return MAP_LIST.filter((m) => !disabled.has(String(m.id)));
+}
+
+/** Random unlocked map; respects optional `disabledMaps` (game-type content filter). */
+export function pickRandomMap(disabledMaps?: readonly string[] | null): MapId {
+  const contentDisabled = new Set(disabledMaps ?? []);
+  // Prefer excluding special maps from pure random — fall back if that empties the pool
+  // (e.g. Grandma's House gametype with only that map allowed).
+  const withDefaults = new Set(contentDisabled);
+  for (const id of MAPS_EXCLUDED_FROM_RANDOM) withDefaults.add(id);
+  let pool = mapPoolForRandom(withDefaults);
+  if (!pool.length) pool = mapPoolForRandom(contentDisabled);
+  if (!pool.length) pool = MAP_LIST.slice();
   return pool[Math.floor(Math.random() * pool.length)]!.id as MapId;
 }
 
-export function resolveMapChoice(choice: MapId | string | "random"): MapId | string {
-  return choice === "random" ? pickRandomMap() : choice;
+/**
+ * Resolve lobby map choice. When a game type has map content filters
+ * (non-empty disabled list), only remaining built-in maps are eligible —
+ * custom maps and disabled built-ins fall back to a random allowed map.
+ * "Random" never rolls maps in MAPS_EXCLUDED_FROM_RANDOM unless filters leave no other option.
+ */
+export function resolveMapChoice(
+  choice: MapId | string | "random",
+  disabledMaps?: readonly string[] | null,
+): MapId | string {
+  const disabled = disabledMaps ?? [];
+  const strict = disabled.length > 0;
+  if (choice === "random") return pickRandomMap(disabled);
+  if (strict) {
+    if (disabled.includes(String(choice)) || !MAPS[choice as MapId]) {
+      return pickRandomMap(disabled);
+    }
+  }
+  return choice;
 }
 
 /** Axis-aligned obstacle hit test (circle vs rect). */
@@ -906,6 +967,32 @@ export function blockedByObstacle(
   radius: number,
 ): boolean {
   return map.obstacles.some((o) => circleHitsObstacle(x, y, radius, o));
+}
+
+/**
+ * Obstacles a circle is already wedged inside (oversized units, spawn pads under walls).
+ * Collision with these is ignored until the unit steps clear — see `blockedByNewObstacle`.
+ */
+export function overlappedObstacles(
+  map: MapDef,
+  x: number,
+  y: number,
+  radius: number,
+): Obstacle[] {
+  return map.obstacles.filter((o) => circleHitsObstacle(x, y, radius, o));
+}
+
+/** Like `blockedByObstacle`, but obstacles the unit is currently stuck in don't block. */
+export function blockedByNewObstacle(
+  map: MapDef,
+  x: number,
+  y: number,
+  radius: number,
+  ignore: readonly Obstacle[],
+): boolean {
+  return map.obstacles.some(
+    (o) => !ignore.includes(o) && circleHitsObstacle(x, y, radius, o),
+  );
 }
 
 /**

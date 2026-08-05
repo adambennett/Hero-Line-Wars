@@ -1,7 +1,14 @@
 /** Named run configurations shared by Singleplayer, Multiplayer, and Campaign. */
 
 import type { RunOptions } from "../game/state";
+import { MAP_LIST } from "../data/maps";
 import { RUN_OPTION_DEFAULTS } from "../ui/runOptionsMeta";
+import {
+  clampUnitSize,
+  type CritLotteryMode,
+  type EnemyMutationMode,
+  type RelicDropMode,
+} from "./creativeOptions";
 import {
   deriveDisableFlags,
   emptyContentFilters,
@@ -61,12 +68,81 @@ export type GameTypeOptions = {
   respawnMinigame: boolean;
   artifactPlacement: ArtifactPlacementMode;
   allowBarracks: boolean;
+  /** Creative extras (v0.0.6). */
+  relicDrop: RelicDropMode;
+  enemyProjectileDmgMul: number;
+  enemyCollisionDmgMul: number;
+  playerDmgLmbMul: number;
+  playerDmgRmbMul: number;
+  playerDmgMmbMul: number;
+  wallBounciness: number;
+  playerSpeedMul: number;
+  playerSizeMul: number;
+  enemySizeMul: number;
+  critLottery: CritLotteryMode;
+  enemyMutation: EnemyMutationMode;
+  randomizeUtilityWave: boolean;
+  doubleAllProjectiles: boolean;
+  immuneToProjectiles: boolean;
+  randomizeHeroWave: boolean;
+  randomizeMapWave: boolean;
+  artifactDamageDoubled: boolean;
+  artifactsFree: boolean;
+  itemsFree: boolean;
+  infiniteRerolls: boolean;
+  thornsAura: boolean;
+  bloodTax: boolean;
+  echoBarrage: boolean;
+  pacifistPays: boolean;
+  berserkerEdge: boolean;
+  slipNSlide: boolean;
+  vampiricCreeps: boolean;
+  corpseExplosion: boolean;
+  bounceHouse: boolean;
   /**
    * Content disabled lists per category. Empty categories = full pool.
-   * Built-ins always use empty filters (everything enabled).
+   * Some built-ins (e.g. Grandma's House) author map locks via filters.
    */
   contentFilters: GameTypeContentFilters;
 };
+
+const CREATIVE_BOOL_KEYS = [
+  "randomizeUtilityWave",
+  "doubleAllProjectiles",
+  "immuneToProjectiles",
+  "randomizeHeroWave",
+  "randomizeMapWave",
+  "artifactDamageDoubled",
+  "artifactsFree",
+  "itemsFree",
+  "infiniteRerolls",
+  "thornsAura",
+  "bloodTax",
+  "echoBarrage",
+  "pacifistPays",
+  "berserkerEdge",
+  "slipNSlide",
+  "vampiricCreeps",
+  "corpseExplosion",
+  "bounceHouse",
+] as const;
+
+const CREATIVE_NUM_KEYS = [
+  "enemyProjectileDmgMul",
+  "enemyCollisionDmgMul",
+  "playerDmgLmbMul",
+  "playerDmgRmbMul",
+  "playerDmgMmbMul",
+  "wallBounciness",
+  "playerSpeedMul",
+  "playerSizeMul",
+  "enemySizeMul",
+] as const;
+
+const SIZE_MUL_KEYS = new Set<(typeof CREATIVE_NUM_KEYS)[number]>([
+  "playerSizeMul",
+  "enemySizeMul",
+]);
 
 export type GameTypeDef = {
   id: string;
@@ -87,7 +163,7 @@ export const GAME_TYPE_BUNDLE_FORMAT = "hlw-game-type-v1";
 const DESCRIPTIONS = {
   race: "Classic race to the wave goal or base kill.",
   outlast: "Same as Race, but waves never end. Survive until a base falls.",
-  survival: "Ten lives, invincible bases, unlimited waves. Sends go to the enemy lane.",
+  survival: "Ten lives, invincible bases, unlimited waves.",
 } as const;
 
 export function defaultGameTypeOptions(): GameTypeOptions {
@@ -137,11 +213,41 @@ export function defaultGameTypeOptions(): GameTypeOptions {
     respawnMinigame: d.respawnMinigame,
     artifactPlacement: d.artifactPlacement,
     allowBarracks: d.allowBarracks,
+    relicDrop: d.relicDrop,
+    enemyProjectileDmgMul: d.enemyProjectileDmgMul,
+    enemyCollisionDmgMul: d.enemyCollisionDmgMul,
+    playerDmgLmbMul: d.playerDmgLmbMul,
+    playerDmgRmbMul: d.playerDmgRmbMul,
+    playerDmgMmbMul: d.playerDmgMmbMul,
+    wallBounciness: d.wallBounciness,
+    playerSpeedMul: d.playerSpeedMul,
+    playerSizeMul: d.playerSizeMul,
+    enemySizeMul: d.enemySizeMul,
+    critLottery: d.critLottery,
+    enemyMutation: d.enemyMutation,
+    randomizeUtilityWave: d.randomizeUtilityWave,
+    doubleAllProjectiles: d.doubleAllProjectiles,
+    immuneToProjectiles: d.immuneToProjectiles,
+    randomizeHeroWave: d.randomizeHeroWave,
+    randomizeMapWave: d.randomizeMapWave,
+    artifactDamageDoubled: d.artifactDamageDoubled,
+    artifactsFree: d.artifactsFree,
+    itemsFree: d.itemsFree,
+    infiniteRerolls: d.infiniteRerolls,
+    thornsAura: d.thornsAura,
+    bloodTax: d.bloodTax,
+    echoBarrage: d.echoBarrage,
+    pacifistPays: d.pacifistPays,
+    berserkerEdge: d.berserkerEdge,
+    slipNSlide: d.slipNSlide,
+    vampiricCreeps: d.vampiricCreeps,
+    corpseExplosion: d.corpseExplosion,
+    bounceHouse: d.bounceHouse,
     contentFilters: emptyContentFilters(),
   };
 }
 
-export const BUILTIN_GAME_TYPES: GameTypeDef[] = [
+export const CORE_BUILTIN_GAME_TYPES: GameTypeDef[] = [
   {
     id: "outlast",
     name: "Outlast",
@@ -189,6 +295,9 @@ export const BUILTIN_GAME_TYPES: GameTypeDef[] = [
     },
   },
 ];
+
+/** Filled after clampOptions — full built-in list. */
+export let BUILTIN_GAME_TYPES: GameTypeDef[] = CORE_BUILTIN_GAME_TYPES;
 
 function clampOptions(raw: Partial<GameTypeOptions> | undefined): GameTypeOptions {
   const base = defaultGameTypeOptions();
@@ -253,11 +362,261 @@ function clampOptions(raw: Partial<GameTypeOptions> | undefined): GameTypeOption
     respawnMinigame: bool(raw.respawnMinigame, base.respawnMinigame),
     artifactPlacement: place,
     allowBarracks: bool(raw.allowBarracks, base.allowBarracks),
+    relicDrop: clampRelicDrop(raw.relicDrop, base.relicDrop),
+    critLottery: clampCrit(raw.critLottery, base.critLottery),
+    enemyMutation: clampMutation(raw.enemyMutation, base.enemyMutation),
+    ...Object.fromEntries(
+      CREATIVE_NUM_KEYS.map((k) => [
+        k,
+        SIZE_MUL_KEYS.has(k) ? clampUnitSize(num(raw[k], base[k]), base[k]) : num(raw[k], base[k]),
+      ]),
+    ),
+    ...Object.fromEntries(
+      CREATIVE_BOOL_KEYS.map((k) => [k, bool(raw[k], base[k])]),
+    ),
     contentFilters: sanitizeContentFilters(
       (raw as { contentFilters?: unknown }).contentFilters ?? base.contentFilters,
     ),
+  } as GameTypeOptions;
+}
+
+function clampRelicDrop(v: unknown, fb: RelicDropMode): RelicDropMode {
+  const ok: RelicDropMode[] = [
+    "elites_bosses",
+    "bosses_only",
+    "elites_only",
+    "every_wave",
+    "never",
+  ];
+  return typeof v === "string" && (ok as string[]).includes(v) ? (v as RelicDropMode) : fb;
+}
+
+function clampCrit(v: unknown, fb: CritLotteryMode): CritLotteryMode {
+  const ok: CritLotteryMode[] = ["off", "ten", "twentyfive", "fifty", "always"];
+  return typeof v === "string" && (ok as string[]).includes(v) ? (v as CritLotteryMode) : fb;
+}
+
+function clampMutation(v: unknown, fb: EnemyMutationMode): EnemyMutationMode {
+  const ok: EnemyMutationMode[] = ["none", "speedy", "tanky", "glass", "mixed"];
+  return typeof v === "string" && (ok as string[]).includes(v) ? (v as EnemyMutationMode) : fb;
+}
+
+/** Disable every map except `keepId` (content filters store *disabled* ids). */
+function filtersOnlyMap(keepId: string): GameTypeContentFilters {
+  return {
+    ...emptyContentFilters(),
+    maps: MAP_LIST.map((m) => String(m.id)).filter((id) => id !== keepId),
   };
 }
+
+function builtinType(
+  id: string,
+  name: string,
+  description: string,
+  options: Partial<GameTypeOptions>,
+): GameTypeDef {
+  return {
+    id,
+    name,
+    description,
+    builtin: true,
+    options: clampOptions(options),
+  };
+}
+
+/**
+ * Named presets after Outlast / Race / Survival.
+ * Order: Endless → Brutal → Fiesta Outlast → Fiesta Race → Fiesta Survival →
+ * Giant Explosive Race → Grandma's House.
+ * (Grandma's House is also excluded from Random map rolls — see maps.pickRandomMap.)
+ */
+const EXTRA_BUILTIN_GAME_TYPES: GameTypeDef[] = [
+  builtinType(
+    "endless",
+    "Endless",
+    "PvE endless survival. Sends go to your own lane. Survive as long as you can.",
+    {
+      maxTurrets: -1,
+      wavesToWin: 0,
+      sendLocation: "own",
+      laneClearSpeedPct: 0,
+      artifactPlacement: "free",
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "brutal",
+    "Brutal",
+    "All difficulty settings are ramped up considerably. 5 lives per run until you lose, with only 1 life per wave. Survive 25 waves to win. Friendly fire enabled.",
+    {
+      maxTurrets: -1,
+      startingGold: 0,
+      wavesToWin: 25,
+      livesPerWave: 1,
+      livesPerRun: 5,
+      utilityDraftLevel: 10,
+      friendlyFire: true,
+      enemyDensityMul: 2,
+      enemyHpMul: 2,
+      enemySpeedMul: 1.5,
+      incomeMul: 0.75,
+      respawnMul: 1.25,
+      levelDraftSize: 2,
+      relicDraftSize: 2,
+      allyAi: 0.7,
+      suddenDeathBaseHp: 60,
+      fogThicknessPct: 100,
+      fogVisionRadius: 160,
+      waveBreakSec: 15,
+      doubleElites: true,
+      enemyBaseInvincible: true,
+      laneClearSpeedPct: 200,
+      artifactPlacement: "free",
+      relicDrop: "bosses_only",
+      enemyProjectileDmgMul: 1.5,
+      enemyCollisionDmgMul: 3,
+      playerDmgLmbMul: 0.5,
+      playerSpeedMul: 0.75,
+      playerSizeMul: 1.5,
+      enemySizeMul: 0.75,
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "fiesta_outlast",
+    "Fiesta Outlast",
+    "Many randomization settings are enabled. Otherwise, it's the standard Outlast mode.",
+    {
+      maxTurrets: -1,
+      wavesToWin: 0,
+      chestDespawnSec: 20,
+      chestSpawnChance: 0.12,
+      relicDraftSize: 2,
+      waveBreakSec: 5,
+      laneClearSpeedPct: 0,
+      artifactPlacement: "free",
+      relicDrop: "every_wave",
+      randomizeUtilityWave: true,
+      randomizeHeroWave: true,
+      randomizeMapWave: true,
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "fiesta_race",
+    "Fiesta Race",
+    "Many randomization settings are enabled. Otherwise, it's a standard Race mode to 15 waves.",
+    {
+      maxTurrets: -2,
+      startingGold: 45,
+      wavesToWin: 15,
+      chestDespawnSec: 20,
+      chestSpawnChance: 0.12,
+      relicDraftSize: 2,
+      waveBreakSec: 5,
+      laneClearSpeedPct: 200,
+      artifactPlacement: "free",
+      relicDrop: "every_wave",
+      randomizeUtilityWave: true,
+      randomizeHeroWave: true,
+      randomizeMapWave: true,
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "fiesta_survival",
+    "Fiesta Survival",
+    "Many randomization settings are enabled. Otherwise, it's the standard Survival mode.",
+    {
+      maxTurrets: -1,
+      wavesToWin: 0,
+      livesPerRun: 10,
+      chestDespawnSec: 20,
+      chestSpawnChance: 0.12,
+      relicDraftSize: 2,
+      waveBreakSec: 5,
+      playerBaseInvincible: true,
+      enemyBaseInvincible: true,
+      laneClearSpeedPct: 0,
+      artifactPlacement: "free",
+      relicDrop: "every_wave",
+      randomizeUtilityWave: true,
+      randomizeHeroWave: true,
+      randomizeMapWave: true,
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "giant_explosive_race",
+    "Giant Explosive Race",
+    "Race mode but with CHONK, infinite shop rerolls, and corpse explosions",
+    {
+      maxTurrets: -1,
+      wavesToWin: 10,
+      utilityDraftLevel: 10,
+      playerSizeMul: 5,
+      enemySizeMul: 5,
+      infiniteRerolls: true,
+      corpseExplosion: true,
+      laneClearSpeedPct: 0,
+      artifactPlacement: "free",
+      allowBarracks: false,
+    },
+  ),
+  builtinType(
+    "grandmas_house",
+    "Grandma's House",
+    "Duke it out in a box of death. Survive 20 waves to win.",
+    {
+      maxTurrets: -2,
+      startingGold: 1000,
+      wavesToWin: 10,
+      endless: true,
+      sendLocation: "own",
+      chestOpenMul: 1.5,
+      chestDespawnSec: 12,
+      chestSpawnChance: 0.12,
+      enemyDensityMul: 5,
+      enemySpeedMul: 10,
+      incomeMul: 2,
+      respawnMul: 0,
+      waveBreakSec: 0,
+      fogThicknessPct: 25,
+      fogVisionRadius: 60,
+      disableElites: true,
+      disableBosses: true,
+      goldRush: true,
+      laneClearSpeedPct: 0,
+      respawnMinigame: false,
+      artifactPlacement: "free",
+      relicDrop: "every_wave",
+      enemyProjectileDmgMul: -1,
+      enemyCollisionDmgMul: -1,
+      playerDmgLmbMul: -1,
+      playerDmgRmbMul: -1,
+      playerDmgMmbMul: -1,
+      wallBounciness: 50,
+      playerSpeedMul: 10,
+      playerSizeMul: 0.5,
+      enemySizeMul: 0.5,
+      critLottery: "twentyfive",
+      doubleAllProjectiles: true,
+      randomizeHeroWave: true,
+      artifactDamageDoubled: true,
+      infiniteRerolls: true,
+      thornsAura: true,
+      echoBarrage: true,
+      berserkerEdge: true,
+      slipNSlide: true,
+      corpseExplosion: true,
+      bounceHouse: true,
+      allowBarracks: false,
+      contentFilters: filtersOnlyMap("grandma_house"),
+    },
+  ),
+];
+
+BUILTIN_GAME_TYPES = [...CORE_BUILTIN_GAME_TYPES, ...EXTRA_BUILTIN_GAME_TYPES];
 
 function sanitizeDescription(raw: unknown, name: string): string {
   if (typeof raw === "string" && raw.trim()) return raw.trim().slice(0, 160);
@@ -326,14 +685,7 @@ export function normalizeGameTypeId(id: string | null | undefined): string {
 export function getGameType(id: string | null | undefined): GameTypeDef {
   const all = listGameTypes();
   const nid = normalizeGameTypeId(id);
-  const found = all.find((t) => t.id === nid) ?? all[0]!;
-  if (found.builtin) {
-    return {
-      ...found,
-      options: { ...found.options, contentFilters: emptyContentFilters() },
-    };
-  }
-  return found;
+  return all.find((t) => t.id === nid) ?? all[0]!;
 }
 
 export function loadSelectedGameTypeId(): string {
@@ -410,7 +762,72 @@ export function gameTypeToRunOptions(opts: GameTypeOptions): Partial<RunOptions>
     respawnMinigame: opts.respawnMinigame,
     artifactPlacement: opts.artifactPlacement,
     allowBarracks: opts.allowBarracks,
+    relicDrop: opts.relicDrop,
+    enemyProjectileDmgMul: opts.enemyProjectileDmgMul,
+    enemyCollisionDmgMul: opts.enemyCollisionDmgMul,
+    playerDmgLmbMul: opts.playerDmgLmbMul,
+    playerDmgRmbMul: opts.playerDmgRmbMul,
+    playerDmgMmbMul: opts.playerDmgMmbMul,
+    wallBounciness: opts.wallBounciness,
+    playerSpeedMul: opts.playerSpeedMul,
+    playerSizeMul: opts.playerSizeMul,
+    enemySizeMul: opts.enemySizeMul,
+    critLottery: opts.critLottery,
+    enemyMutation: opts.enemyMutation,
+    randomizeUtilityWave: opts.randomizeUtilityWave,
+    doubleAllProjectiles: opts.doubleAllProjectiles,
+    immuneToProjectiles: opts.immuneToProjectiles,
+    randomizeHeroWave: opts.randomizeHeroWave,
+    randomizeMapWave: opts.randomizeMapWave,
+    artifactDamageDoubled: opts.artifactDamageDoubled,
+    artifactsFree: opts.artifactsFree,
+    itemsFree: opts.itemsFree,
+    infiniteRerolls: opts.infiniteRerolls,
+    thornsAura: opts.thornsAura,
+    bloodTax: opts.bloodTax,
+    echoBarrage: opts.echoBarrage,
+    pacifistPays: opts.pacifistPays,
+    berserkerEdge: opts.berserkerEdge,
+    slipNSlide: opts.slipNSlide,
+    vampiricCreeps: opts.vampiricCreeps,
+    corpseExplosion: opts.corpseExplosion,
+    bounceHouse: opts.bounceHouse,
     contentFilters: opts.contentFilters ?? emptyContentFilters(),
+  };
+}
+
+function creativeSlice(opts: GameTypeOptions) {
+  return {
+    relicDrop: opts.relicDrop,
+    enemyProjectileDmgMul: opts.enemyProjectileDmgMul,
+    enemyCollisionDmgMul: opts.enemyCollisionDmgMul,
+    playerDmgLmbMul: opts.playerDmgLmbMul,
+    playerDmgRmbMul: opts.playerDmgRmbMul,
+    playerDmgMmbMul: opts.playerDmgMmbMul,
+    wallBounciness: opts.wallBounciness,
+    playerSpeedMul: opts.playerSpeedMul,
+    playerSizeMul: opts.playerSizeMul,
+    enemySizeMul: opts.enemySizeMul,
+    critLottery: opts.critLottery,
+    enemyMutation: opts.enemyMutation,
+    randomizeUtilityWave: opts.randomizeUtilityWave,
+    doubleAllProjectiles: opts.doubleAllProjectiles,
+    immuneToProjectiles: opts.immuneToProjectiles,
+    randomizeHeroWave: opts.randomizeHeroWave,
+    randomizeMapWave: opts.randomizeMapWave,
+    artifactDamageDoubled: opts.artifactDamageDoubled,
+    artifactsFree: opts.artifactsFree,
+    itemsFree: opts.itemsFree,
+    infiniteRerolls: opts.infiniteRerolls,
+    thornsAura: opts.thornsAura,
+    bloodTax: opts.bloodTax,
+    echoBarrage: opts.echoBarrage,
+    pacifistPays: opts.pacifistPays,
+    berserkerEdge: opts.berserkerEdge,
+    slipNSlide: opts.slipNSlide,
+    vampiricCreeps: opts.vampiricCreeps,
+    corpseExplosion: opts.corpseExplosion,
+    bounceHouse: opts.bounceHouse,
   };
 }
 
@@ -458,6 +875,7 @@ export function gameTypeToMpExtras(opts: GameTypeOptions) {
     sendLocation: opts.sendLocation,
     artifactPlacement: opts.artifactPlacement,
     allowBarracks: opts.allowBarracks,
+    ...creativeSlice(opts),
     contentFilters: opts.contentFilters ?? emptyContentFilters(),
   };
 }

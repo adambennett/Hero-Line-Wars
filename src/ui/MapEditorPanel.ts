@@ -70,7 +70,7 @@ type SelKind =
   | { k: "relay"; i: number }
   | { k: "laneEdge"; edge: "top" | "bottom" | "left" | "right" };
 
-type PendingConfirm = "reset" | "reset-lane" | "load-template" | "shape";
+type PendingConfirm = "reset" | "reset-lane" | "load-template" | "shape" | "delete";
 
 type DragMode =
   | { kind: "move"; ox: number; oy: number }
@@ -316,11 +316,17 @@ export class MapEditorPanel {
                 body: `Switching to ${shapeLabel(this.pendingShape ?? "rectangle")} resets playable bounds and may reposition required pads. Up to ${affected} placed object${affected === 1 ? "" : "s"} may be moved or removed.`,
                 confirm: "Change shape",
               }
-            : {
-                title: "Load map as template?",
-                body: "Your current draft will be replaced with a copy of the selected map. The new draft gets a fresh id — the original is unchanged.",
-                confirm: "Load template",
-              };
+            : this.pendingConfirm === "delete"
+              ? {
+                  title: "Delete custom map?",
+                  body: `Permanently remove “${escape(this.draft.name || "this map")}” from your local library. This cannot be undone (export a JSON backup first if you might want it back).`,
+                  confirm: "Delete map",
+                }
+              : {
+                  title: "Load map as template?",
+                  body: "Your current draft will be replaced with a copy of the selected map. The new draft gets a fresh id — the original is unchanged.",
+                  confirm: "Load template",
+                };
     return `
       <div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="me-confirm-title" aria-describedby="me-confirm-body">
         <div class="menu-confirm-card">
@@ -437,6 +443,10 @@ export class MapEditorPanel {
             : `Shape → ${shapeLabel(shape)}.`;
       } else if (kind === "load-template") {
         this.applyTemplate(templateKey);
+      } else if (kind === "delete") {
+        if (this.draft.id) deleteCustomMap(this.draft.id);
+        this.load(null);
+        this.status = "Deleted.";
       }
       return true;
     }
@@ -457,9 +467,11 @@ export class MapEditorPanel {
       return true;
     }
     if (action === "me-delete") {
-      if (this.draft.id) deleteCustomMap(this.draft.id);
-      this.load(null);
-      this.status = "Deleted.";
+      if (!this.draft.id || !listCustomMaps().some((m) => m.id === this.draft.id)) {
+        this.status = "Nothing saved to delete — start from a library map or save first.";
+        return true;
+      }
+      this.pendingConfirm = "delete";
       return true;
     }
     if (action === "me-del-sel") {

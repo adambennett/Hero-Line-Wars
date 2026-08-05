@@ -22,6 +22,7 @@ import { playSfx } from "./audio";
 import { heroHasPassive, heroUsesGyroKit, heroUsesVectorKit, resolveHero } from "../custom/registry";
 import { perksForState } from "./heroPerks";
 import { mitigateDamage } from "./defense";
+import { scalePlayerAbilityDamage } from "./creativeRuntime";
 
 export function highGroundAt(state: GameState, p: Vec2): HighGroundZone | null {
   for (const z of state.map.highGrounds) {
@@ -183,7 +184,8 @@ export function castPoisonDashBasic(state: GameState): boolean {
   return true;
 }
 
-export function attackDamage(state: GameState): number {
+export function attackDamage(state: GameState, slot?: "basic" | "mobility" | "ultimate"): number {
+  const resolvedSlot = slot ?? state.abilityDamageSlot ?? "basic";
   const hero = resolveHero(state.hero.heroId);
   const perks = perksForState(state);
   let base = hero.attackDamage + state.hero.damageBonus + (state.baseBranchMods?.damageFlat ?? 0);
@@ -229,7 +231,12 @@ export function attackDamage(state: GameState): number {
   if (state.hero.luck > 0 && Math.random() < state.hero.luck) {
     dmg *= 1.75;
   }
-  return dmg;
+  // Custom-hero advanced ability power when used on non-basic
+  if (resolvedSlot !== "basic") {
+    const ap = resolveHero(state.hero.heroId).abilityPowerMul;
+    if (ap && ap !== 1) dmg *= ap;
+  }
+  return scalePlayerAbilityDamage(state, dmg, resolvedSlot);
 }
 
 export function attackCooldown(state: GameState): number {
@@ -267,7 +274,22 @@ export function pushProjectile(
   state: GameState,
   partial: Omit<Projectile, "alive"> & { alive?: boolean },
 ): void {
-  state.projectiles.push({ alive: true, ...partial });
+  const first: Projectile = { alive: true, ...partial };
+  if (state.bounceHouse && !first.hostile && first.fromBasic) {
+    first.bouncesLeft = Math.max(first.bouncesLeft ?? 0, 1);
+  }
+  state.projectiles.push(first);
+  if (state.doubleAllProjectiles) {
+    const ang = Math.atan2(first.vy, first.vx) + 0.12;
+    const spd = Math.hypot(first.vx, first.vy) || 400;
+    state.projectiles.push({
+      ...first,
+      x: first.x + Math.cos(ang + Math.PI / 2) * 6,
+      y: first.y + Math.sin(ang + Math.PI / 2) * 6,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd,
+    });
+  }
 }
 
 export function addFx(
@@ -319,10 +341,18 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
     state.utilityBountyKills -= 1;
   }
   if (state.goldRush) gold *= 2;
+  if (state.pacifistPays) gold = 0;
   state.gold += gold;
   state.goldFromKills += gold;
   state.peakGold = Math.max(state.peakGold, state.gold);
   grantKillXp(state, e);
+  if (state.bloodTax && state.hero.alive) {
+    applyPlayerDamage(state, 2);
+  }
+  if (state.corpseExplosion) {
+    damageEnemiesInRadius(state, e.x, e.y, 48, attackDamage(state) * 0.45);
+    addFx(state, e.x, e.y, 48, "#ff804088", 0.3);
+  }
   if (hasRelic(state, "blood_tithe")) {
     state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 4);
   }
@@ -522,8 +552,13 @@ function fireStyle(
   angle: number,
   dmg: number,
   bounce: number,
+  adv?: { extraCount?: number; spreadDeg?: number; pierce?: number; lifesteal?: number },
 ): void {
   const heroDef = resolveHero(state.hero.heroId);
+  const pierce = Math.max(0, adv?.pierce ?? 0);
+  const healOnHit = (adv?.lifesteal ?? 0) > 0 ? dmg * (adv!.lifesteal!) * 0.35 : undefined;
+  const extra = Math.max(0, Math.floor(adv?.extraCount ?? 0));
+  const spread = (adv?.spreadDeg ?? 0) * (Math.PI / 180);
   switch (style) {
     case "bolt":
     case "frostbolt": {
@@ -537,9 +572,29 @@ function fireStyle(
         kind: "bolt",
         color: style === "frostbolt" ? "#a8e0ff" : "#ffcc55",
         bouncesLeft: bounce,
+        pierceLeft: pierce,
+        healOnHit,
         fromBasic: true,
         appliesSlow: style === "frostbolt",
       });
+      for (let i = 0; i < extra; i++) {
+        const t = extra === 1 ? 0 : (i / Math.max(1, extra - 1)) * 2 - 1;
+        const a = angle + t * (spread || 0.16);
+        pushProjectile(state, {
+          x: state.hero.x,
+          y: state.hero.y,
+          vx: Math.cos(a) * (heroDef.projectileSpeed || 500),
+          vy: Math.sin(a) * (heroDef.projectileSpeed || 500),
+          damage: dmg * 0.85,
+          radius: 3.5,
+          kind: "bolt",
+          color: "#ffcc55",
+          bouncesLeft: bounce,
+          pierceLeft: pierce,
+          healOnHit,
+          fromBasic: true,
+        });
+      }
       break;
     }
     case "cleave": {
@@ -992,7 +1047,8 @@ export function tryBasicAttack(state: GameState): boolean {
 
   const angle = Math.atan2(facing.y, facing.x);
   const dmg = attackDamage(state);
-  const bounce = hasRelic(state, "chain_spark") ? 1 : 0;
+  let bounce = hasRelic(state, "chain_spark") ? 1 : 0;
+  bounce += heroDef.basicBounce ?? 0;
 
   let style: AttackStyle = heroDef.attackStyle;
   if (style === "chaos") {
@@ -1001,7 +1057,30 @@ export function tryBasicAttack(state: GameState): boolean {
     state.hero.chaosIndex = idx + 1;
   }
 
-  fireStyle(state, style, facing, angle, dmg, bounce);
+  fireStyle(state, style, facing, angle, dmg, bounce, {
+    extraCount: heroDef.projectileCount,
+    spreadDeg: heroDef.attackSpreadDeg,
+    pierce: heroDef.basicPierce,
+    lifesteal: heroDef.lifesteal,
+  });
+  if (state.echoBarrage) {
+    // Delayed ghost follow-up — spawn a slowed copy a frame later via short-lived seeker.
+    const echo = dmg * 0.55;
+    pushProjectile(state, {
+      x: state.hero.x,
+      y: state.hero.y,
+      vx: facing.x * (heroDef.projectileSpeed || 480) * 0.75,
+      vy: facing.y * (heroDef.projectileSpeed || 480) * 0.75,
+      damage: echo,
+      radius: 3.5,
+      life: 1.1,
+      fromBasic: true,
+      hostile: false,
+      color: "#a0c0ff88",
+      seek: true,
+      bouncesLeft: 0,
+    });
+  }
   state.hero.attackCd = attackCooldown(state);
   state.basicsFired += 1;
   return true;
@@ -1046,9 +1125,15 @@ export function applyHeroKnockback(
   addFx(state, hero.x, hero.y, 22, "#8ec8ff66", 0.25);
 }
 
-export function applyPlayerDamage(state: GameState, amount: number): void {
+export function applyPlayerDamage(
+  state: GameState,
+  amount: number,
+  opts?: { fromProjectile?: boolean },
+): void {
   if (amount <= 0 || !state.hero.alive) return;
   if (gameplayCheats(state)?.godMode) return;
+  /** Hostile projectiles only — friendly-fire calls omit this flag. */
+  if (opts?.fromProjectile && state.immuneToProjectiles) return;
   let dmg = amount;
   if (state.glassCannon) dmg *= 1.5;
   if (hasRelic(state, "blood_price")) dmg *= 1.25;

@@ -18,6 +18,7 @@ import {
   chooseUtility,
   createState,
   laneEnemiesRemaining,
+  skipLevelUp,
   skipRelic,
   update,
   type GameState,
@@ -103,7 +104,13 @@ export class Game {
   private readonly abilityEl: HTMLElement;
   private readonly toastEl: HTMLElement;
   private readonly bannerEl: HTMLElement;
+  private readonly respawnStack: HTMLElement;
   private readonly respawnEl: HTMLElement;
+  private readonly respawnMinigameEl: HTMLElement;
+  private readonly respawnMgTrack: HTMLElement;
+  private readonly respawnMgZone: HTMLElement;
+  private readonly respawnMgCursor: HTMLElement;
+  private readonly respawnMgHint: HTMLElement;
   private readonly hud: HTMLElement;
   private readonly overlay: HTMLElement;
   private readonly overlayTitle: HTMLElement;
@@ -140,6 +147,8 @@ export class Game {
   private readonly relicDraft: HTMLElement;
   private readonly relicChoices: HTMLElement;
   private readonly relicSkip: HTMLButtonElement;
+  private readonly draftReroll: HTMLButtonElement;
+  private readonly draftActions: HTMLElement;
   private readonly draftTitle: HTMLElement;
   private readonly draftBlurb: HTMLElement;
   private readonly pauseBtn: HTMLButtonElement;
@@ -187,7 +196,13 @@ export class Game {
     this.abilityEl = document.querySelector("#hud-abilities")!;
     this.toastEl = document.querySelector("#hud-toast")!;
     this.bannerEl = document.querySelector("#hud-banner")!;
+    this.respawnStack = document.querySelector("#hud-respawn-stack")!;
     this.respawnEl = document.querySelector("#hud-respawn")!;
+    this.respawnMinigameEl = document.querySelector("#hud-respawn-minigame")!;
+    this.respawnMgTrack = this.respawnMinigameEl.querySelector(".respawn-mg-track")!;
+    this.respawnMgZone = this.respawnMinigameEl.querySelector(".respawn-mg-zone")!;
+    this.respawnMgCursor = this.respawnMinigameEl.querySelector(".respawn-mg-cursor")!;
+    this.respawnMgHint = this.respawnMinigameEl.querySelector(".respawn-mg-hint")!;
     this.hud = document.querySelector("#hud")!;
     this.overlay = document.querySelector("#overlay")!;
     this.overlayTitle = document.querySelector("#overlay-title")!;
@@ -224,6 +239,8 @@ export class Game {
     this.relicDraft = document.querySelector("#relic-draft")!;
     this.relicChoices = document.querySelector("#relic-choices")!;
     this.relicSkip = document.querySelector("#relic-skip")!;
+    this.draftReroll = document.querySelector("#draft-reroll")!;
+    this.draftActions = document.querySelector("#draft-actions")!;
     this.draftTitle = document.querySelector("#draft-title")!;
     this.draftBlurb = document.querySelector("#draft-blurb")!;
     this.pauseBtn = document.querySelector("#pause-btn")!;
@@ -300,13 +317,34 @@ export class Game {
     });
     this.relicSkip.addEventListener("click", () => {
       if (!this.state) return;
-      if (this.mpMatch) {
-        this.mpUiIntent.skipRelic = true;
-      } else {
-        skipRelic(this.state);
+      if (this.state.levelDraft) {
+        if (this.mpMatch) this.mpUiIntent.skipLevel = true;
+        else skipLevelUp(this.state);
+      } else if (this.state.relicDraft) {
+        if (this.mpMatch) this.mpUiIntent.skipRelic = true;
+        else skipRelic(this.state);
       }
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
+      focusGame();
+    });
+    this.draftReroll.addEventListener("click", () => {
+      if (!this.state) return;
+      if (this.state.levelDraft) {
+        if (this.mpMatch) {
+          this.mpUiIntent.rerollLevel = true;
+          this.lastDraftKey = "";
+        } else if (rerollLevelDraft(this.state)) {
+          this.lastDraftKey = "";
+        }
+      } else if (this.state.relicDraft) {
+        if (this.mpMatch) {
+          this.mpUiIntent.rerollRelic = true;
+          this.lastDraftKey = "";
+        } else if (rerollRelicDraft(this.state)) {
+          this.lastDraftKey = "";
+        }
+      }
       focusGame();
     });
     for (const el of [
@@ -620,6 +658,36 @@ export class Game {
       sendLocation: opts.sendLocation,
       artifactPlacement: opts.artifactPlacement,
       allowBarracks: opts.allowBarracks,
+      relicDrop: opts.relicDrop,
+      enemyProjectileDmgMul: opts.enemyProjectileDmgMul,
+      enemyCollisionDmgMul: opts.enemyCollisionDmgMul,
+      playerDmgLmbMul: opts.playerDmgLmbMul,
+      playerDmgRmbMul: opts.playerDmgRmbMul,
+      playerDmgMmbMul: opts.playerDmgMmbMul,
+      wallBounciness: opts.wallBounciness,
+      playerSpeedMul: opts.playerSpeedMul,
+      playerSizeMul: opts.playerSizeMul,
+      enemySizeMul: opts.enemySizeMul,
+      critLottery: opts.critLottery,
+      enemyMutation: opts.enemyMutation,
+      randomizeUtilityWave: opts.randomizeUtilityWave,
+      doubleAllProjectiles: opts.doubleAllProjectiles,
+      immuneToProjectiles: opts.immuneToProjectiles,
+      randomizeHeroWave: opts.randomizeHeroWave,
+      randomizeMapWave: opts.randomizeMapWave,
+      artifactDamageDoubled: opts.artifactDamageDoubled,
+      artifactsFree: opts.artifactsFree,
+      itemsFree: opts.itemsFree,
+      infiniteRerolls: opts.infiniteRerolls,
+      thornsAura: opts.thornsAura,
+      bloodTax: opts.bloodTax,
+      echoBarrage: opts.echoBarrage,
+      pacifistPays: opts.pacifistPays,
+      berserkerEdge: opts.berserkerEdge,
+      slipNSlide: opts.slipNSlide,
+      vampiricCreeps: opts.vampiricCreeps,
+      corpseExplosion: opts.corpseExplosion,
+      bounceHouse: opts.bounceHouse,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -1250,7 +1318,7 @@ export class Game {
         }
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
-        const cost = shopItemCost(this.state!, item.cost);
+        const cost = shopItemCost(this.state!, item.cost, id);
         const broke = this.state!.gold < cost;
         const row = document.createElement("button");
         row.type = "button";
@@ -1308,7 +1376,7 @@ export class Game {
         if (!row) return;
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
-        const cost = shopItemCost(this.state!, item.cost);
+        const cost = shopItemCost(this.state!, item.cost, id);
         const broke = this.state!.gold < cost;
         row.disabled = maxed || broke || this.state!.paused;
         row.classList.toggle("owned-max", maxed);
@@ -1402,7 +1470,7 @@ export class Game {
     if (!this.state) return;
     if (this.state.pausedForDraft && this.state.curseDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
       this.draftTitle.textContent = "Hex Storm — Choose a Curse";
       this.draftBlurb.textContent = "Send one soft-lock to the enemy lane.";
       const key = `C:${this.state.curseDraft.join(",")}`;
@@ -1429,7 +1497,7 @@ export class Game {
     }
     if (this.state.pausedForDraft && this.state.chestDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
       this.draftTitle.textContent = "Chest Reward";
       this.draftBlurb.textContent = "Pick one of two rewards.";
       const key = `H:${this.state.chestDraft.map((o) => o.label).join("|")}`;
@@ -1455,7 +1523,7 @@ export class Game {
     }
     if (this.state.pausedForDraft && this.state.utilityDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
       this.draftTitle.textContent =
         this.state.utilityDraftLevel < 0
           ? "Utility Ability (Run Start)"
@@ -1484,9 +1552,9 @@ export class Game {
     }
     if (this.state.pausedForDraft && this.state.baseBranchDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.add("hidden");
-      this.draftTitle.textContent = `Base Branch (Lv ${this.state.baseLevel})`;
-      this.draftBlurb.textContent = "Choose one upgrade path to reinforce your build.";
+      this.draftActions.classList.add("hidden");
+      this.draftTitle.textContent = `Base Upgrade (Lv ${this.state.baseLevel})`;
+      this.draftBlurb.textContent = "";
       const key = `B:${this.state.baseBranchDraft.join(",")}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
@@ -1510,9 +1578,10 @@ export class Game {
     }
     if (this.state.pausedForDraft && this.state.levelDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.add("hidden");
-      this.draftTitle.textContent = `Level Up! (Lv ${this.state.level}) · Rerolls ${this.state.rerollTokens}`;
-      this.draftBlurb.textContent = "Choose one passive upgrade.";
+      this.draftActions.classList.remove("hidden");
+      this.draftTitle.textContent = `Level Up! (Lv ${this.state.level})`;
+      this.draftBlurb.textContent = "";
+      this.paintDraftActionButtons(true);
       const key = `L:${this.state.levelDraft.join(",")}:r${this.state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
@@ -1535,29 +1604,12 @@ export class Game {
         });
         this.relicChoices.appendChild(btn);
       }
-      const reroll = document.createElement("button");
-      reroll.type = "button";
-      reroll.className = "menu-btn ghost wide";
-      reroll.textContent =
-        this.state.rerollTokens > 0
-          ? `Reroll (−1 token, ${this.state.rerollTokens} left)`
-          : "No reroll tokens";
-      reroll.disabled = this.state.rerollTokens <= 0;
-      reroll.addEventListener("click", () => {
-        if (!this.state) return;
-        if (this.mpMatch) {
-          this.mpUiIntent.rerollLevel = true;
-          this.lastDraftKey = "";
-        } else if (rerollLevelDraft(this.state)) {
-          this.lastDraftKey = "";
-        }
-      });
-      this.relicChoices.appendChild(reroll);
     } else if (this.state.pausedForDraft && this.state.relicDraft) {
       this.relicDraft.classList.remove("hidden");
-      this.relicSkip.classList.remove("hidden");
-      this.draftTitle.textContent = `Choose a Relic · Rerolls ${this.state.rerollTokens}`;
-      this.draftBlurb.textContent = "Pick one build-defining power — or skip if none fit.";
+      this.draftActions.classList.remove("hidden");
+      this.draftTitle.textContent = "Choose a Relic";
+      this.draftBlurb.textContent = "";
+      this.paintDraftActionButtons(true);
       const key = `R:${this.state.relicDraft.join(",")}:r${this.state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
@@ -1577,27 +1629,29 @@ export class Game {
         });
         this.relicChoices.appendChild(btn);
       }
-      const reroll = document.createElement("button");
-      reroll.type = "button";
-      reroll.className = "menu-btn ghost wide";
-      reroll.textContent =
-        this.state.rerollTokens > 0
-          ? `Reroll (−1 token, ${this.state.rerollTokens} left)`
-          : "No reroll tokens";
-      reroll.disabled = this.state.rerollTokens <= 0;
-      reroll.addEventListener("click", () => {
-        if (!this.state) return;
-        if (this.mpMatch) {
-          this.mpUiIntent.rerollRelic = true;
-          this.lastDraftKey = "";
-        } else if (rerollRelicDraft(this.state)) {
-          this.lastDraftKey = "";
-        }
-      });
-      this.relicChoices.appendChild(reroll);
     } else {
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
+    }
+  }
+
+  private paintDraftActionButtons(showReroll: boolean): void {
+    if (!this.state) return;
+    this.relicSkip.classList.remove("hidden");
+    const tokens = this.state.rerollTokens;
+    const infinite = !!this.state.infiniteRerolls;
+    if (!showReroll) {
+      this.draftReroll.classList.add("hidden");
+      return;
+    }
+    this.draftReroll.classList.remove("hidden");
+    if (infinite || tokens > 0) {
+      this.draftReroll.textContent = `Reroll (${infinite ? "∞" : tokens})`;
+      this.draftReroll.disabled = false;
+    } else {
+      this.draftReroll.textContent = "No reroll tokens";
+      this.draftReroll.disabled = true;
     }
   }
 
@@ -1670,6 +1724,8 @@ export class Game {
       this.toastEl.textContent = "";
       this.bannerEl.textContent = "";
       this.respawnEl.textContent = "";
+      this.respawnStack.classList.add("hidden");
+      this.respawnMinigameEl.classList.add("hidden");
       this.goldAmountEl.textContent = "0";
       this.incomeEl.textContent = "";
     }
@@ -1937,6 +1993,7 @@ export class Game {
     // Merge queued draft / UI choices (clients must send these — never mutate host sim locally)
     local.chooseRelic = this.mpUiIntent.chooseRelic ?? local.chooseRelic;
     local.skipRelic = this.mpUiIntent.skipRelic || local.skipRelic;
+    local.skipLevel = this.mpUiIntent.skipLevel || local.skipLevel;
     local.chooseLevel = this.mpUiIntent.chooseLevel ?? local.chooseLevel;
     local.chooseUtility = this.mpUiIntent.chooseUtility ?? local.chooseUtility;
     local.chooseCurse = this.mpUiIntent.chooseCurse ?? local.chooseCurse;
@@ -2281,10 +2338,26 @@ export class Game {
       } else {
         this.respawnEl.textContent = `Respawning in ${Math.max(0, s.respawnTimer).toFixed(1)}s`;
       }
+      this.respawnStack.classList.remove("hidden");
       this.respawnEl.classList.remove("hidden");
+
+      const g = s.respawnMinigame;
+      const showMg = !!(g && Number.isFinite(s.respawnTimer) && s.respawnTimer > 1 && !s.waveRespawnBlocked);
+      this.respawnMinigameEl.classList.toggle("hidden", !showMg);
+      if (showMg && g) {
+        const zStart = Math.max(0, Math.min(1, g.zoneStart));
+        const zEnd = Math.max(zStart, Math.min(1, g.zoneEnd));
+        const cursor = Math.max(0, Math.min(1, g.cursor));
+        this.respawnMgZone.style.left = `${zStart * 100}%`;
+        this.respawnMgZone.style.width = `${(zEnd - zStart) * 100}%`;
+        this.respawnMgCursor.style.left = `${cursor * 100}%`;
+        this.respawnMgTrack.classList.toggle("miss", g.lastHit === false && g.feedback > 0);
+        this.respawnMgHint.textContent = `${formatBinding(kb.utility)} — shave respawn`;
+      }
     } else {
       this.respawnEl.textContent = "";
-      this.respawnEl.classList.add("hidden");
+      this.respawnStack.classList.add("hidden");
+      this.respawnMinigameEl.classList.add("hidden");
     }
 
     const labels = [

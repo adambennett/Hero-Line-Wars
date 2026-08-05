@@ -68,6 +68,7 @@ function idleIntent(): CombatIntent {
     shopSlot: null,
     chooseRelic: null,
     skipRelic: false,
+    skipLevel: false,
     chooseLevel: null,
     chooseUtility: null,
     chooseCurse: null,

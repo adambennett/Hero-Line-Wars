@@ -282,6 +282,19 @@ export function applyLevelPassive(state: GameState, id: LevelPassiveId): void {
   state.toastTimer = 2;
 }
 
+export function skipLevelDraft(state: GameState): void {
+  if (!state.levelDraft) return;
+  state.levelDraft = null;
+  state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
+  if (state.pendingLevelUps > 0) {
+    openLevelDraft(state);
+  } else {
+    syncDraftFlags(state);
+  }
+  state.toast = "Level bonus skipped";
+  state.toastTimer = 1.2;
+}
+
 export function chooseLevelPassive(state: GameState, id: LevelPassiveId): void {
   if (!state.levelDraft?.includes(id)) return;
   if (!perkEligibleForHero(id, state.hero.heroId)) return;

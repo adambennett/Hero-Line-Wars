@@ -4,6 +4,7 @@ import { ASCENSIONS } from "../meta/ascension";
 import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { isMapUnlocked } from "../meta/contentLocks";
+import { enabledMapIds, isIdEnabled } from "../meta/contentFilters";
 import {
   pickOne,
   RUN_OPTION_DEFAULTS,
@@ -252,6 +253,17 @@ export class MultiplayerUi {
     this.livesPerRun = o.livesPerRun;
     this.utilityDraftLevel = o.utilityDraftLevel;
     this.friendlyFire = o.friendlyFire;
+    if (
+      this.mapChoice !== "random"
+    ) {
+      const strict = (o.contentFilters?.maps?.length ?? 0) > 0;
+      if (strict) {
+        const allowed = enabledMapIds(o.contentFilters);
+        if (allowed.length && !allowed.includes(this.mapChoice as MapId)) {
+          this.mapChoice = allowed[0]!;
+        }
+      }
+    }
   }
 
   private pushHostOpts(): void {
@@ -303,16 +315,21 @@ export class MultiplayerUi {
     const dis = editable ? "" : "disabled";
     const tip = (key: RunOptionTipKey) => ` data-tip="${escapeAttr(runTip(key))}"`;
     const customMaps = listCustomMaps();
-    const builtinMapOpts = MAP_LIST.map(
-      (m) =>
-        `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
-    ).join("");
+    const mapFilters = getGameType(this.gameTypeId).options.contentFilters;
+    const strictMaps = (mapFilters?.maps?.length ?? 0) > 0;
+    const allowedBuiltins = new Set(enabledMapIds(mapFilters).map(String));
+    const mapOk = (id: string) =>
+      strictMaps ? allowedBuiltins.has(id) : isIdEnabled(mapFilters, "maps", id);
+    const builtinMapOpts = MAP_LIST.map((m) => {
+      const allowed = mapOk(m.id);
+      return `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""} ${allowed ? "" : "disabled"}>${escapeAttr(m.name)}${allowed ? "" : " (locked out)"}</option>`;
+    }).join("");
     const customMapOpts = customMaps.length
       ? customMaps
-          .map(
-            (m) =>
-              `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""}>${escapeAttr(m.name)}</option>`,
-          )
+          .map((m) => {
+            const allowed = !strictMaps && mapOk(m.id);
+            return `<option value="${m.id}" ${this.mapChoice === m.id ? "selected" : ""} ${allowed ? "" : "disabled"}>${escapeAttr(m.name)}${allowed ? "" : " (locked out)"}</option>`;
+          })
           .join("")
       : `<option value="" disabled>(none saved yet)</option>`;
     const mapOpts = [
@@ -1010,7 +1027,10 @@ export class MultiplayerUi {
       if (!canStartMatch()) return;
       // Avoid hostSetMode(mode): setMode always cleared ready and blocked start.
       this.pushHostOpts();
-      const mapId = resolveMapChoice(this.mapChoice);
+      const mapId = resolveMapChoice(
+        this.mapChoice,
+        getGameType(this.gameTypeId).options.contentFilters?.maps,
+      );
       const msg = hostStartMatch(
         mapId,
         this.maxTurrets,

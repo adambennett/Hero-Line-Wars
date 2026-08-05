@@ -73,6 +73,7 @@ export function sanitizeIntent(raw: unknown): CombatIntent {
   out.toggleShop = bool(r.toggleShop);
   out.upgradeBase = bool(r.upgradeBase);
   out.skipRelic = bool(r.skipRelic);
+  out.skipLevel = bool(r.skipLevel);
   out.rerollLevel = bool(r.rerollLevel);
   out.rerollRelic = bool(r.rerollRelic);
 

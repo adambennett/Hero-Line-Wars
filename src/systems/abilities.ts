@@ -7,8 +7,10 @@ import {
   heroHasPassive,
 } from "../custom/registry";
 import {
+  blockedByNewObstacle,
   circleHitsObstacle,
   findClearSpot,
+  overlappedObstacles,
   pointInPlayable,
   rayObstacleHitT,
   resolveMovePlayable,
@@ -1024,7 +1026,15 @@ export function tryCastAbility(state: GameState, slot: AbilitySlot, move: Vec2):
     return;
   }
 
-  const ok = CASTERS[ability.id](state, move);
+  const dmgSlot = slot === "mobility" ? "mobility" : "ultimate";
+  const prevSlot = state.abilityDamageSlot;
+  state.abilityDamageSlot = dmgSlot;
+  let ok = false;
+  try {
+    ok = CASTERS[ability.id](state, move);
+  } finally {
+    state.abilityDamageSlot = prevSlot;
+  }
   if (ok) {
     state.abilitiesCast += 1;
     const perks = perksForState(state);
@@ -1205,25 +1215,21 @@ function tryUseTeleporter(state: GameState, hero: HeroRuntime): void {
 function moveHeroTo(state: GameState, hero: HeroRuntime, nx: number, ny: number): void {
   const r = hero.radius;
   const map = state.map;
+  // Soft unstick: walls we already overlap don't block until we're clear of them.
+  const stuck = overlappedObstacles(map, hero.x, hero.y, r);
   const resolved = resolveMovePlayable(map, hero.x, hero.y, nx, ny, r);
   const x = resolved.x;
   const y = resolved.y;
-  if (!map.obstacles.some((o) => circleHitsObstacle(x, y, r, o))) {
+  if (!blockedByNewObstacle(map, x, y, r, stuck)) {
     hero.x = x;
     hero.y = y;
     return;
   }
-  if (
-    pointInPlayable(map, x, hero.y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(x, hero.y, r, o))
-  ) {
+  if (pointInPlayable(map, x, hero.y, r) && !blockedByNewObstacle(map, x, hero.y, r, stuck)) {
     hero.x = x;
     return;
   }
-  if (
-    pointInPlayable(map, hero.x, y, r) &&
-    !map.obstacles.some((o) => circleHitsObstacle(hero.x, y, r, o))
-  ) {
+  if (pointInPlayable(map, hero.x, y, r) && !blockedByNewObstacle(map, hero.x, y, r, stuck)) {
     hero.y = y;
   }
 }

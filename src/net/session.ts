@@ -597,6 +597,43 @@ export function hostSetOpts(
     if (extras.sendLocation != null) S.lobby.sendLocation = extras.sendLocation;
     if (extras.artifactPlacement != null) S.lobby.artifactPlacement = extras.artifactPlacement;
     if (extras.allowBarracks != null) S.lobby.allowBarracks = extras.allowBarracks;
+    // Creative extras — assign any remaining defined keys onto the lobby.
+    const creativeKeys = [
+      "relicDrop",
+      "enemyProjectileDmgMul",
+      "enemyCollisionDmgMul",
+      "playerDmgLmbMul",
+      "playerDmgRmbMul",
+      "playerDmgMmbMul",
+      "wallBounciness",
+      "playerSpeedMul",
+      "playerSizeMul",
+      "enemySizeMul",
+      "critLottery",
+      "enemyMutation",
+      "randomizeUtilityWave",
+      "doubleAllProjectiles",
+      "immuneToProjectiles",
+      "randomizeHeroWave",
+      "randomizeMapWave",
+      "artifactDamageDoubled",
+      "artifactsFree",
+      "itemsFree",
+      "infiniteRerolls",
+      "thornsAura",
+      "bloodTax",
+      "echoBarrage",
+      "pacifistPays",
+      "berserkerEdge",
+      "slipNSlide",
+      "vampiricCreeps",
+      "corpseExplosion",
+      "bounceHouse",
+    ] as const;
+    for (const k of creativeKeys) {
+      const v = extras[k];
+      if (v != null) (S.lobby as Record<string, unknown>)[k] = v;
+    }
   }
   netBroadcast({
     k: "opts",

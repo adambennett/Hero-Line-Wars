@@ -150,6 +150,15 @@ export type HeroDef = {
   passive: HeroPassive;
   /** Order: mobility, then ultimate. */
   abilities: [AbilityDef, AbilityDef];
+  /** Optional custom-hero advanced knobs. */
+  projectileCount?: number;
+  attackSpreadDeg?: number;
+  abilityPowerMul?: number;
+  passivePowerMul?: number;
+  basicPierce?: number;
+  basicBounce?: number;
+  lifesteal?: number;
+  moveSpeedMul?: number;
 };
 
 export const HEROES: Record<HeroId, HeroDef> = {

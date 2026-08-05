@@ -210,6 +210,16 @@ export function customMapToMapDef(c: CustomMapDef): MapDef {
 }
 
 export function customHeroToHeroDef(c: CustomHeroDef): HeroDef {
+  const adv = c.advanced ?? {};
+  const mob = structuredClone(c.abilities[0]);
+  const ult = structuredClone(c.abilities[1]);
+  if (adv.mobilityName) mob.name = adv.mobilityName;
+  if (adv.mobilityHint) mob.hint = adv.mobilityHint;
+  if (adv.ultimateName) ult.name = adv.ultimateName;
+  if (adv.ultimateHint) ult.hint = adv.ultimateHint;
+  const passive = structuredClone(c.passive);
+  if (adv.passiveName) passive.name = adv.passiveName;
+  if (adv.passiveBlurb) passive.blurb = adv.passiveBlurb;
   return {
     id: c.id as HeroId,
     name: c.name,
@@ -217,7 +227,7 @@ export function customHeroToHeroDef(c: CustomHeroDef): HeroDef {
     color: c.color,
     glowColor: c.glowColor,
     radius: c.radius,
-    speed: c.speed,
+    speed: c.speed * (adv.moveSpeedMul ?? 1),
     maxHp: c.maxHp,
     attackRange: c.attackRange,
     attackDamage: c.attackDamage,
@@ -225,9 +235,17 @@ export function customHeroToHeroDef(c: CustomHeroDef): HeroDef {
     projectileSpeed: c.projectileSpeed,
     attackStyle: c.attackStyle,
     aimMode: c.aimMode,
-    attackHint: c.attackHint,
-    passive: structuredClone(c.passive),
-    abilities: [structuredClone(c.abilities[0]), structuredClone(c.abilities[1])],
+    attackHint: adv.attackHintCustom ?? c.attackHint,
+    passive,
+    abilities: [mob, ult],
+    projectileCount: adv.projectileCount,
+    attackSpreadDeg: adv.attackSpreadDeg,
+    abilityPowerMul: adv.abilityPowerMul,
+    passivePowerMul: adv.passivePowerMul,
+    basicPierce: adv.basicPierce,
+    basicBounce: adv.basicBounce,
+    lifesteal: adv.lifesteal,
+    moveSpeedMul: adv.moveSpeedMul,
   };
 }
 

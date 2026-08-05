@@ -19,7 +19,14 @@ import {
 } from "../data/constants";
 import { dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
-import { addFx, applyPlayerDamage, applyHeroKnockback, killEnemy, pushProjectile } from "./combat";
+import { addFx, applyPlayerDamage, applyHeroKnockback, damageEnemy, killEnemy, pushProjectile } from "./combat";
+import {
+  applyEnemyMutation,
+  applyEnemySize,
+  applyWallBounce,
+  scaleEnemyCollisionDamage,
+  scaleEnemyProjectileDamage,
+} from "./creativeRuntime";
 import { FLOW_CELL, flowFieldFor, flowReachable, sampleFlow } from "./flowField";
 import { baseDamageTakenMul } from "./relics";
 import { damageTurret, livingTurrets } from "./turrets";
@@ -44,10 +51,10 @@ function nearestLivingHero(state: GameState, from: { x: number; y: number }): He
   return best;
 }
 
-function damageHero(state: GameState, hero: HeroRuntime, amount: number): void {
+function damageHero(state: GameState, hero: HeroRuntime, amount: number, fromProjectile = false): void {
   const prev = state.hero;
   state.hero = hero;
-  applyPlayerDamage(state, amount);
+  applyPlayerDamage(state, amount, fromProjectile ? { fromProjectile: true } : undefined);
   if (prev !== hero) state.hero = prev;
 }
 
@@ -172,8 +179,10 @@ function separateFromObstacles(
   return clampInLane(map, x, y, r);
 }
 
-function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
+function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number, state?: GameState): boolean {
   const r = e.radius;
+  const prevX = e.x;
+  const prevY = e.y;
   // Slide along shaped playable bounds, then peel off obstacle faces/corners.
   let { x, y } = resolveMovePlayable(map, e.x, e.y, nx, ny, r);
   ({ x, y } = separateFromObstacles(map, x, y, r));
@@ -182,6 +191,10 @@ function tryMove(map: MapDef, e: EnemyUnit, nx: number, ny: number): boolean {
     const moved = Math.hypot(x - e.x, y - e.y) > 1e-6;
     e.x = x;
     e.y = y;
+    if (state && applyWallBounce(state, e, prevX, prevY) === "death") {
+      e.alive = false;
+      return false;
+    }
     return moved;
   }
 
@@ -271,6 +284,7 @@ function moveWithPathing(
   ty: number,
   speed: number,
   dt: number,
+  state?: GameState,
 ): void {
   const prevX = e.x;
   const prevY = e.y;
@@ -304,7 +318,7 @@ function moveWithPathing(
   }
 
   const n = normalize(aimX - e.x, aimY - e.y);
-  let moved = tryMove(map, e, e.x + n.x * step, e.y + n.y * step);
+  let moved = tryMove(map, e, e.x + n.x * step, e.y + n.y * step, state);
 
   // Local slide if the immediate step clips a corner
   if (!moved) {
@@ -318,7 +332,7 @@ function moveWithPathing(
           : [0.45, 0.9, 1.4, -0.45, -0.9, -Math.PI * 0.5, Math.PI * 0.5];
     for (const off of offsets) {
       const a = baseAng + off;
-      if (tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step)) {
+      if (tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step, state)) {
         moved = true;
         e.preferAngle = a;
         break;
@@ -328,7 +342,7 @@ function moveWithPathing(
 
   if (!moved && e.preferAngle !== undefined) {
     const a = e.preferAngle;
-    moved = tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step);
+    moved = tryMove(map, e, e.x + Math.cos(a) * step, e.y + Math.sin(a) * step, state);
   }
 
   const traveled = Math.hypot(e.x - prevX, e.y - prevY);
@@ -497,6 +511,8 @@ export function createEnemy(
       e.maxShield = shield;
     }
   }
+  applyEnemyMutation(state, e);
+  applyEnemySize(state, e);
   return e;
 }
 
@@ -519,7 +535,7 @@ function fireEnemyShot(
       y: e.y,
       vx: Math.cos(ang) * spd,
       vy: Math.sin(ang) * spd,
-      damage: e.attackDamage * (count > 1 ? 0.85 : 1),
+      damage: scaleEnemyProjectileDamage(state, e.attackDamage * (count > 1 ? 0.85 : 1)),
       radius: def.projectileRadius ?? 4,
       kind: "enemy",
       color: def.projectileColor ?? "#88b0ff",
@@ -592,7 +608,9 @@ export function updateEnemies(state: GameState, dt: number): void {
         state.shake = Math.max(state.shake, isBossKind(e.kind) ? 0.55 : 0.32);
         playSfx("boss_slam");
         for (const h of livingHeroes(state)) {
-          if (dist(e, h) <= rad + h.radius) damageHero(state, h, dmg);
+          if (dist(e, h) <= rad + h.radius) {
+            damageHero(state, h, scaleEnemyCollisionDamage(state, dmg));
+          }
         }
         for (const t of livingTurrets(state)) {
           if (dist(e, t) <= rad + t.radius) {
@@ -614,7 +632,7 @@ export function updateEnemies(state: GameState, dt: number): void {
       if (focusHero) {
         const d = normalize(focusHero.x - e.x, focusHero.y - e.y);
         const dashSpd = (def.dashSpeed ?? e.speed * 2.5) * speedMul;
-        tryMove(map, e, e.x + d.x * dashSpd * dt, e.y + d.y * dashSpd * dt);
+        tryMove(map, e, e.x + d.x * dashSpd * dt, e.y + d.y * dashSpd * dt, state);
       }
     } else {
       if (
@@ -638,13 +656,13 @@ export function updateEnemies(state: GameState, dt: number): void {
         e.campTimer = (e.campTimer ?? 0) + dt;
         if ((e.campTimer ?? 0) >= ENEMY_CAMP_BREAK_SEC) {
           // Push toward base (not just the hero) to clear the corner
-          moveWithPathing(map, e, base.x, base.y, e.speed * speedMul * 0.85, dt);
+          moveWithPathing(map, e, base.x, base.y, e.speed * speedMul * 0.85, dt, state);
         } else {
           e.stuckTimer = 0;
         }
       } else {
         e.campTimer = 0;
-        moveWithPathing(map, e, target.x, target.y, e.speed * speedMul, dt);
+        moveWithPathing(map, e, target.x, target.y, e.speed * speedMul, dt, state);
       }
     }
 
@@ -679,7 +697,15 @@ export function updateEnemies(state: GameState, dt: number): void {
       const phaseImmune = (focusHero.phaseTimer ?? 0) > 0;
       if (!gyroImmune && !phaseImmune) {
         const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
-        damageHero(state, focusHero, e.contactDamage * contactMul * dt);
+        const raw = e.contactDamage * contactMul * dt;
+        const dmg = scaleEnemyCollisionDamage(state, raw);
+        damageHero(state, focusHero, dmg);
+        if (state.thornsAura && focusHero === state.hero) {
+          damageEnemy(state, e, Math.max(4, dmg * 0.8));
+        }
+        if (state.vampiricCreeps) {
+          e.hp = Math.min(e.maxHp, e.hp + Math.max(0.5, e.contactDamage * 0.08 * dt));
+        }
         if ((e.knockbackForce ?? 0) > 0) {
           applyHeroKnockback(state, focusHero, e.knockbackForce ?? 0);
         }

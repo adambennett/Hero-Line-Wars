@@ -42,7 +42,7 @@ import {
   BUILTIN_GAME_TYPES,
   normalizeGameTypeId,
 } from "../meta/gameTypes";
-import { emptyContentFilters, validateContentFilters } from "../meta/contentFilters";
+import { emptyContentFilters, enabledMapIds, isIdEnabled, validateContentFilters } from "../meta/contentFilters";
 import {
   getRunStartBonus,
   rollRunStartBonusChoices,
@@ -376,6 +376,7 @@ export class MenuController {
   private gtEditOptions: GameTypeOptions = defaultGameTypeOptions();
   private gtEditName = "Outlast";
   private gtEditDescription = "";
+  private gtConfirmDelete = false;
   private gtReturnScreen: MenuScreen = "singleplayer";
   private gtReturnToMp = false;
   private rebinding: BindableAction | null = null;
@@ -655,10 +656,18 @@ export class MenuController {
       return;
     }
     if (action === "gt-new") {
+      // Clone whatever is open in the editor (form + name seed), not the SP lobby pick.
+      if (this.root.querySelector("[data-gt], #gt-name")) {
+        this.gtEditOptions = readGameTypeOptionsFromDom(this.root, "gt");
+        const nameEl = this.root.querySelector<HTMLInputElement>("#gt-name");
+        const seed = (nameEl?.value.trim() || this.gtEditName || "Custom").slice(0, 28);
+        this.gtEditName = `${seed} copy`.slice(0, 40);
+      } else {
+        this.gtEditOptions = { ...getGameType(this.gtEditId).options };
+        this.gtEditName = "Custom type";
+      }
       this.gtEditId = newGameTypeId();
-      this.gtEditName = "Custom type";
-      this.gtEditDescription = defaultGameTypeDescription("Custom type");
-      this.gtEditOptions = { ...getGameType(this.selectedGameTypeId).options };
+      this.gtEditDescription = defaultGameTypeDescription(this.gtEditName);
       this.render();
       return;
     }
@@ -667,6 +676,22 @@ export class MenuController {
       return;
     }
     if (action === "gt-delete") {
+      const t = getGameType(this.gtEditId);
+      if (t.builtin) {
+        this.setToast("Built-in game types can’t be deleted.");
+        return;
+      }
+      this.gtConfirmDelete = true;
+      this.render();
+      return;
+    }
+    if (action === "gt-delete-no") {
+      this.gtConfirmDelete = false;
+      this.render();
+      return;
+    }
+    if (action === "gt-delete-yes") {
+      this.gtConfirmDelete = false;
       this.deleteEditingGameType();
       return;
     }
@@ -760,7 +785,7 @@ export class MenuController {
           const fromGt = gameTypeToRunOptions(gt);
           this.callbacks.onStartSingleplayer(this.selectedHero, {
             ...fromGt,
-            mapId: this.spMapChoice,
+            mapId: resolveMapChoice(this.spMapChoice, gt.contentFilters?.maps),
             ascension: this.spAscension,
             teamSize: gt.endless
               ? 1
@@ -1367,7 +1392,7 @@ export class MenuController {
       this.screen === "game-types" ||
       this.screen === "patch-notes" ||
       this.screen === "campaign";
-    const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}${prefsScreen ? " prefs-shell" : ""}`;
+    const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "hero-editor" ? " hero-editor-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}${prefsScreen ? " prefs-shell" : ""}`;
 
     const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
     const existingShell = this.root.querySelector<HTMLElement>(".menu-shell");
@@ -1776,6 +1801,19 @@ export class MenuController {
       this.spEnemies = [];
       this.spTeamSize = 1;
     }
+    this.clampSpMapToGameType(o);
+  }
+
+  /** If the current map is disabled by the game type, snap to an allowed one. */
+  private clampSpMapToGameType(o = getGameType(this.selectedGameTypeId).options): void {
+    if (this.spMapChoice === "random") return;
+    const strict = (o.contentFilters?.maps?.length ?? 0) > 0;
+    if (!strict) return;
+    const allowed = enabledMapIds(o.contentFilters);
+    if (!allowed.length) return;
+    if (!allowed.includes(this.spMapChoice as MapId)) {
+      this.spMapChoice = allowed[0]!;
+    }
   }
 
   /** Open game type editor leaving the multiplayer lobby UI mounted off-screen. */
@@ -1795,11 +1833,12 @@ export class MenuController {
   }
 
   private openGameTypeEditor(id: string): void {
+    this.gtConfirmDelete = false;
     const t = getGameType(id);
     this.gtEditId = t.id;
     this.gtEditName = t.name;
     this.gtEditDescription = t.description || defaultGameTypeDescription(t.name);
-    this.gtEditOptions = { ...t.options };
+    this.gtEditOptions = structuredClone(t.options);
     this.screen = "game-types";
     this.render();
   }
@@ -2104,16 +2143,24 @@ export class MenuController {
     ].join("");
 
     const customMaps = listCustomMaps();
+    const mapFilters = getGameType(this.selectedGameTypeId).options.contentFilters;
+    const strictMaps = (mapFilters?.maps?.length ?? 0) > 0;
+    const allowedBuiltins = new Set(enabledMapIds(mapFilters).map(String));
+    const mapOk = (id: string) => (strictMaps ? allowedBuiltins.has(id) : isIdEnabled(mapFilters, "maps", id));
     const builtinMapOpts = MAP_LIST.map((m) => {
       const unlocked = isMapUnlocked(m.id);
-      return `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""} ${unlocked ? "" : "disabled"}>${escapeHtml(m.name)}${unlocked ? "" : " (challenge)"}</option>`;
+      const allowed = mapOk(m.id);
+      const selected = this.spMapChoice === m.id;
+      const disabled = !unlocked || !allowed;
+      const tag = !unlocked ? " (challenge)" : !allowed ? " (locked out)" : "";
+      return `<option value="${m.id}" ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}>${escapeHtml(m.name)}${tag}</option>`;
     }).join("");
     const customMapOpts = customMaps.length
       ? customMaps
-          .map(
-            (m) =>
-              `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`,
-          )
+          .map((m) => {
+            const allowed = !strictMaps && mapOk(m.id);
+            return `<option value="${m.id}" ${this.spMapChoice === m.id ? "selected" : ""} ${allowed ? "" : "disabled"}>${escapeHtml(m.name)}${allowed ? "" : " (locked out)"}</option>`;
+          })
           .join("")
       : `<option value="" disabled>(none saved yet)</option>`;
     const mapOpts = [
@@ -2607,7 +2654,7 @@ export class MenuController {
       // Persist map id across quit/resume so random does not re-roll.
       let mapId = this.campaign.combatMapId;
       if (!mapId) {
-        mapId = resolveMapChoice("random");
+        mapId = resolveMapChoice("random", this.campaign.gameTypeOptions.contentFilters?.maps);
         this.campaign.combatMapId = mapId;
         saveCampaignRun(this.campaign);
       }
@@ -2943,27 +2990,41 @@ export class MenuController {
         return `<button type="button" class="chip ${t.id === this.gtEditId ? "selected" : ""}" data-action="gt-pick" data-id="${t.id}" data-tip="${tip}">${escapeHtml(t.name)}${t.builtin ? "" : " ★"}</button>`;
       })
       .join("");
-    const editing = list.find((t) => t.id === this.gtEditId) ?? list[0]!;
-    const canDelete = !editing.builtin;
+    const editing = list.find((t) => t.id === this.gtEditId);
+    /** Unsaved New copy drafts are not in the list yet — always editable. */
+    const isBuiltin = editing?.builtin === true;
+    const canDelete = !!editing && !editing.builtin;
     const back = this.gtReturnToMp
       ? `<button type="button" class="menu-back" data-action="gt-back-mp">← Multiplayer</button>`
       : this.backButton(this.gtReturnScreen);
-    const summary = escapeHtml(this.gtEditDescription || editing.description || "");
+    const confirmDelete =
+      this.gtConfirmDelete && canDelete
+        ? `<div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="gt-confirm-title" aria-describedby="gt-confirm-body">
+            <div class="menu-confirm-card">
+              <h1 id="gt-confirm-title">Delete custom game type?</h1>
+              <p id="gt-confirm-body">Permanently remove “${escapeHtml(this.gtEditName || "this game type")}” from your local library. This cannot be undone (export a JSON backup first if you might want it back).</p>
+              <div class="menu-confirm-actions">
+                <button type="button" data-action="gt-delete-yes">Delete type</button>
+                <button type="button" data-action="gt-delete-no">Cancel</button>
+              </div>
+            </div>
+          </div>`
+        : "";
     return `
       <div class="prefs-layout">
+        ${confirmDelete}
         <header class="menu-header compact">
           ${back}
           <h1 class="menu-title">Game Type Editor</h1>
           <p class="menu-lead">Save named run rules for SP, MP, and Campaign.</p>
         </header>
         <div class="gt-type-picks">${picks}</div>
-        ${summary ? `<p class="menu-note gt-summary">${summary}</p>` : ""}
         <div class="gt-editor-head">
           <label class="run-field"><span>Name</span>
-            <input id="gt-name" type="text" maxlength="40" value="${escapeHtml(this.gtEditName)}" ${editing.builtin ? "readonly" : ""} />
+            <input id="gt-name" type="text" maxlength="40" value="${escapeHtml(this.gtEditName)}" ${isBuiltin ? "readonly" : ""} />
           </label>
           <label class="run-field gt-desc-field"><span>Description</span>
-            <textarea id="gt-desc" maxlength="160" rows="2" ${editing.builtin ? "readonly" : ""}>${escapeHtml(this.gtEditDescription)}</textarea>
+            <textarea id="gt-desc" maxlength="160" rows="2" ${isBuiltin ? "readonly" : ""}>${escapeHtml(this.gtEditDescription)}</textarea>
           </label>
         </div>
         <div class="gt-action-bar">
@@ -2975,7 +3036,7 @@ export class MenuController {
           ${canDelete ? `<button type="button" class="menu-btn small ghost danger" data-action="gt-delete"><span class="btn-label">Delete</span></button>` : ""}
         </div>
         ${gameTypeOptionsFieldsHtml(this.gtEditOptions, "gt", true)}
-        ${editing.builtin ? `<p class="menu-note">Built-in types save as a custom copy when you hit Save.</p>` : ""}
+        ${isBuiltin ? `<p class="menu-note">Built-in types save as a custom copy when you hit Save.</p>` : !editing ? `<p class="menu-note">Unsaved draft — hit Save to add it to your library.</p>` : ""}
       </div>
     `;
   }

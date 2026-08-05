@@ -376,9 +376,9 @@ export function trySpawnChest(state: GameState): void {
     y,
     radius: 18,
     rarity,
-    openDuration: openSec * state.chestOpenMul,
+    openDuration: Math.max(0, openSec * state.chestOpenMul),
     openProgress: 0,
-    life: state.chestDespawnSec,
+    life: state.chestDespawnSec < 0 ? 1e9 : state.chestDespawnSec,
   };
   state.chests.push(chest);
   state.toast = `${rarity} chest appeared`;

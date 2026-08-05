@@ -5,6 +5,18 @@
 
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { utilityDraftLevelOptionsHtml } from "../data/utilities";
+import {
+  formatChestDespawn,
+  formatChestOpen,
+  formatCritLottery,
+  formatEnemyMutation,
+  formatMul,
+  formatRelicDrop,
+  formatRespawnMul,
+  type CritLotteryMode,
+  type EnemyMutationMode,
+  type RelicDropMode,
+} from "../meta/creativeOptions";
 import type { GameTypeOptions } from "../meta/gameTypes";
 import {
   contentFilterCatalog,
@@ -71,6 +83,13 @@ export function gameTypeOptionsFieldsHtml(
       </select>
     </label>`;
 
+  const dmgSel = (
+    field: string,
+    label: string,
+    tipKey: RunOptionTipKey,
+    current: number,
+  ) => sel(field, label, tipKey, RUN_OPTION_POOLS.damageMul, current, (n) => formatMul(n));
+
   const goldOpts = RUN_OPTION_POOLS.startingGold
     .map(
       (g) =>
@@ -116,6 +135,24 @@ export function gameTypeOptionsFieldsHtml(
     ["respawnMinigame", "Respawn minigame", o.respawnMinigame, "respawnMinigame"],
     ["allowBarracks", "Allow barracks upgrades", o.allowBarracks, "allowBarracks"],
     ["endless", "No rival lane", o.endless, "mode"],
+    ["randomizeUtilityWave", "Randomize utility / wave", o.randomizeUtilityWave, "randomizeUtilityWave"],
+    ["doubleAllProjectiles", "Double all projectiles", o.doubleAllProjectiles, "doubleAllProjectiles"],
+    ["immuneToProjectiles", "Immune to projectiles", o.immuneToProjectiles, "immuneToProjectiles"],
+    ["randomizeHeroWave", "Randomize hero / wave", o.randomizeHeroWave, "randomizeHeroWave"],
+    ["randomizeMapWave", "Randomize map / wave", o.randomizeMapWave, "randomizeMapWave"],
+    ["artifactDamageDoubled", "Artifact damage doubled", o.artifactDamageDoubled, "artifactDamageDoubled"],
+    ["artifactsFree", "Artifacts are free", o.artifactsFree, "artifactsFree"],
+    ["itemsFree", "Items are free", o.itemsFree, "itemsFree"],
+    ["infiniteRerolls", "Infinite rerolls", o.infiniteRerolls, "infiniteRerolls"],
+    ["thornsAura", "Thorns aura", o.thornsAura, "thornsAura"],
+    ["bloodTax", "Blood tax", o.bloodTax, "bloodTax"],
+    ["echoBarrage", "Echo barrage", o.echoBarrage, "echoBarrage"],
+    ["pacifistPays", "Pacifist pays", o.pacifistPays, "pacifistPays"],
+    ["berserkerEdge", "Berserker's edge", o.berserkerEdge, "berserkerEdge"],
+    ["slipNSlide", "Slip n' slide", o.slipNSlide, "slipNSlide"],
+    ["vampiricCreeps", "Vampiric creeps", o.vampiricCreeps, "vampiricCreeps"],
+    ["corpseExplosion", "Corpse explosion", o.corpseExplosion, "corpseExplosion"],
+    ["bounceHouse", "Bounce house", o.bounceHouse, "bounceHouse"],
   ];
 
   const d = RUN_OPTION_DEFAULTS;
@@ -137,6 +174,18 @@ export function gameTypeOptionsFieldsHtml(
       o.laneClearSpeedPct !== d.laneClearSpeedPct,
       o.artifactPlacement !== d.artifactPlacement,
       o.sendLocation !== "enemy",
+      o.relicDrop !== d.relicDrop,
+      o.enemyProjectileDmgMul !== d.enemyProjectileDmgMul,
+      o.enemyCollisionDmgMul !== d.enemyCollisionDmgMul,
+      o.playerDmgLmbMul !== d.playerDmgLmbMul,
+      o.playerDmgRmbMul !== d.playerDmgRmbMul,
+      o.playerDmgMmbMul !== d.playerDmgMmbMul,
+      o.wallBounciness !== d.wallBounciness,
+      o.playerSpeedMul !== d.playerSpeedMul,
+      o.playerSizeMul !== d.playerSizeMul,
+      o.enemySizeMul !== d.enemySizeMul,
+      o.critLottery !== d.critLottery,
+      o.enemyMutation !== d.enemyMutation,
     ].filter(Boolean).length;
 
   const wavesField = o.endless
@@ -155,6 +204,25 @@ export function gameTypeOptionsFieldsHtml(
     .map(
       (n) =>
         `<option value="${n}" ${o.laneClearSpeedPct === n ? "selected" : ""}>${n === 0 ? "0% (default)" : `${n}%`}</option>`,
+    )
+    .join("");
+
+  const relicDropOpts = RUN_OPTION_POOLS.relicDrop
+    .map(
+      (m) =>
+        `<option value="${m}" ${o.relicDrop === m ? "selected" : ""}>${formatRelicDrop(m)}</option>`,
+    )
+    .join("");
+  const critOpts = RUN_OPTION_POOLS.critLottery
+    .map(
+      (m) =>
+        `<option value="${m}" ${o.critLottery === m ? "selected" : ""}>${formatCritLottery(m)}</option>`,
+    )
+    .join("");
+  const mutOpts = RUN_OPTION_POOLS.enemyMutation
+    .map(
+      (m) =>
+        `<option value="${m}" ${o.enemyMutation === m ? "selected" : ""}>${formatEnemyMutation(m)}</option>`,
     )
     .join("");
 
@@ -204,11 +272,11 @@ export function gameTypeOptionsFieldsHtml(
       </label>
       <label class="run-field"${tip("chestOpen")}>
         <span>Chest open</span>
-        <select data-gt="chestOpenMul" id="${prefix}-chestOpenMul" ${dis}${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${o.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
+        <select data-gt="chestOpenMul" id="${prefix}-chestOpenMul" ${dis}${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${o.chestOpenMul === n ? "selected" : ""}>${formatChestOpen(n)}</option>`).join("")}</select>
       </label>
       <label class="run-field"${tip("chestDespawn")}>
         <span>Chest despawn</span>
-        <select data-gt="chestDespawnSec" id="${prefix}-chestDespawnSec" ${dis}${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${o.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
+        <select data-gt="chestDespawnSec" id="${prefix}-chestDespawnSec" ${dis}${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${o.chestDespawnSec === n ? "selected" : ""}>${formatChestDespawn(n)}</option>`).join("")}</select>
       </label>
       <label class="run-field"${tip("chestSpawn")}>
         <span>Chest spawn</span>
@@ -221,12 +289,18 @@ export function gameTypeOptionsFieldsHtml(
         <div class="run-grid cols-4">
           ${sel("enemyDensityMul", "Enemy density", "enemyDensity", RUN_OPTION_POOLS.enemyDensityMul, o.enemyDensityMul, (n) => `${n}×`)}
           ${sel("enemyHpMul", "Enemy HP", "enemyHp", RUN_OPTION_POOLS.enemyHpMul, o.enemyHpMul, (n) => `${n}×`)}
-          ${sel("enemySpeedMul", "Enemy speed", "enemySpeed", RUN_OPTION_POOLS.enemySpeedMul, o.enemySpeedMul, (n) => `${n}×`)}
+          ${sel("enemySpeedMul", "Enemy speed", "enemySpeed", RUN_OPTION_POOLS.enemySpeedMul, o.enemySpeedMul, (n) => formatMul(n))}
+          ${sel("playerSpeedMul", "Player speed", "playerSpeed", RUN_OPTION_POOLS.unitSpeed, o.playerSpeedMul, (n) => formatMul(n))}
+          ${sel("playerSizeMul", "Player size", "playerSize", RUN_OPTION_POOLS.unitSize, o.playerSizeMul, (n) => formatMul(n))}
+          ${sel("enemySizeMul", "Enemy size", "enemySize", RUN_OPTION_POOLS.unitSize, o.enemySizeMul, (n) => formatMul(n))}
           ${sel("incomeMul", "Income", "income", RUN_OPTION_POOLS.incomeMul, o.incomeMul, (n) => `${n}×`)}
-          ${sel("respawnMul", "Respawn", "respawn", RUN_OPTION_POOLS.respawnMul, o.respawnMul, (n) => `${n}×`)}
+          ${sel("respawnMul", "Respawn", "respawn", RUN_OPTION_POOLS.respawnMul, o.respawnMul, formatRespawnMul)}
           ${sel("startingBaseLevel", "Start base Lv", "startBase", RUN_OPTION_POOLS.startingBaseLevel, o.startingBaseLevel, (n) => `${n}`)}
           ${sel("levelDraftSize", "Level draft size", "levelDraft", RUN_OPTION_POOLS.levelDraftSize, o.levelDraftSize, (n) => `${n}`)}
           ${sel("relicDraftSize", "Relic draft size", "relicDraft", RUN_OPTION_POOLS.relicDraftSize, o.relicDraftSize, (n) => `${n}`)}
+          <label class="run-field"${tip("relicDrop")}><span>Relic drop</span>
+            <select data-gt="relicDrop" id="${prefix}-relicDrop" ${dis}${tip("relicDrop")}>${relicDropOpts}</select>
+          </label>
           ${sel("allyAi", "Ally AI", "allyAi", RUN_OPTION_POOLS.allyAi, o.allyAi, (n) => `${n}×`)}
           ${sel("suddenDeathBaseHp", "Sudden death HP", "suddenDeath", RUN_OPTION_POOLS.suddenDeathBaseHp, o.suddenDeathBaseHp, (n) => (n === 0 ? "Off" : `${n}`))}
           ${sel("fogThicknessPct", "Fog thickness", "fogThickness", RUN_OPTION_POOLS.fogThicknessPct, o.fogThicknessPct, (n) => `${n}%`)}
@@ -234,6 +308,18 @@ export function gameTypeOptionsFieldsHtml(
           ${sel("waveBreakSec", "Between waves", "waveBreak", RUN_OPTION_POOLS.waveBreakSec, o.waveBreakSec, (n) => `${n}s`)}
           <label class="run-field"${tip("laneClearSpeed")}><span>Lane-clear speed</span>
             <select data-gt="laneClearSpeedPct" id="${prefix}-laneClearSpeedPct" ${dis}${tip("laneClearSpeed")}>${laneClearOpts}</select>
+          </label>
+          ${dmgSel("enemyProjectileDmgMul", "Enemy projectile dmg", "enemyProjectileDmg", o.enemyProjectileDmgMul)}
+          ${dmgSel("enemyCollisionDmgMul", "Enemy collision dmg", "enemyCollisionDmg", o.enemyCollisionDmgMul)}
+          ${dmgSel("playerDmgLmbMul", "Player dmg (Primary)", "playerDmgLmb", o.playerDmgLmbMul)}
+          ${dmgSel("playerDmgRmbMul", "Player dmg (Mobility)", "playerDmgRmb", o.playerDmgRmbMul)}
+          ${dmgSel("playerDmgMmbMul", "Player dmg (Ultimate)", "playerDmgMmb", o.playerDmgMmbMul)}
+          ${sel("wallBounciness", "Wall bounciness", "wallBounciness", RUN_OPTION_POOLS.wallBounciness, o.wallBounciness, (n) => formatMul(n, "Instant Death"))}
+          <label class="run-field"${tip("critLottery")}><span>Crit lottery</span>
+            <select data-gt="critLottery" id="${prefix}-critLottery" ${dis}${tip("critLottery")}>${critOpts}</select>
+          </label>
+          <label class="run-field"${tip("enemyMutation")}><span>Enemy mutation</span>
+            <select data-gt="enemyMutation" id="${prefix}-enemyMutation" ${dis}${tip("enemyMutation")}>${mutOpts}</select>
           </label>
         </div>
         <div class="creative-check-grid">
@@ -326,9 +412,16 @@ export function readGameTypeOptionsFromDom(root: ParentNode, prefix: string): Ga
     return el.checked;
   };
   const sel = (id: string) => root.querySelector<HTMLSelectElement>(`#${prefix}-${id}`);
+  const str = (id: string, fb: string) => {
+    const el = sel(id);
+    return el?.value ?? fb;
+  };
   const ff = sel("friendlyFire");
   const send = sel("sendLocation");
   const place = sel("artifactPlacement");
+  const relicDrop = str("relicDrop", base.relicDrop) as RelicDropMode;
+  const critLottery = str("critLottery", base.critLottery) as CritLotteryMode;
+  const enemyMutation = str("enemyMutation", base.enemyMutation) as EnemyMutationMode;
   return {
     maxTurrets: num("maxTurrets", base.maxTurrets),
     startingGold: num("startingGold", base.startingGold),
@@ -374,6 +467,38 @@ export function readGameTypeOptionsFromDom(root: ParentNode, prefix: string): Ga
     respawnMinigame: bool("respawnMinigame", base.respawnMinigame),
     artifactPlacement: place?.value === "locked" ? "locked" : "free",
     allowBarracks: bool("allowBarracks", base.allowBarracks),
+    relicDrop: RUN_OPTION_POOLS.relicDrop.includes(relicDrop) ? relicDrop : base.relicDrop,
+    enemyProjectileDmgMul: num("enemyProjectileDmgMul", base.enemyProjectileDmgMul),
+    enemyCollisionDmgMul: num("enemyCollisionDmgMul", base.enemyCollisionDmgMul),
+    playerDmgLmbMul: num("playerDmgLmbMul", base.playerDmgLmbMul),
+    playerDmgRmbMul: num("playerDmgRmbMul", base.playerDmgRmbMul),
+    playerDmgMmbMul: num("playerDmgMmbMul", base.playerDmgMmbMul),
+    wallBounciness: num("wallBounciness", base.wallBounciness),
+    playerSpeedMul: num("playerSpeedMul", base.playerSpeedMul),
+    playerSizeMul: num("playerSizeMul", base.playerSizeMul),
+    enemySizeMul: num("enemySizeMul", base.enemySizeMul),
+    critLottery: RUN_OPTION_POOLS.critLottery.includes(critLottery) ? critLottery : base.critLottery,
+    enemyMutation: RUN_OPTION_POOLS.enemyMutation.includes(enemyMutation)
+      ? enemyMutation
+      : base.enemyMutation,
+    randomizeUtilityWave: bool("randomizeUtilityWave", base.randomizeUtilityWave),
+    doubleAllProjectiles: bool("doubleAllProjectiles", base.doubleAllProjectiles),
+    immuneToProjectiles: bool("immuneToProjectiles", base.immuneToProjectiles),
+    randomizeHeroWave: bool("randomizeHeroWave", base.randomizeHeroWave),
+    randomizeMapWave: bool("randomizeMapWave", base.randomizeMapWave),
+    artifactDamageDoubled: bool("artifactDamageDoubled", base.artifactDamageDoubled),
+    artifactsFree: bool("artifactsFree", base.artifactsFree),
+    itemsFree: bool("itemsFree", base.itemsFree),
+    infiniteRerolls: bool("infiniteRerolls", base.infiniteRerolls),
+    thornsAura: bool("thornsAura", base.thornsAura),
+    bloodTax: bool("bloodTax", base.bloodTax),
+    echoBarrage: bool("echoBarrage", base.echoBarrage),
+    pacifistPays: bool("pacifistPays", base.pacifistPays),
+    berserkerEdge: bool("berserkerEdge", base.berserkerEdge),
+    slipNSlide: bool("slipNSlide", base.slipNSlide),
+    vampiricCreeps: bool("vampiricCreeps", base.vampiricCreeps),
+    corpseExplosion: bool("corpseExplosion", base.corpseExplosion),
+    bounceHouse: bool("bounceHouse", base.bounceHouse),
     contentFilters: readContentFiltersFromDom(root),
   };
 }

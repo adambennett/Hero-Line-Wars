@@ -52,8 +52,10 @@ export function toggleShopFreeze(state: GameState): void {
   playSfx("ui");
 }
 
-export function shopItemCost(state: GameState, baseCost: number): number {
+export function shopItemCost(state: GameState, baseCost: number, itemId?: ShopItemId): number {
   if (gameplayCheats(state)?.freeShop) return 0;
+  if (itemId && isTurretArtifact(itemId) && state.artifactsFree) return 0;
+  if (itemId && !isTurretArtifact(itemId) && state.itemsFree) return 0;
   return Math.max(
     1,
     Math.round(baseCost * state.modifiers.shopPriceMul * (state.baseBranchMods?.shopPriceMul ?? 1)),
@@ -312,7 +314,7 @@ export function buyShopItem(state: GameState, itemId: ShopItemId): string | null
   if (!def) return "Unknown item";
   const owned = state.shopOwned[itemId] ?? 0;
   if (owned >= def.maxStacks) return "Max stacks owned";
-  const cost = shopItemCost(state, def.cost);
+  const cost = shopItemCost(state, def.cost, itemId);
   if (state.gold < cost) return "Not enough gold";
 
   if (isTurretArtifact(itemId)) {

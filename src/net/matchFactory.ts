@@ -167,7 +167,7 @@ export function buildMpMatch(
     utilityDraftLevel?: number;
   },
 ): MpMatch {
-  const resolved = resolveMapChoice(mapId);
+  const resolved = resolveMapChoice(mapId, lobby.contentFilters?.maps);
   const team0 = lobby.slots.filter((s) => s.team === 0).sort((a, b) => a.slot - b.slot);
   const team1Human = lobby.slots.filter((s) => s.team === 1).sort((a, b) => a.slot - b.slot);
   const aiSeats = lobby.aiSeats ?? [];
@@ -225,6 +225,36 @@ export function buildMpMatch(
     sendLocation: lobby.sendLocation,
     artifactPlacement: lobby.artifactPlacement,
     allowBarracks: lobby.allowBarracks,
+    relicDrop: lobby.relicDrop,
+    enemyProjectileDmgMul: lobby.enemyProjectileDmgMul,
+    enemyCollisionDmgMul: lobby.enemyCollisionDmgMul,
+    playerDmgLmbMul: lobby.playerDmgLmbMul,
+    playerDmgRmbMul: lobby.playerDmgRmbMul,
+    playerDmgMmbMul: lobby.playerDmgMmbMul,
+    wallBounciness: lobby.wallBounciness,
+    playerSpeedMul: lobby.playerSpeedMul,
+    playerSizeMul: lobby.playerSizeMul,
+    enemySizeMul: lobby.enemySizeMul,
+    critLottery: lobby.critLottery,
+    enemyMutation: lobby.enemyMutation,
+    randomizeUtilityWave: lobby.randomizeUtilityWave,
+    doubleAllProjectiles: lobby.doubleAllProjectiles,
+    immuneToProjectiles: lobby.immuneToProjectiles,
+    randomizeHeroWave: lobby.randomizeHeroWave,
+    randomizeMapWave: lobby.randomizeMapWave,
+    artifactDamageDoubled: lobby.artifactDamageDoubled,
+    artifactsFree: lobby.artifactsFree,
+    itemsFree: lobby.itemsFree,
+    infiniteRerolls: lobby.infiniteRerolls,
+    thornsAura: lobby.thornsAura,
+    bloodTax: lobby.bloodTax,
+    echoBarrage: lobby.echoBarrage,
+    pacifistPays: lobby.pacifistPays,
+    berserkerEdge: lobby.berserkerEdge,
+    slipNSlide: lobby.slipNSlide,
+    vampiricCreeps: lobby.vampiricCreeps,
+    corpseExplosion: lobby.corpseExplosion,
+    bounceHouse: lobby.bounceHouse,
   };
 
   const usedHeroes = new Set<HeroId>(lobby.slots.map((s) => s.heroId));
@@ -379,8 +409,38 @@ export function buildSoloVsAiMatch(opts: {
   sendLocation?: "own" | "enemy";
   artifactPlacement?: "free" | "locked";
   allowBarracks?: boolean;
+  relicDrop?: import("../meta/creativeOptions").RelicDropMode;
+  enemyProjectileDmgMul?: number;
+  enemyCollisionDmgMul?: number;
+  playerDmgLmbMul?: number;
+  playerDmgRmbMul?: number;
+  playerDmgMmbMul?: number;
+  wallBounciness?: number;
+  playerSpeedMul?: number;
+  playerSizeMul?: number;
+  enemySizeMul?: number;
+  critLottery?: import("../meta/creativeOptions").CritLotteryMode;
+  enemyMutation?: import("../meta/creativeOptions").EnemyMutationMode;
+  randomizeUtilityWave?: boolean;
+  doubleAllProjectiles?: boolean;
+  immuneToProjectiles?: boolean;
+  randomizeHeroWave?: boolean;
+  randomizeMapWave?: boolean;
+  artifactDamageDoubled?: boolean;
+  artifactsFree?: boolean;
+  itemsFree?: boolean;
+  infiniteRerolls?: boolean;
+  thornsAura?: boolean;
+  bloodTax?: boolean;
+  echoBarrage?: boolean;
+  pacifistPays?: boolean;
+  berserkerEdge?: boolean;
+  slipNSlide?: boolean;
+  vampiricCreeps?: boolean;
+  corpseExplosion?: boolean;
+  bounceHouse?: boolean;
 }): MpMatch {
-  const resolved = resolveMapChoice(opts.mapId);
+  const resolved = resolveMapChoice(opts.mapId, opts.contentFilters?.maps);
   const teamSize = opts.teamSize ?? 1;
   const store = loadAiStore();
   const slotAi = new Map<number, NeuralLaneAi | null>();
@@ -460,6 +520,36 @@ export function buildSoloVsAiMatch(opts: {
     sendLocation: opts.sendLocation,
     artifactPlacement: opts.artifactPlacement,
     allowBarracks: opts.allowBarracks,
+    relicDrop: opts.relicDrop,
+    enemyProjectileDmgMul: opts.enemyProjectileDmgMul,
+    enemyCollisionDmgMul: opts.enemyCollisionDmgMul,
+    playerDmgLmbMul: opts.playerDmgLmbMul,
+    playerDmgRmbMul: opts.playerDmgRmbMul,
+    playerDmgMmbMul: opts.playerDmgMmbMul,
+    wallBounciness: opts.wallBounciness,
+    playerSpeedMul: opts.playerSpeedMul,
+    playerSizeMul: opts.playerSizeMul,
+    enemySizeMul: opts.enemySizeMul,
+    critLottery: opts.critLottery,
+    enemyMutation: opts.enemyMutation,
+    randomizeUtilityWave: opts.randomizeUtilityWave,
+    doubleAllProjectiles: opts.doubleAllProjectiles,
+    immuneToProjectiles: opts.immuneToProjectiles,
+    randomizeHeroWave: opts.randomizeHeroWave,
+    randomizeMapWave: opts.randomizeMapWave,
+    artifactDamageDoubled: opts.artifactDamageDoubled,
+    artifactsFree: opts.artifactsFree,
+    itemsFree: opts.itemsFree,
+    infiniteRerolls: opts.infiniteRerolls,
+    thornsAura: opts.thornsAura,
+    bloodTax: opts.bloodTax,
+    echoBarrage: opts.echoBarrage,
+    pacifistPays: opts.pacifistPays,
+    berserkerEdge: opts.berserkerEdge,
+    slipNSlide: opts.slipNSlide,
+    vampiricCreeps: opts.vampiricCreeps,
+    corpseExplosion: opts.corpseExplosion,
+    bounceHouse: opts.bounceHouse,
   };
 
   /** When callers pass explicit allies/enemies, pin per-seat brains in slotAi. */
