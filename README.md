@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, Barracks / Stats / Challenges, Workshop editors, **AI Lab**, Compendium, **Patch Notes**, Game Info, Settings, and Quit. Menus use a shared dark steel / amber-teal layout system (grids + `.shine-btn` hover); Reduce motion in Settings turns hover shine and idle FX off.
+Open the printed local URL. The **main menu** covers Singleplayer, **Campaign**, Multiplayer, Barracks / Stats / Challenges, Workshop editors, **AI Lab**, Compendium, **Patch Notes**, Game Info, Settings, and Quit. Menus use a shared dark steel / amber-teal layout system (grids + `.shine-btn` hover); Reduce motion in Settings turns hover shine and idle FX off.
 
 | Control | Action |
 |---------|--------|
@@ -19,8 +19,7 @@ Open the printed local URL. The **main menu** covers Singleplayer, Multiplayer, 
 | MMB | Ultimate (Gunner: cycle arsenal) |
 | 1–6 | Send packs (upgrade base to unlock & strengthen) |
 | U / Upgrade Base | Spend gold — unlocks packs and raises cost/power of existing ones |
-| F | Open/close shop (stand on the SHOP pad near base) |
-| 4–6 | Buy offered shop items while the shop is open |
+| F | Open/close shop (stand on the SHOP pad near base; click items to buy) |
 | Esc / Pause | Pause (Continue, Settings, abandon with confirm). With two or more human players it opens the same menu **without** pausing — the match keeps running |
 | Bag | Inspect owned relics/items + passive |
 | View lane | Flip the camera to the opponent’s lane |
@@ -33,10 +32,11 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 
 ## Modes
 
-- **Singleplayer** — Classic abstract opponent, or a trained neural school (Rookie → Brutal) on a real dual lane. Run options: map, max turrets, starting gold, waves to win, friendly fire, **Ascension**.
-- **Barracks** — Spend **War Crests** (earned at run end) on permanent upgrades and hero commissions (Coil / Thorn start locked).
+- **Singleplayer** — Classic abstract opponent, or a trained neural school (Rookie → Brutal) on a real dual lane. Choose a named **Game Type** (Outlast default, Race, Survival, or custom) plus map/ascension; edit types in **Game Type Editor** (Workshop).
+- **Campaign** — Branching map run with its own lobby (hero + Game Type), combat checkpoints, shops, and chests. Barracks combat upgrades stay off unless Cheats → Barracks in Campaign.
+- **Barracks** — Spend **War Crests** (earned at run end) on permanent upgrades and hero commissions (Coil / Thorn start locked). Unlock purchases still apply everywhere; rank bonuses only apply when the game type allows (default off; not in multiplayer/campaign).
 - **Ascension** — A0–A12 cumulative modifiers (StS-style). Win at your highest unlocked level to open the next; Crests scale with Ascension.
-- **Multiplayer** — PeerJS lobbies (private code or public find-match). Modes: **1v1 / 2v2 / 3v3** PvP and **2p / 3p PvE**. Host-authoritative sim; allies share a physical lane but keep **independent** gold, shop, items, relics, and drafts. Mid-match disconnect shows an end overlay (no mid-match reconnect).
+- **Multiplayer** — PeerJS lobbies (private code or public find-match). Modes: **1v1 / 2v2 / 3v3** PvP and **2p / 3p PvE**. Host-authoritative sim; allies share a physical lane but keep **independent** gold, shop, items, relics, and drafts. Mid-match disconnect shows an end overlay (no mid-match reconnect). **Game Types** mirror SP for run extras.
 - **AI Lab** — In-browser genetic training on unlimited-wave duels (base death wins). Training can use the same **run / creative options** as solo (ascension, double elites, etc.). Recipes + checkpoints save as difficulty tiers for solo/PvE.
 
 ## Systems
@@ -46,7 +46,7 @@ Default win condition is **10 waves** (configurable; **Unlimited** = base death 
 - **Sends & income** — Passive gold/sec; spend gold to queue enemies into the **opponent’s** next wave (and raise your income).
 - **Base upgrades** — Unlock stronger send packs and scale cost/income/HP of already-unlocked packs.
 - **XP / relics** — Level drafts and relic drafts (Skip supported); Inventory shows descriptions.
-- **Shop / turrets** — Between and during waves; Artifacts auto-place on a free slot near base.
+- **Shop / Artifacts** — Between and during waves; Free placement (default) queues place-on-attack; Locked mode auto-places on map slots. Reroll stock for gold (run-scaling cost).
 - **Opponent panel** — Live enemy HP, wave, income, and send status without leaving your lane.
 - **SFX** — Procedural Web Audio (hits, casts, buys, level-up, boss slam rumble).
 

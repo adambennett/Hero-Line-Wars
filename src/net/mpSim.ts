@@ -37,14 +37,14 @@ import {
 import { tickGunnerWeapons } from "../systems/gunner";
 import { tryCastUtility, tickUtilityEffects } from "../systems/utility";
 import { chooseBaseBranch, tryUpgradeBase } from "../systems/baseUpgrade";
-import { buyShopItem, tickShopRotation, beginWaveShop } from "../systems/shop";
+import { buyShopItem, buyShopRerollToken, tickShopRotation, beginWaveShop } from "../systems/shop";
 import { buySendPack, availableSendPacks, consumePendingSends } from "../systems/send";
 import { updateEnemies, createEnemy } from "../systems/enemies";
-import { updateTurrets } from "../systems/turrets";
+import { updateTurrets, tryPlacePendingArtifact } from "../systems/turrets";
 import { chooseChestReward, tickChests, tickMapSpecials } from "../systems/chests";
 import { applyWaveRider, tryPhoenixRevive } from "../systems/relics";
 import { pickEnemyKind } from "../data/enemies";
-import { MAP_W, WAVE_BREAK_SEC, WAVE_SCALE } from "../data/constants";
+import { MAP_W, WAVE_SCALE } from "../data/constants";
 import {
   circleHitsObstacle,
   blockedByObstacle,
@@ -194,12 +194,30 @@ function applyHeroCombat(state: GameState, hero: HeroRuntime, intent: CombatInte
     if (intent.utility) tryCastUtility(state);
     tickAbilityEffects(state, dt);
     tickUtilityEffects(state, dt);
-    tickHeroKits(state, dt, intent.attackHeld);
+    if (state.pendingArtifactDebounce > 0) {
+      state.pendingArtifactDebounce = Math.max(0, state.pendingArtifactDebounce - dt);
+    }
+    if (
+      state.pendingArtifact &&
+      state.pendingArtifactDebounce <= 0 &&
+      intent.attackHeld
+    ) {
+      // Place once per hold edge-ish: only when attackCd is full so we don't spam
+      if (hero.attackCd <= 0) {
+        tryPlacePendingArtifact(state, state.aimWorldX, state.aimWorldY);
+      }
+    }
+    tickHeroKits(state, dt, intent.attackHeld && !state.pendingArtifact);
     if (heroUsesVectorKit(hero.heroId)) tickVectorMomentum(state, dt);
 
     const canBasic =
       !heroUsesGyroKit(hero.heroId) || (hero.bladeMode ?? "wrapped") === "wrapped";
-    if (canBasic && intent.attackHeld && hero.attackCd <= 0) {
+    if (
+      !state.pendingArtifact &&
+      canBasic &&
+      intent.attackHeld &&
+      hero.attackCd <= 0
+    ) {
       tryBasicAttack(state);
     }
   });
@@ -212,14 +230,17 @@ function applyLaneUiIntent(state: GameState, intent: CombatIntent): void {
     else if (state.nearShop) state.shopOpen = true;
   }
   if (intent.sendDigit != null && state.curseSendBlock <= 0 && !state.disableSends) {
-    if (!(state.shopOpen && intent.sendDigit >= 4)) {
-      const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
-      if (pack) buySendPack(state, pack.id);
-    }
+    const pack = availableSendPacks(state).find((p) => p.digit === intent.sendDigit);
+    if (pack) buySendPack(state, pack.id);
   }
+  // shopSlot left for AI/path; UI is click-only now
   if (intent.shopSlot != null && state.shopOpen && state.curseShopBlock <= 0 && !state.disableShop) {
-    const id = state.shopOffer[intent.shopSlot];
-    if (id) buyShopItem(state, id);
+    if (intent.shopSlot === 3) {
+      buyShopRerollToken(state);
+    } else {
+      const id = state.shopOffer[intent.shopSlot];
+      if (id) buyShopItem(state, id);
+    }
   }
   if (intent.chooseRelic) chooseRelic(state, intent.chooseRelic);
   if (intent.skipRelic) skipRelic(state);
@@ -433,14 +454,14 @@ function afterWaveClearMp(state: GameState): void {
   const openForActive = () => {
     if (state.waveTier === "elite" || state.waveTier === "boss") {
       if (openRelicDraftOnBag(state)) {
-        state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+        state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
         if (state.pendingLevelUps > 0) openLevelDraft(state);
         return true;
       }
     }
     if (state.pendingLevelUps > 0) {
       openLevelDraft(state);
-      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+      state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
       return true;
     }
     applySecondWind(state);
@@ -457,7 +478,7 @@ function afterWaveClearMp(state: GameState): void {
     openForActive();
   }
 
-  state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+  state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
   }

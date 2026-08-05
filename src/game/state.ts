@@ -1,5 +1,6 @@
 ﻿import {
   BASE_INCOME_GOLD_PER_SEC,
+  MAP_H,
   MAP_W,
   RESPAWN,
   STARTING_GOLD,
@@ -44,8 +45,15 @@ import {
 } from "../systems/gunner";
 import { tickMines, tickVectorMomentum } from "../systems/abilities";
 import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
+import {
+  createRespawnMinigame,
+  pressRespawnMinigame,
+  tickRespawnMinigame,
+} from "../systems/respawnMinigame";
+import { tickDefenseRegen } from "../systems/defense";
 import { draftRelicChoices, type RelicId } from "../data/relics";
 import { rollShopOffer, type ShopItemId } from "../data/shop";
+import { shopRerollCost } from "../data/shopReroll";
 import { DEFAULT_MAX_TURRETS, type TurretKind } from "../data/turrets";
 import type { LevelPassiveId } from "../data/xp";
 import { DEFAULT_UTILITY_DRAFT_LEVEL, type UtilityId } from "../data/utilities";
@@ -75,15 +83,17 @@ import {
 } from "../systems/combat";
 import { createEnemy, updateEnemies } from "../systems/enemies";
 import { applySecondWind, applyWaveRider, pickRelic, tryPhoenixRevive } from "../systems/relics";
-import { beginWaveShop, buyShopItem, tickShopRotation } from "../systems/shop";
+import { beginWaveShop, tickShopRotation } from "../systems/shop";
 import { buySendPack, consumePendingSends, availableSendPacks } from "../systems/send";
 import { tryUpgradeBase } from "../systems/baseUpgrade";
 import { chooseLevelPassive, openLevelDraft } from "../systems/xp";
 import { applyUtilityChoice, tickUtilityEffects, tryCastUtility } from "../systems/utility";
 import { updateTurrets } from "../systems/turrets";
+import { tryPlacePendingArtifact } from "../systems/turrets";
 import { tickChests, tickMapSpecials } from "../systems/chests";
 import { playSfx } from "../systems/audio";
 import { defaultModifiers, type RunModifiers } from "../meta/modifiers";
+import { emptyContentFilters, pickEnabledEnemyKind } from "../meta/contentFilters";
 import { emptyBranchMods } from "../data/baseBranches";
 import { gameplayCheats, areCheatsEnabled, loadCheatOptions } from "../meta/cheats";
 import { loadSettings } from "../ui/settings";
@@ -156,6 +166,16 @@ export type EnemyUnit = Unit & {
   campTimer?: number;
   dashTimer?: number;
   dashCd?: number;
+  /** Current armor / shield pools (0 if none). */
+  armor?: number;
+  maxArmor?: number;
+  shield?: number;
+  maxShield?: number;
+  shieldQuiet?: number;
+  /** Pure knockback melee (little/no HP damage). */
+  knockbackForce?: number;
+  /** Ranged projectiles that also knock back. */
+  projectileKnockback?: number;
   /** Poison / burn DoT from hex / ember basics. */
   dotTimer?: number;
   dotDps?: number;
@@ -211,6 +231,8 @@ export type Projectile = {
   magnetPull?: number;
   /** Hive drone: gently seek nearest enemy each frame. */
   seek?: boolean;
+  /** Hostile knockback impulse on hero hit. */
+  knockback?: number;
 };
 
 export type MapOrb = {
@@ -229,6 +251,19 @@ export type FxRing = {
   color: string;
   life: number;
   maxLife: number;
+};
+
+/** Floating damage / heal numbers. */
+export type DamageFloater = {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  life: number;
+  maxLife: number;
+  /** Scale multiplier (crits / big hits). */
+  scale: number;
+  vy: number;
 };
 
 export type PendingSend = {
@@ -283,7 +318,8 @@ export type ChestRewardOption =
   | { kind: "xp"; amount: number; label: string; blurb: string }
   | { kind: "heal"; amount: number; label: string; blurb: string }
   | { kind: "reroll"; amount: number; label: string; blurb: string }
-  | { kind: "base_repair"; amount: number; label: string; blurb: string };
+  | { kind: "base_repair"; amount: number; label: string; blurb: string }
+  | { kind: "stock_discount"; amount: number; label: string; blurb: string };
 
 export type BladeMode = "wrapped" | "flying" | "sling" | "rewinding" | "reforming";
 
@@ -377,6 +413,13 @@ export type HeroRuntime = Unit & {
   bloodEngineStacks?: number;
   /** Nest Core kill counter toward free send. */
   nestCoreKills?: number;
+  /** Armor pool (mitigates + chips; does not regen). */
+  armor?: number;
+  maxArmor?: number;
+  /** Energy shield pool (absorbs first; regenerates after quiet time). */
+  shield?: number;
+  maxShield?: number;
+  shieldQuiet?: number;
   /** Multiplayer: which lobby seat controls this hero (null = AI / unowned). */
   controllerSlot?: number | null;
   /** Gunner arsenal runtime. */
@@ -413,10 +456,16 @@ export type HeroRuntime = Unit & {
   /** Relay beacon temporary damage buff. */
   relayDmgTimer?: number;
   relayDmgBonus?: number;
+  /** Brief immunity between knockback pulses. */
+  knockbackCd?: number;
 };
 
 export type RunOptions = {
   mapId: MapId | string | "random";
+  /**
+   * Max artifacts. `-1` = use the map's turret slot count.
+   * Values above the map's slot count are clamped at match start.
+   */
   maxTurrets: number;
   /** Starting gold for the run. */
   startingGold: number;
@@ -478,6 +527,12 @@ export type RunOptions = {
   disableShop?: boolean;
   disableSends?: boolean;
   disableRelics?: boolean;
+  /** Skip level-up bonus drafts when game type filters out all bonuses. */
+  disableBonuses?: boolean;
+  /** Skip base-branch drafts when filters empty the pool. */
+  disableBaseUpgrades?: boolean;
+  /** Disabled content ids from the active Game Type. */
+  contentFilters?: import("../meta/contentFilters").GameTypeContentFilters;
   allyAiAggression?: number;
   fogAlways?: boolean;
   /** 0–100; 100 = fully black outside vision when fog is active. */
@@ -495,8 +550,32 @@ export type RunOptions = {
   wildChests?: boolean;
   /** Start with a tighter playable bounds. */
   crampedLane?: boolean;
+  /** Player-lane base cannot be destroyed. */
+  playerBaseInvincible?: boolean;
+  /** Enemy-lane / abstract opponent base cannot be destroyed. */
+  enemyBaseInvincible?: boolean;
+  /** Seconds between waves after both sides clear (default WAVE_BREAK_SEC). */
+  waveBreakSec?: number;
+  /** Large move-speed change while your lane has no living enemies (percent). */
+  laneClearSpeedPct?: number;
+  /** Precision respawn minigame while dead (default on). */
+  respawnMinigame?: boolean;
+  /**
+   * Where send packs go: own next wave vs enemy lane.
+   * Default: own while endless, else enemy.
+   */
+  sendLocation?: "own" | "enemy";
+  /** Free cursor place vs map-slot locked Artifacts. */
+  artifactPlacement?: "free" | "locked";
+  /** Apply Barracks combat meta upgrades this run. */
+  allowBarracks?: boolean;
   /** Humans in the whole game (both lanes). Drives pause + cheat policy. */
   humanPlayers?: number;
+  /**
+   * True only when this run was started from Campaign combat (not from SP while
+   * a campaign checkpoint exists in the background).
+   */
+  campaignCombat?: boolean;
 };
 
 export type GameState = {
@@ -549,6 +628,10 @@ export type GameState = {
   shopRefreshTimer: number;
   /** Frost passive: freeze shop refresh timer. */
   shopFrozen: boolean;
+  /** Dedicated 4th shop slot price (wave-scaled; rises per purchase). */
+  shopRerollCost: number;
+  /** Reroll token purchases this wave (resets on beginWaveShop). */
+  shopRerollBuysWave: number;
   pendingSends: PendingSend[];
   sendsThisRun: number;
   toast: string;
@@ -567,6 +650,26 @@ export type GameState = {
   paused: boolean;
   deathCount: number;
   respawnTimer: number;
+  /** When true, dead players can play the precision respawn bar. */
+  respawnMinigameEnabled: boolean;
+  respawnMinigame: import("../systems/respawnMinigame").RespawnMinigame | null;
+  /** This lane's base cannot drop to 0. */
+  baseInvincible: boolean;
+  /** Abstract / rival bases cannot be destroyed (classic opponent + dual-lane). */
+  enemyBaseInvincible: boolean;
+  /** Configured intermission length (before waveBreakMul). */
+  waveBreakSec: number;
+  /** % move speed delta while lane has zero living enemies (0 = none). */
+  laneClearSpeedPct: number;
+  /** free = click place; locked = map slots only. */
+  artifactPlacement: "free" | "locked";
+  unlimitedArtifacts: boolean;
+  pendingArtifact: import("../data/turrets").TurretKind | null;
+  pendingArtifactDebounce: number;
+  /** After buy, seconds before place click counts. */
+  artifactPlaceDebounceSec: number;
+  shopStockRerollBuys: number;
+  shopStockRerollDiscount: number;
   damageFlash: number;
   vignette: number;
   hitFlash: number;
@@ -627,6 +730,10 @@ export type GameState = {
   teamSize: 1 | 2 | 3;
   /** Solo endless survival (no rival lane). */
   endless: boolean;
+  /** Resolved send destination at match start. */
+  sendLocation: "own" | "enemy";
+  /** Floating combat numbers (client-filtered by settings when drawing). */
+  damageFloaters: DamageFloater[];
   chestOpenMul: number;
   chestDespawnSec: number;
   chestSpawnChance: number;
@@ -704,6 +811,9 @@ export type GameState = {
   disableShop: boolean;
   disableSends: boolean;
   disableRelics: boolean;
+  disableBonuses: boolean;
+  disableBaseUpgrades: boolean;
+  contentFilters: import("../meta/contentFilters").GameTypeContentFilters;
   fogAlways: boolean;
   fogThicknessPct: number;
   fogVisionRadius: number;
@@ -763,8 +873,23 @@ export function createState(
   const friendlyFire = opts?.friendlyFire ?? false;
   const baseMax = Math.round(map.base.maxHp * mods.baseHpMul);
   map.base.maxHp = baseMax;
+  const mapSlotCount = map.turretSlots.length;
+  const rawTurrets = opts?.maxTurrets ?? DEFAULT_MAX_TURRETS;
+  const unlimitedArtifacts = rawTurrets === -2;
+  const resolvedTurrets = unlimitedArtifacts
+    ? 99
+    : rawTurrets < 0
+      ? mapSlotCount
+      : Math.max(0, Math.floor(rawTurrets));
   const maxTurrets =
-    (opts?.maxTurrets ?? DEFAULT_MAX_TURRETS) + (mods.applyPlayerMeta ? mods.maxTurretsBonus : 0);
+    (unlimitedArtifacts
+      ? resolvedTurrets
+      : Math.min(resolvedTurrets, Math.max(0, mapSlotCount))) +
+    (mods.applyPlayerMeta ? mods.maxTurretsBonus : 0);
+  const artifactPlacement =
+    opts?.artifactPlacement === "locked" || opts?.artifactPlacement === "free"
+      ? opts.artifactPlacement
+      : "free";
   // Creative run option overlays
   if (opts?.enemyHpMul) mods.enemyHpMul *= opts.enemyHpMul;
   if (opts?.enemySpeedMul) mods.enemySpeedMul *= opts.enemySpeedMul;
@@ -780,10 +905,19 @@ export function createState(
     map.base.maxHp = baseHp;
   }
   const startBase = Math.max(0, opts?.startingBaseLevel ?? 0);
+  const waveBreakSec = Math.max(0, opts?.waveBreakSec ?? WAVE_BREAK_SEC);
+  const sendLocation: "own" | "enemy" =
+    opts?.sendLocation === "own" || opts?.sendLocation === "enemy"
+      ? opts.sendLocation
+      : endless
+        ? "own"
+        : "enemy";
   // Human count is known up-front for MP (matchFactory passes it) — a cheating
   // host must not seed a multi-human match with cheat gold / rerolls.
   const humanPlayers = Math.max(1, Math.floor(opts?.humanPlayers ?? 1));
   const cheats = humanPlayers <= 1 && areCheatsEnabled() ? loadCheatOptions() : null;
+  const startArmor = def.passive.id === "platebound" ? 42 : 0;
+  const startShield = def.passive.id === "aegis_lattice" ? 28 : 0;
   return {
     status: "playing",
     map,
@@ -837,6 +971,11 @@ export function createState(
       bloodEngineStacks: 0,
       nestCoreKills: 0,
       gunnerWeaponIndex: heroId === "gunner" ? 0 : undefined,
+      armor: startArmor,
+      maxArmor: startArmor,
+      shield: startShield,
+      maxShield: startShield,
+      shieldQuiet: 0,
       gunnerAmmo: heroId === "gunner" ? gunnerWeaponAt(0).clip : undefined,
       gunnerReload: 0,
       gunnerWeaponCd: 0,
@@ -861,7 +1000,7 @@ export function createState(
     incomePerSec: (BASE_INCOME_GOLD_PER_SEC + mods.incomeFlat) * mods.incomeMul,
     wave: 0,
     waveTier: "normal",
-    waveTimer: 2 * mods.waveBreakMul,
+    waveTimer: waveBreakSec * mods.waveBreakMul * 0.4,
     spawning: false,
     toSpawn: 0,
     sentQueue: [],
@@ -872,10 +1011,12 @@ export function createState(
     nearShop: false,
     wasNearShop: false,
     shopOwned: {},
-    shopOffer: rollShopOffer(),
+    shopOffer: rollShopOffer([], opts?.contentFilters),
     shopRefreshesLeft: 0,
     shopRefreshTimer: 0,
     shopFrozen: false,
+    shopRerollCost: shopRerollCost(1, 0),
+    shopRerollBuysWave: 0,
     pendingSends: [],
     sendsThisRun: 0,
     toast: mods.ascension > 0 ? `${map.name} · A${mods.ascension}` : `${map.name}`,
@@ -893,6 +1034,22 @@ export function createState(
     paused: false,
     deathCount: 0,
     respawnTimer: 0,
+    respawnMinigameEnabled: opts?.respawnMinigame !== false,
+    respawnMinigame: null,
+    baseInvincible: !!opts?.playerBaseInvincible,
+    enemyBaseInvincible: !!opts?.enemyBaseInvincible,
+    waveBreakSec,
+    laneClearSpeedPct:
+      typeof opts?.laneClearSpeedPct === "number" && Number.isFinite(opts.laneClearSpeedPct)
+        ? opts.laneClearSpeedPct
+        : 0,
+    artifactPlacement,
+    unlimitedArtifacts,
+    pendingArtifact: null,
+    pendingArtifactDebounce: 0,
+    artifactPlaceDebounceSec: 0.35,
+    shopStockRerollBuys: 0,
+    shopStockRerollDiscount: 0,
     damageFlash: 0,
     vignette: 0,
     hitFlash: 0,
@@ -918,6 +1075,8 @@ export function createState(
     allies: [],
     teamSize: opts?.teamSize ?? 1,
     endless,
+    sendLocation,
+    damageFloaters: [],
     chestOpenMul: opts?.chestOpenMul ?? 1,
     chestDespawnSec: opts?.chestDespawnSec ?? 28,
     chestSpawnChance: opts?.disableChests
@@ -983,6 +1142,9 @@ export function createState(
     disableShop: !!opts?.disableShop,
     disableSends: !!opts?.disableSends,
     disableRelics: !!opts?.disableRelics,
+    disableBonuses: !!opts?.disableBonuses,
+    disableBaseUpgrades: !!opts?.disableBaseUpgrades,
+    contentFilters: opts?.contentFilters ?? emptyContentFilters(),
     fogAlways: !!opts?.fogAlways,
     fogThicknessPct: Math.max(0, Math.min(100, opts?.fogThicknessPct ?? 55)),
     fogVisionRadius: Math.max(40, opts?.fogVisionRadius ?? 120),
@@ -999,7 +1161,8 @@ export function createState(
 }
 
 function spawnEnemy(state: GameState, opts?: { hpScale?: number; sent?: boolean }): void {
-  const kind = pickEnemyKind(state.wave, opts?.sent ?? false);
+  const preferred = pickEnemyKind(state.wave, opts?.sent ?? false);
+  const kind = pickEnabledEnemyKind(state.contentFilters, preferred);
   state.enemies.push(createEnemy(state, kind, opts));
 }
 
@@ -1013,9 +1176,17 @@ function startWave(state: GameState): void {
   beginWaveShop(state);
   onPlayerWaveStart(state);
 
-  // Warden Bastion
+  // Warden Platebound — top off armor each wave
   if (state.hero.heroId === "warden" && state.hero.alive) {
-    state.hero.barrierTimer = Math.max(state.hero.barrierTimer, 1.8);
+    state.hero.maxArmor = Math.max(state.hero.maxArmor ?? 0, 42);
+    state.hero.armor = state.hero.maxArmor;
+  }
+  // Prism Aegis Lattice — refresh shield at wave start if quiet
+  if (state.hero.heroId === "prism" && state.hero.alive) {
+    state.hero.maxShield = Math.max(state.hero.maxShield ?? 0, 28);
+    if ((state.hero.shieldQuiet ?? 99) >= 3.2) {
+      state.hero.shield = state.hero.maxShield;
+    }
   }
 
   spawnWaveSpecials(state, plan);
@@ -1086,6 +1257,14 @@ export function heroMoveSpeed(state: GameState): number {
   if ((state.hero.zipSpeedTimer ?? 0) > 0) spd += 40;
   if ((state.hero.gatewalkTimer ?? 0) > 0) spd *= 1.3;
   if (state.utilitySprintTimer > 0) spd += 70;
+  if (
+    !state.enemies.some((e) => e.alive) &&
+    !state.spawning &&
+    state.laneClearSpeedPct !== 0
+  ) {
+    // 100% ≈ 2×; −100% freezes while lane is clear.
+    spd *= Math.max(0, 1 + state.laneClearSpeedPct / 100);
+  }
   // Gyro kit: slow more as spin ramps (cap ~55% slow); lock move while blades detached
   if (heroUsesGyroKit(state.hero.heroId)) {
     const spin = state.hero.bladeSpin ?? 0;
@@ -1159,6 +1338,10 @@ export function applyDeathLives(state: GameState, hero: HeroRuntime): void {
   }
   if (hero === state.hero || hero.controllerSlot === state.hero.controllerSlot) {
     state.respawnTimer = delay;
+    state.respawnMinigame =
+      state.respawnMinigameEnabled && Number.isFinite(delay) && delay > 1
+        ? createRespawnMinigame()
+        : null;
   } else {
     hero.attackCd = delay;
   }
@@ -1202,6 +1385,17 @@ function respawnHero(state: GameState): void {
   state.hero.barrierTimer = 0;
   state.hero.whirlwindTimer = 0;
   state.hero.radius = def.radius;
+  state.respawnMinigame = null;
+  // Platebound / Aegis Lattice refresh defensive pools on respawn.
+  if (def.passive.id === "platebound") {
+    state.hero.maxArmor = Math.max(state.hero.maxArmor ?? 0, 42);
+    state.hero.armor = state.hero.maxArmor;
+  }
+  if (def.passive.id === "aegis_lattice") {
+    state.hero.maxShield = Math.max(state.hero.maxShield ?? 0, 28);
+    state.hero.shield = state.hero.maxShield;
+    state.hero.shieldQuiet = 0;
+  }
   state.toast = "Respawned!";
   state.toastTimer = 1.4;
 }
@@ -1334,14 +1528,14 @@ function updateProjectiles(state: GameState, dt: number): void {
   state.projectiles = state.projectiles.filter((p) => p.alive);
 }
 
-const MAP_H_PAD = 600;
+const MAP_H_PAD = MAP_H + 40;
 
 function afterWaveClear(state: GameState, input: Input): boolean {
   if (state.waveTier === "elite" || state.waveTier === "boss") {
     const choices = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
     if (choices.length > 0) {
       openOrQueueDraft(state, { kind: "relic", choices });
-      state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+      state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
       if (state.pendingLevelUps > 0) {
         openLevelDraft(state);
       }
@@ -1351,7 +1545,7 @@ function afterWaveClear(state: GameState, input: Input): boolean {
   }
   if (state.pendingLevelUps > 0) {
     openLevelDraft(state);
-    state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+    state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
     input.endFrame();
     return true;
   }
@@ -1362,7 +1556,7 @@ function afterWaveClear(state: GameState, input: Input): boolean {
       state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + missing * 0.25);
     }
   }
-  state.waveTimer = WAVE_BREAK_SEC * state.modifiers.waveBreakMul;
+  state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
     input.endFrame();
@@ -1468,6 +1662,23 @@ export function update(state: GameState, input: Input, dt: number): void {
 
   if (!state.hero.alive) {
     if (Number.isFinite(state.respawnTimer)) {
+      if (state.respawnMinigame && state.respawnTimer > 1) {
+        tickRespawnMinigame(state.respawnMinigame, dt);
+        // Space / utility press attempts the precision window.
+        if (input.consumeAction("utility") || input.consumePress("Space")) {
+          const shaved = pressRespawnMinigame(state.respawnMinigame, state.respawnTimer);
+          if (shaved > 0) {
+            state.respawnTimer = Math.max(1, state.respawnTimer - shaved);
+            state.toast = `Precision! −${shaved.toFixed(1)}s`;
+            state.toastTimer = 0.7;
+          } else if (state.respawnMinigame.lastHit === false) {
+            state.toast = "Missed the window";
+            state.toastTimer = 0.45;
+          }
+        }
+      } else {
+        state.respawnMinigame = null;
+      }
       state.respawnTimer -= dt;
       if (state.respawnTimer <= 0) respawnHero(state);
     }
@@ -1477,6 +1688,18 @@ export function update(state: GameState, input: Input, dt: number): void {
       state.hero.slowTimer = 0;
       state.hero.slowMul = 1;
     }
+  }
+  if (state.hero.alive) {
+    const defPool = {
+      armor: state.hero.armor ?? 0,
+      maxArmor: state.hero.maxArmor ?? 0,
+      shield: state.hero.shield ?? 0,
+      maxShield: state.hero.maxShield ?? 0,
+      shieldQuiet: state.hero.shieldQuiet ?? 0,
+    };
+    tickDefenseRegen(defPool, dt);
+    state.hero.shield = defPool.shield;
+    state.hero.shieldQuiet = defPool.shieldQuiet;
   }
 
   const nearNow = nearAnyShop(state.map, state.hero, state.hero.alive);
@@ -1517,7 +1740,6 @@ export function update(state: GameState, input: Input, dt: number): void {
 
   if (!state.disableSends && state.curseSendBlock <= 0) {
     for (const pack of availableSendPacks(state)) {
-      if (pack.digit >= 4 && state.shopOpen) continue;
       const sendAction = `send${pack.digit}` as
         | "send1"
         | "send2"
@@ -1533,11 +1755,8 @@ export function update(state: GameState, input: Input, dt: number): void {
     }
   }
 
-  if (state.shopOpen && state.hero.alive && state.curseShopBlock <= 0 && !state.disableShop) {
-    (["Digit4", "Digit5", "Digit6"] as const).forEach((code, i) => {
-      const id = state.shopOffer[i];
-      if (input.consumePress(code) && id) buyShopItem(state, id);
-    });
+  if (state.pendingArtifactDebounce > 0) {
+    state.pendingArtifactDebounce = Math.max(0, state.pendingArtifactDebounce - dt);
   }
 
   if (state.hero.alive) {
@@ -1589,13 +1808,26 @@ export function update(state: GameState, input: Input, dt: number): void {
 
     tickAbilityEffects(state, dt);
     tickUtilityEffects(state, dt);
+    // Pending free Artifact: first attack press after debounce places at cursor.
+    if (
+      state.pendingArtifact &&
+      state.pendingArtifactDebounce <= 0 &&
+      input.consumeAction("attack")
+    ) {
+      tryPlacePendingArtifact(state, state.aimWorldX, state.aimWorldY);
+    }
     tickHeroKits(state, dt, input.isActionHeld("attack"));
     if (heroUsesVectorKit(state.hero.heroId)) tickVectorMomentum(state, dt);
 
     const canBasic =
       !heroUsesGyroKit(state.hero.heroId) ||
       (state.hero.bladeMode ?? "wrapped") === "wrapped";
-    if (canBasic && input.isActionHeld("attack") && state.hero.attackCd <= 0) {
+    if (
+      !state.pendingArtifact &&
+      canBasic &&
+      input.isActionHeld("attack") &&
+      state.hero.attackCd <= 0
+    ) {
       tryBasicAttack(state);
     }
   }
@@ -1610,6 +1842,12 @@ export function update(state: GameState, input: Input, dt: number): void {
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);
+  for (const f of state.damageFloaters) {
+    f.life -= dt;
+    f.y += f.vy * dt;
+    f.vy *= 0.92;
+  }
+  state.damageFloaters = state.damageFloaters.filter((f) => f.life > 0);
 
   const waveActive = state.spawning || state.enemies.length > 0;
   tickShopRotation(state, dt, waveActive && !state.pausedForDraft);
@@ -1635,8 +1873,12 @@ export function update(state: GameState, input: Input, dt: number): void {
   }
 
   if (state.baseHp <= 0) {
-    state.baseHp = 0;
-    state.status = "lost";
+    if (state.baseInvincible) {
+      state.baseHp = Math.max(1, state.baseHp);
+    } else {
+      state.baseHp = 0;
+      state.status = "lost";
+    }
   }
 
   if (state.hero.alive && state.hero.hp <= 0) {

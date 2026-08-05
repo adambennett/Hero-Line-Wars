@@ -1,5 +1,9 @@
 /** Branching base upgrade choices after early linear levels. */
 
+import type { Rarity } from "./rarity";
+import type { GameTypeContentFilters } from "../meta/contentFilters";
+import { isIdEnabled } from "../meta/contentFilters";
+
 export type BaseBranchId =
   | "offense_spikes"
   | "offense_overclock"
@@ -25,6 +29,7 @@ export type BaseBranchDef = {
   name: string;
   blurb: string;
   tag: "Offense" | "Economy" | "Defense" | "Sends" | "Artifacts" | "Hybrid";
+  rarity: Rarity;
   /** Applied once when chosen. */
   apply: (mods: BaseBranchMods) => void;
 };
@@ -72,6 +77,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "offense_spikes",
     name: "Spike Barrage",
     blurb: "+8 attack damage.",
+    rarity: "common",
     tag: "Offense",
     apply: (m) => {
       m.damageFlat += 8;
@@ -81,6 +87,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "offense_overclock",
     name: "Overclocked Arms",
     blurb: "Attack 12% faster.",
+    rarity: "uncommon",
     tag: "Offense",
     apply: (m) => {
       m.attackSpeedMul *= 0.88;
@@ -90,6 +97,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "offense_sharpshoot",
     name: "Sharpshoot Doctrine",
     blurb: "+5 damage and +15 move speed.",
+    rarity: "rare",
     tag: "Offense",
     apply: (m) => {
       m.damageFlat += 5;
@@ -100,6 +108,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "economy_tax",
     name: "War Tax Office",
     blurb: "+0.7 gold/sec income.",
+    rarity: "common",
     tag: "Economy",
     apply: (m) => {
       m.incomeFlat += 0.7;
@@ -109,6 +118,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "economy_courier",
     name: "Courier Contracts",
     blurb: "Shop prices −8%.",
+    rarity: "uncommon",
     tag: "Economy",
     apply: (m) => {
       m.shopPriceMul *= 0.92;
@@ -118,6 +128,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "economy_mint",
     name: "Kill Mint",
     blurb: "+3 gold per kill.",
+    rarity: "rare",
     tag: "Economy",
     apply: (m) => {
       m.killGoldFlat += 3;
@@ -127,6 +138,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "defense_plate",
     name: "Plated Keep",
     blurb: "Base +35 max HP (repairs 35).",
+    rarity: "common",
     tag: "Defense",
     apply: (m) => {
       m.baseHpFlat += 35;
@@ -136,6 +148,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "defense_repair",
     name: "Field Medics",
     blurb: "+25 hero max HP (heals 25).",
+    rarity: "uncommon",
     tag: "Defense",
     apply: (m) => {
       m.heroHpFlat += 25;
@@ -145,6 +158,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "defense_bastion",
     name: "Bastion Rites",
     blurb: "Base takes 10% less damage.",
+    rarity: "rare",
     tag: "Defense",
     apply: (m) => {
       m.baseDamageTakenMul *= 0.9;
@@ -154,6 +168,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "send_pressure",
     name: "Pressure Doctrine",
     blurb: "Sent creeps +15% HP.",
+    rarity: "common",
     tag: "Sends",
     apply: (m) => {
       m.sendHpMul *= 1.15;
@@ -163,6 +178,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "send_bargain",
     name: "Bargain Sends",
     blurb: "Send packs cost 12% less.",
+    rarity: "uncommon",
     tag: "Sends",
     apply: (m) => {
       m.sendCostMul *= 0.88;
@@ -172,6 +188,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "send_horde",
     name: "Horde Stipend",
     blurb: "Send income +18%.",
+    rarity: "rare",
     tag: "Sends",
     apply: (m) => {
       m.sendIncomeMul *= 1.18;
@@ -181,6 +198,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "artifact_calibrate",
     name: "Calibrated Artifacts",
     blurb: "Artifacts deal +20% damage.",
+    rarity: "uncommon",
     tag: "Artifacts",
     apply: (m) => {
       m.artifactDamageMul *= 1.2;
@@ -190,6 +208,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "artifact_fortify",
     name: "Fortified Emplacements",
     blurb: "Artifacts fire 15% faster.",
+    rarity: "rare",
     tag: "Artifacts",
     apply: (m) => {
       m.artifactFireMul *= 0.85;
@@ -199,6 +218,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "artifact_network",
     name: "Artifact Network",
     blurb: "+1 max artifact slot.",
+    rarity: "mythic",
     tag: "Artifacts",
     apply: (m) => {
       m.maxTurretsBonus += 1;
@@ -208,6 +228,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "hybrid_warchest",
     name: "War Chest Annex",
     blurb: "+0.4 income and +4 damage.",
+    rarity: "rare",
     tag: "Hybrid",
     apply: (m) => {
       m.incomeFlat += 0.4;
@@ -218,6 +239,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "hybrid_field",
     name: "Field Synergy",
     blurb: "+15 hero HP and shop −5%.",
+    rarity: "uncommon",
     tag: "Hybrid",
     apply: (m) => {
       m.heroHpFlat += 15;
@@ -228,6 +250,7 @@ export const BASE_BRANCHES: Record<BaseBranchId, BaseBranchDef> = {
     id: "hybrid_tempo",
     name: "Tempo Engine",
     blurb: "Attack 8% faster; +20 move speed.",
+    rarity: "mythic",
     tag: "Hybrid",
     apply: (m) => {
       m.attackSpeedMul *= 0.92;
@@ -251,21 +274,25 @@ export function shouldOfferBaseBranch(newLevel: number): boolean {
   return newLevel >= 3 && newLevel % 2 === 1;
 }
 
-export function draftBaseBranches(owned: BaseBranchId[]): BaseBranchId[] {
+export function draftBaseBranches(
+  owned: BaseBranchId[],
+  contentFilters?: GameTypeContentFilters | null,
+): BaseBranchId[] {
   const poolIndex = Math.min(POOLS.length - 1, Math.floor(owned.length));
-  const pool = POOLS[poolIndex]!.filter((id) => !owned.includes(id));
+  const pool = POOLS[poolIndex]!.filter(
+    (id) => !owned.includes(id) && isIdEnabled(contentFilters, "baseUpgrades", id),
+  );
   if (pool.length >= 3) return pool.slice(0, 3);
-  // Fill from all unused
   const rest = (Object.keys(BASE_BRANCHES) as BaseBranchId[]).filter(
-    (id) => !owned.includes(id) && !pool.includes(id),
+    (id) =>
+      !owned.includes(id) &&
+      !pool.includes(id) &&
+      isIdEnabled(contentFilters, "baseUpgrades", id),
   );
   const out = [...pool];
   for (const id of rest) {
     if (out.length >= 3) break;
     out.push(id);
-  }
-  while (out.length < 3) {
-    out.push(POOLS[0]![out.length % 3]!);
   }
   return out.slice(0, 3);
 }

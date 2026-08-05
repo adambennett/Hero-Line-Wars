@@ -21,6 +21,7 @@ import { grantKillXp } from "./xp";
 import { playSfx } from "./audio";
 import { heroHasPassive, heroUsesGyroKit, heroUsesVectorKit, resolveHero } from "../custom/registry";
 import { perksForState } from "./heroPerks";
+import { mitigateDamage } from "./defense";
 
 export function highGroundAt(state: GameState, p: Vec2): HighGroundZone | null {
   for (const z of state.map.highGrounds) {
@@ -280,6 +281,31 @@ export function addFx(
   state.fx.push({ x, y, radius, color, life, maxLife: life });
 }
 
+/** Spawn a floating damage number above a target (settings gate is at draw time). */
+export function spawnDamageNumber(
+  state: GameState,
+  x: number,
+  y: number,
+  amount: number,
+  opts?: { crit?: boolean; color?: string },
+): void {
+  if (amount <= 0) return;
+  if (state.damageFloaters.length > 48) state.damageFloaters.shift();
+  const whole = amount >= 10 ? Math.round(amount) : Math.round(amount * 10) / 10;
+  const big = amount >= 40 || !!opts?.crit;
+  const huge = amount >= 90;
+  state.damageFloaters.push({
+    x: x + (Math.random() - 0.5) * 14,
+    y: y - 12 - Math.random() * 8,
+    text: String(whole),
+    color: opts?.color ?? (opts?.crit ? "#ffe08a" : huge ? "#ffb060" : "#eef4ff"),
+    life: big ? 0.95 : 0.7,
+    maxLife: big ? 0.95 : 0.7,
+    scale: huge ? 1.55 : big ? 1.28 : amount >= 18 ? 1.1 : 1,
+    vy: -42 - Math.random() * 18,
+  });
+}
+
 export function killEnemy(state: GameState, e: EnemyUnit): void {
   if (!e.alive) return;
   e.alive = false;
@@ -363,8 +389,41 @@ export function damageEnemy(
   }
   if (gameplayCheats(state)?.oneShot) dmg = Math.max(dmg, e.hp);
 
+  // Armor / shield layers on the enemy.
+  const pool = {
+    armor: e.armor ?? 0,
+    maxArmor: e.maxArmor ?? 0,
+    shield: e.shield ?? 0,
+    maxShield: e.maxShield ?? 0,
+    shieldQuiet: e.shieldQuiet ?? 0,
+  };
+  // Anti-armor / anti-shield weapon variance.
+  if (pool.armor > 0 && opts?.fromBasic) {
+    dmg *= 1.12;
+  }
+  if (pool.shield > 0 && (pid === "aegis_lattice" || opts?.fromBasic)) {
+    dmg *= pool.shield > 0 && pid === "aegis_lattice" ? 1.18 : 1.08;
+  }
+  const mit = mitigateDamage(pool, dmg);
+  e.armor = pool.armor;
+  e.shield = pool.shield;
+  e.shieldQuiet = pool.shieldQuiet;
+  dmg = mit.hpDamage;
+
   e.hp -= dmg;
-  state.damageDealt += dmg;
+  const shown = dmg + mit.shieldAbsorbed + mit.armorBlocked;
+  state.damageDealt += shown;
+  if (shown > 0.15) {
+    spawnDamageNumber(state, e.x, e.y - e.radius, shown, {
+      crit: shown >= 55 || shown >= Math.max(28, e.maxHp * 0.12),
+      color:
+        mit.shieldAbsorbed > shown * 0.45
+          ? "#7ec8ff"
+          : mit.armorBlocked > shown * 0.45
+            ? "#c0c8d8"
+            : undefined,
+    });
+  }
   if (opts?.fromBasic || dmg >= 3) playSfx("hit");
 
   if (
@@ -962,6 +1021,31 @@ export function bounceProjectile(state: GameState, p: Projectile, hitId: number)
   return true;
 }
 
+export function applyHeroKnockback(
+  state: GameState,
+  hero: { alive: boolean; x: number; y: number; radius: number; knockbackCd?: number },
+  force: number,
+): void {
+  if (!hero.alive || force <= 0) return;
+  if ((hero.knockbackCd ?? 0) > 0) return;
+  const map = state.map;
+  const spawn = map.spawner;
+  const n = normalize(spawn.x - hero.x, spawn.y - hero.y + (Math.random() * 40 - 20));
+  const distPush = Math.min(68, 28 + force * 0.12);
+  const resolved = resolveMovePlayable(
+    map,
+    hero.x,
+    hero.y,
+    hero.x + n.x * distPush,
+    hero.y + n.y * distPush,
+    hero.radius,
+  );
+  hero.x = resolved.x;
+  hero.y = resolved.y;
+  hero.knockbackCd = 0.9;
+  addFx(state, hero.x, hero.y, 22, "#8ec8ff66", 0.25);
+}
+
 export function applyPlayerDamage(state: GameState, amount: number): void {
   if (amount <= 0 || !state.hero.alive) return;
   if (gameplayCheats(state)?.godMode) return;
@@ -970,8 +1054,22 @@ export function applyPlayerDamage(state: GameState, amount: number): void {
   if (hasRelic(state, "blood_price")) dmg *= 1.25;
   if (heroHasPassive(state.hero.heroId, "bedrock") && state.hero.barrierTimer > 0) dmg *= 0.85;
   if ((state.wardBeaconTimer ?? 0) > 0) dmg *= 0.88;
+
+  const pool = {
+    armor: state.hero.armor ?? 0,
+    maxArmor: state.hero.maxArmor ?? 0,
+    shield: state.hero.shield ?? 0,
+    maxShield: state.hero.maxShield ?? 0,
+    shieldQuiet: state.hero.shieldQuiet ?? 0,
+  };
+  const mit = mitigateDamage(pool, dmg);
+  state.hero.armor = pool.armor;
+  state.hero.shield = pool.shield;
+  state.hero.shieldQuiet = pool.shieldQuiet;
+  dmg = mit.hpDamage;
+
   state.hero.hp -= dmg;
-  state.damageTaken += dmg;
+  state.damageTaken += dmg + mit.shieldAbsorbed + mit.armorBlocked;
   if (heroHasPassive(state.hero.heroId, "rewind_ward")) {
     state.hero.chronaBank = (state.hero.chronaBank ?? 0) + dmg;
     state.hero.chronaCleanTimer = 2;
@@ -995,7 +1093,7 @@ export function applyHeroSlow(hero: { slowMul?: number; slowTimer?: number }, mu
 export function resolveHostileProjectile(
   state: GameState,
   p: Projectile,
-  heroes: { alive: boolean; x: number; y: number; radius: number; slowMul?: number; slowTimer?: number }[],
+  heroes: { alive: boolean; x: number; y: number; radius: number; slowMul?: number; slowTimer?: number; knockbackCd?: number }[],
   applyToHero: (hero: (typeof heroes)[number], damage: number) => void,
 ): void {
   const aoe = p.aoeRadius ?? 0;
@@ -1007,6 +1105,7 @@ export function resolveHostileProjectile(
       if (dist(p, h) <= aoe + h.radius) {
         applyToHero(h, p.damage);
         if (p.heroSlowMul != null) applyHeroSlow(h, p.heroSlowMul, p.heroSlowDuration ?? 1.5);
+        if (p.knockback) applyHeroKnockback(state, h, p.knockback);
       }
     }
   } else {
@@ -1015,6 +1114,7 @@ export function resolveHostileProjectile(
       if (dist(p, h) <= h.radius + p.radius) {
         applyToHero(h, p.damage);
         if (p.heroSlowMul != null) applyHeroSlow(h, p.heroSlowMul, p.heroSlowDuration ?? 1.5);
+        if (p.knockback) applyHeroKnockback(state, h, p.knockback);
         break;
       }
     }

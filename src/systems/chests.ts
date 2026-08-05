@@ -60,6 +60,8 @@ function rewardKey(opt: ChestRewardOption): string {
       return "reroll";
     case "base_repair":
       return "base_repair";
+    case "stock_discount":
+      return "stock_discount";
     case "item":
       return `item:${opt.itemId}`;
     case "relic":
@@ -186,19 +188,38 @@ function rollRelicReward(state: GameState, rarity: ChestRarity): ChestRewardOpti
   };
 }
 
-type RewardFamily = "gold" | "xp" | "heal" | "reroll" | "base_repair" | "item" | "relic";
+function rollStockDiscountReward(rarity: ChestRarity): ChestRewardOption {
+  const amount =
+    rarity === "common" ? 8 : rarity === "uncommon" ? 14 : rarity === "rare" ? 22 : 30;
+  return {
+    kind: "stock_discount",
+    amount,
+    label: `−${amount}g stock reroll`,
+    blurb: "Cheapens shop stock rerolls for the rest of the run.",
+  };
+}
+
+type RewardFamily =
+  | "gold"
+  | "xp"
+  | "heal"
+  | "reroll"
+  | "base_repair"
+  | "item"
+  | "relic"
+  | "stock_discount";
 
 function familiesForRarity(rarity: ChestRarity): RewardFamily[] {
   if (rarity === "common") {
-    return ["gold", "xp", "heal", "reroll", "base_repair"];
+    return ["gold", "xp", "heal", "reroll", "base_repair", "stock_discount"];
   }
   if (rarity === "uncommon") {
-    return ["gold", "xp", "heal", "reroll", "base_repair", "item"];
+    return ["gold", "xp", "heal", "reroll", "base_repair", "item", "stock_discount"];
   }
   if (rarity === "rare") {
-    return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic"];
+    return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic", "stock_discount"];
   }
-  return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic"];
+  return ["gold", "xp", "heal", "reroll", "base_repair", "item", "relic", "stock_discount"];
 }
 
 function rollFamilyReward(
@@ -221,6 +242,8 @@ function rollFamilyReward(
       return rollItemReward(rarity);
     case "relic":
       return rollRelicReward(state, rarity);
+    case "stock_discount":
+      return rollStockDiscountReward(rarity);
   }
 }
 
@@ -290,6 +313,9 @@ export function applyChestReward(state: GameState, opt: ChestRewardOption): void
     state.toast = `Chest: ${opt.label}`;
   } else if (opt.kind === "base_repair") {
     state.baseHp = Math.min(state.map.base.maxHp, state.baseHp + opt.amount);
+    state.toast = `Chest: ${opt.label}`;
+  } else if (opt.kind === "stock_discount") {
+    state.shopStockRerollDiscount = Math.min(80, state.shopStockRerollDiscount + opt.amount);
     state.toast = `Chest: ${opt.label}`;
   } else if (opt.kind === "item") {
     const prevOffer = state.shopOffer;

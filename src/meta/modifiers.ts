@@ -110,6 +110,7 @@ export function composeRunModifiers(
     mods.maxTurretsBonus += rank(ranks, "turret_permit");
     mods.startingLevelDrafts += rank(ranks, "drill_yard");
     mods.crestGainMul *= 1 + rank(ranks, "crest_forge") * 0.01;
+    if (rank(ranks, "unlock_challenge_crests_a") >= 1) mods.crestGainMul *= 1.1;
     mods.goldRewardMul *= 1 + rank(ranks, "bounty_board") * 0.04;
     mods.startingGoldDelta += rank(ranks, "veteran_pay") * 6;
     mods.incomeFlat += rank(ranks, "veteran_pay") * 0.1;

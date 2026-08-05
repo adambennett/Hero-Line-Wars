@@ -7,22 +7,27 @@ import {
   isTurretArtifact,
   rollShopOffer,
 } from "../data/shop";
+import { shopRerollCost, shopStockRerollCost } from "../data/shopReroll";
 import type { GameState } from "../game/state";
-import { placeTurret } from "./turrets";
+import { placeTurret, livingTurrets, effectiveMaxTurrets } from "./turrets";
 import { playSfx } from "./audio";
 import { isItemUnlocked } from "../meta/contentLocks";
 import { gameplayCheats } from "../meta/cheats";
+import type { TurretKind } from "../data/turrets";
+import { loadSettings } from "../ui/settings";
 
 export function refreshShopOffer(state: GameState): void {
-  state.shopOffer = rollShopOffer(state.shopOffer);
+  state.shopOffer = rollShopOffer(state.shopOffer, state.contentFilters);
   state.toast = "Shop stock refreshed";
   state.toastTimer = 1.2;
 }
 
 export function beginWaveShop(state: GameState): void {
-  state.shopOffer = rollShopOffer(state.shopOffer);
+  state.shopOffer = rollShopOffer(state.shopOffer, state.contentFilters);
   state.shopRefreshesLeft = SHOP_REFRESHES_PER_WAVE;
   state.shopRefreshTimer = SHOP_REFRESH_INTERVAL_SEC;
+  state.shopRerollBuysWave = 0;
+  state.shopRerollCost = shopRerollCost(state.wave, 0);
 }
 
 export function tickShopRotation(state: GameState, dt: number, waveActive: boolean): void {
@@ -312,6 +317,23 @@ export function buyShopItem(state: GameState, itemId: ShopItemId): string | null
 
   if (isTurretArtifact(itemId)) {
     if (state.disableArtifacts) return "Artifacts disabled";
+    if (state.artifactPlacement === "free") {
+      if (state.pendingArtifact) return "Place your pending Artifact first";
+      if (livingTurrets(state).length >= effectiveMaxTurrets(state)) {
+        return `Turret cap reached (${effectiveMaxTurrets(state)})`;
+      }
+      state.gold -= cost;
+      state.goldSpent += cost;
+      state.shopOwned[itemId] = owned + 1;
+      state.shopBuys += 1;
+      state.pendingArtifact = itemId as TurretKind;
+      const debounceOn = loadSettings().artifactPlaceDebounce !== false;
+      state.pendingArtifactDebounce = debounceOn ? state.artifactPlaceDebounceSec : 0;
+      state.toast = `Bought ${def.name} — attack to place`;
+      state.toastTimer = 2;
+      playSfx("buy");
+      return null;
+    }
     const err = placeTurret(state, itemId);
     if (err) {
       state.toast = err;
@@ -328,6 +350,47 @@ export function buyShopItem(state: GameState, itemId: ShopItemId): string | null
   applyGear(state, itemId);
 
   state.toast = `Bought ${def.name}`;
+  state.toastTimer = 1.6;
+  playSfx("buy");
+  return null;
+}
+
+/** Reroll rotating shop stock for gold (cost rises for the whole run). */
+export function buyShopStockReroll(state: GameState): string | null {
+  if (state.disableShop || state.curseShopBlock > 0) return "Shop blocked";
+  const cost = shopItemCost(
+    state,
+    shopStockRerollCost(state.shopStockRerollBuys, state.shopStockRerollDiscount),
+  );
+  if (state.gold < cost) return "Not enough gold";
+  state.gold -= cost;
+  state.goldSpent += cost;
+  state.shopBuys += 1;
+  state.shopStockRerollBuys += 1;
+  refreshShopOffer(state);
+  state.toast = "Shop stock rerolled";
+  state.toastTimer = 1.4;
+  playSfx("buy");
+  return null;
+}
+
+/** Reduce run-long stock reroll cost (chest reward). */
+export function applyShopStockDiscount(state: GameState, amount: number): void {
+  state.shopStockRerollDiscount = Math.min(80, state.shopStockRerollDiscount + amount);
+}
+
+/** Dedicated 4th shop slot — always available, wave-scaled rising price. */
+export function buyShopRerollToken(state: GameState): string | null {
+  if (state.disableShop || state.curseShopBlock > 0) return "Shop blocked";
+  const cost = shopItemCost(state, state.shopRerollCost);
+  if (state.gold < cost) return "Not enough gold";
+  state.gold -= cost;
+  state.goldSpent += cost;
+  state.shopBuys += 1;
+  state.rerollTokens += 1;
+  state.shopRerollBuysWave += 1;
+  state.shopRerollCost = shopRerollCost(state.wave, state.shopRerollBuysWave);
+  state.toast = "Bought Reroll Token";
   state.toastTimer = 1.6;
   playSfx("buy");
   return null;

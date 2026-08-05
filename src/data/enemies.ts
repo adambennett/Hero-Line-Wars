@@ -1,5 +1,8 @@
 /** Enemy archetypes — distinct move/attack/targeting for readability. */
 
+import type { GameTypeContentFilters } from "../meta/contentFilters";
+import { isIdEnabled } from "../meta/contentFilters";
+
 export type EnemyKind =
   | "grunt"
   | "hunter"
@@ -19,7 +22,14 @@ export type EnemyKind =
   | "hexlord"
   | "colossus"
   | "siren"
-  | "reaver";
+  | "reaver"
+  | "pusher"
+  | "knocker"
+  | "ironclad"
+  | "aegis_drone"
+  | "bulwark_boss"
+  | "ward_boss"
+  | "aegis_colossus";
 
 /**
  * Who the unit prioritizes while moving / attacking.
@@ -77,6 +87,13 @@ export type EnemyDef = {
   turretDamage?: number;
   /** Tier for HP scaling / UI. */
   tier?: "normal" | "elite" | "boss";
+  /** Starting armor / shield pools. */
+  armor?: number;
+  shield?: number;
+  /** Contact knockback impulse (px/s impulse feel). */
+  knockbackForce?: number;
+  /** Projectile knockback on hit. */
+  projectileKnockback?: number;
 };
 
 export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
@@ -463,10 +480,164 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     turretDamage: 28,
     tier: "boss",
   },
+  pusher: {
+    kind: "pusher",
+    name: "Pusher",
+    intent: "hero",
+    shape: "diamond",
+    color: "#6a8cff",
+    stroke: "#b8c8ff",
+    radius: 14,
+    speed: 78,
+    maxHp: 55,
+    contactDamage: 4,
+    baseDamage: 6,
+    goldReward: 7,
+    knockbackForce: 220,
+    turretDamage: 6,
+  },
+  knocker: {
+    kind: "knocker",
+    name: "Knocker",
+    intent: "hero",
+    shape: "triangle",
+    color: "#5aa0e0",
+    stroke: "#a8d4ff",
+    radius: 12,
+    speed: 70,
+    maxHp: 42,
+    contactDamage: 3,
+    baseDamage: 5,
+    goldReward: 8,
+    ranged: true,
+    attackRange: 160,
+    attackCooldown: 1.6,
+    attackDamage: 7,
+    projectileSpeed: 280,
+    projectileRadius: 5,
+    projectileColor: "#8ec8ff",
+    projectileKnockback: 180,
+    turretDamage: 5,
+  },
+  ironclad: {
+    kind: "ironclad",
+    name: "Ironclad",
+    intent: "nearest",
+    shape: "square",
+    color: "#8a7a5a",
+    stroke: "#d4c48a",
+    radius: 16,
+    speed: 55,
+    maxHp: 90,
+    contactDamage: 14,
+    baseDamage: 12,
+    goldReward: 12,
+    armor: 55,
+    turretDamage: 14,
+    tier: "elite",
+  },
+  aegis_drone: {
+    kind: "aegis_drone",
+    name: "Aegis Drone",
+    intent: "hero",
+    shape: "hex",
+    color: "#4ec4c8",
+    stroke: "#a8fff8",
+    radius: 13,
+    speed: 88,
+    maxHp: 48,
+    contactDamage: 10,
+    baseDamage: 8,
+    goldReward: 11,
+    shield: 40,
+    turretDamage: 10,
+    tier: "elite",
+  },
+  bulwark_boss: {
+    kind: "bulwark_boss",
+    name: "Bulwark",
+    intent: "base",
+    shape: "square",
+    color: "#6a5a40",
+    stroke: "#e0c878",
+    radius: 26,
+    speed: 48,
+    maxHp: 420,
+    contactDamage: 28,
+    baseDamage: 30,
+    goldReward: 70,
+    armor: 120,
+    slamRadius: 85,
+    slamDamage: 40,
+    slamCooldown: 3.6,
+    turretDamage: 26,
+    tier: "boss",
+  },
+  ward_boss: {
+    kind: "ward_boss",
+    name: "Wardlord",
+    intent: "hero",
+    shape: "hex",
+    color: "#2a8a90",
+    stroke: "#7ef0e8",
+    radius: 24,
+    speed: 58,
+    maxHp: 360,
+    contactDamage: 22,
+    baseDamage: 28,
+    goldReward: 72,
+    shield: 140,
+    ranged: true,
+    attackRange: 200,
+    attackCooldown: 1.4,
+    attackDamage: 18,
+    projectileSpeed: 320,
+    projectileColor: "#6ef0e0",
+    turretDamage: 20,
+    tier: "boss",
+  },
+  aegis_colossus: {
+    kind: "aegis_colossus",
+    name: "Aegis Colossus",
+    intent: "nearest",
+    shape: "star",
+    color: "#4a6080",
+    stroke: "#c0e0ff",
+    radius: 28,
+    speed: 42,
+    maxHp: 520,
+    contactDamage: 32,
+    baseDamage: 36,
+    goldReward: 90,
+    armor: 90,
+    shield: 90,
+    slamRadius: 95,
+    slamDamage: 48,
+    slamCooldown: 3.2,
+    turretDamage: 30,
+    tier: "boss",
+  },
 };
 
-export const ELITE_KINDS: EnemyKind[] = ["elite", "wraith", "juggernaut", "hexlord"];
-export const BOSS_KINDS: EnemyKind[] = ["boss", "colossus", "siren", "reaver"];
+export const ENEMY_KINDS = Object.keys(ENEMY_DEFS) as EnemyKind[];
+
+export const ELITE_KINDS: EnemyKind[] = [
+  "elite",
+  "wraith",
+  "juggernaut",
+  "hexlord",
+  "ironclad",
+  "aegis_drone",
+];
+export const BOSS_KINDS: EnemyKind[] = [
+  "boss",
+  "colossus",
+  "siren",
+  "reaver",
+  "bulwark_boss",
+  "ward_boss",
+  "aegis_colossus",
+];
 
 export function isEliteKind(kind: EnemyKind): boolean {
   return ENEMY_DEFS[kind].tier === "elite" || ELITE_KINDS.includes(kind);
@@ -476,12 +647,16 @@ export function isBossKind(kind: EnemyKind): boolean {
   return ENEMY_DEFS[kind].tier === "boss" || BOSS_KINDS.includes(kind);
 }
 
-export function pickEliteKind(): EnemyKind {
-  return ELITE_KINDS[Math.floor(Math.random() * ELITE_KINDS.length)]!;
+export function pickEliteKind(contentFilters?: GameTypeContentFilters | null): EnemyKind {
+  const pool = ELITE_KINDS.filter((k) => isIdEnabled(contentFilters, "enemies", k));
+  const src = pool.length ? pool : ELITE_KINDS;
+  return src[Math.floor(Math.random() * src.length)]!;
 }
 
-export function pickBossKind(): EnemyKind {
-  return BOSS_KINDS[Math.floor(Math.random() * BOSS_KINDS.length)]!;
+export function pickBossKind(contentFilters?: GameTypeContentFilters | null): EnemyKind {
+  const pool = BOSS_KINDS.filter((k) => isIdEnabled(contentFilters, "enemies", k));
+  const src = pool.length ? pool : BOSS_KINDS;
+  return src[Math.floor(Math.random() * src.length)]!;
 }
 
 export type WaveTier = "normal" | "elite" | "boss";
@@ -504,28 +679,32 @@ export function waveTierLabel(tier: WaveTier): string {
 export function pickEnemyKind(wave: number, sent: boolean): EnemyKind {
   if (sent) {
     const roll = Math.random();
-    if (wave >= 4 && roll < 0.1) return "sniper";
-    if (wave >= 3 && roll < 0.2) return "mortar";
-    if (wave >= 2 && roll < 0.3) return "sharder";
-    if (wave >= 2 && roll < 0.4) return "hexer";
-    if (wave >= 2 && roll < 0.52) return "charger";
-    if (roll < 0.62) return "hunter";
-    if (roll < 0.72) return "berserker";
-    if (roll < 0.82) return "archer";
+    if (wave >= 4 && roll < 0.08) return "knocker";
+    if (wave >= 3 && roll < 0.16) return "pusher";
+    if (wave >= 4 && roll < 0.24) return "sniper";
+    if (wave >= 3 && roll < 0.32) return "mortar";
+    if (wave >= 2 && roll < 0.4) return "sharder";
+    if (wave >= 2 && roll < 0.48) return "hexer";
+    if (wave >= 2 && roll < 0.58) return "charger";
+    if (roll < 0.68) return "hunter";
+    if (roll < 0.76) return "berserker";
+    if (roll < 0.84) return "archer";
     if (roll < 0.9) return "sapper";
     if (roll < 0.95) return "brute";
     return "grunt";
   }
 
   const roll = Math.random();
-  if (wave >= 5 && roll < 0.09) return "sniper";
-  if (wave >= 4 && roll < 0.18) return "mortar";
-  if (wave >= 3 && roll < 0.28) return "sharder";
-  if (wave >= 3 && roll < 0.38) return "hexer";
-  if (wave >= 2 && roll < 0.5) return "charger";
-  if (wave >= 3 && roll < 0.58) return "sapper";
-  if (wave >= 4 && roll < 0.66) return "brute";
-  if (wave >= 2 && roll < 0.76) return "hunter";
+  if (wave >= 4 && roll < 0.07) return "knocker";
+  if (wave >= 3 && roll < 0.14) return "pusher";
+  if (wave >= 5 && roll < 0.22) return "sniper";
+  if (wave >= 4 && roll < 0.3) return "mortar";
+  if (wave >= 3 && roll < 0.38) return "sharder";
+  if (wave >= 3 && roll < 0.46) return "hexer";
+  if (wave >= 2 && roll < 0.56) return "charger";
+  if (wave >= 3 && roll < 0.63) return "sapper";
+  if (wave >= 4 && roll < 0.7) return "brute";
+  if (wave >= 2 && roll < 0.78) return "hunter";
   if (wave >= 2 && roll < 0.86) return "berserker";
   if (wave >= 2 && roll < 0.94) return "archer";
   return "grunt";

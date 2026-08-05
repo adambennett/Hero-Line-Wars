@@ -115,6 +115,7 @@ export function buildLaneSnap(state: GameState): LaneSnap {
       hostile: p.hostile,
     })),
     fx: state.fx.map((f) => ({ ...f })),
+    damageFloaters: state.damageFloaters.map((f) => ({ ...f })),
     beam: state.beam ? { ...state.beam } : null,
     pendingSends: state.pendingSends.map((s) => ({ ...s })),
     mapId: state.mapId,
@@ -350,6 +351,7 @@ export function applyLaneSnap(
   state.pendingSends = snap.pendingSends.map((s) => ({ ...s }));
   state.beam = snap.beam ? { ...snap.beam } : null;
   state.fx = snap.fx.map((f) => ({ ...f }));
+  state.damageFloaters = (snap.damageFloaters ?? []).map((f) => ({ ...f }));
   state.utilityDraft = snap.utilityDraft ? [...snap.utilityDraft] : null;
   state.curseDraft = snap.curseDraft ? [...snap.curseDraft] : null;
   // Chest options are display-only on the client (the host resolves by index),

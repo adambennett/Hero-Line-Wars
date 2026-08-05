@@ -7,6 +7,7 @@ import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
 import { gunnerWeaponAt } from "../data/gunnerWeapons";
 import { composeRunModifiers } from "../meta/modifiers";
+import { loadMetaStore } from "../meta/store";
 import {
   isPveMode,
   type LobbyAiHeroPick,
@@ -216,6 +217,14 @@ export function buildMpMatch(
     goldRush: lobby.goldRush,
     wildChests: lobby.wildChests,
     crampedLane: lobby.crampedLane,
+    playerBaseInvincible: lobby.playerBaseInvincible,
+    enemyBaseInvincible: lobby.enemyBaseInvincible,
+    waveBreakSec: lobby.waveBreakSec,
+    laneClearSpeedPct: lobby.laneClearSpeedPct,
+    respawnMinigame: lobby.respawnMinigame,
+    sendLocation: lobby.sendLocation,
+    artifactPlacement: lobby.artifactPlacement,
+    allowBarracks: lobby.allowBarracks,
   };
 
   const usedHeroes = new Set<HeroId>(lobby.slots.map((s) => s.heroId));
@@ -224,11 +233,15 @@ export function buildMpMatch(
     ...team0.map((s) => ({ slot: s.slot, heroId: s.heroId })),
     ...t0Ai,
   ];
+  const metaRanks = lobby.allowBarracks ? loadMetaStore().ranks : {};
+  const applyMeta = !!lobby.allowBarracks;
   const lane0 = createState(lane0Seats[0]?.heroId ?? "ranger", {
     ...sharedOpts,
-    modifiers: composeRunModifiers(ascension, {}, true),
+    playerBaseInvincible: lobby.playerBaseInvincible,
+    modifiers: composeRunModifiers(ascension, metaRanks, applyMeta),
   });
   lane0.mpLane = true;
+  lane0.baseInvincible = !!lobby.playerBaseInvincible;
   populateLane(lane0, lane0Seats.length ? lane0Seats : [{ slot: 0, heroId: "ranger" }], 10);
 
   let lane1: GameState;
@@ -245,10 +258,12 @@ export function buildMpMatch(
           ];
     lane1 = createState(foeSeats[0]!.heroId, {
       ...sharedOpts,
+      playerBaseInvincible: lobby.enemyBaseInvincible,
       modifiers: composeRunModifiers(ascension, {}, false),
     });
     lane1.mpLane = true;
     lane1.aiControlled = true;
+    lane1.baseInvincible = !!lobby.enemyBaseInvincible;
     populateLane(lane1, foeSeats, 20);
   } else {
     const t1Ai = takeAiFillers(
@@ -266,9 +281,11 @@ export function buildMpMatch(
     ];
     lane1 = createState(lane1Seats[0]?.heroId ?? "warden", {
       ...sharedOpts,
-      modifiers: composeRunModifiers(ascension, {}, true),
+      playerBaseInvincible: lobby.enemyBaseInvincible,
+      modifiers: composeRunModifiers(ascension, metaRanks, applyMeta),
     });
     lane1.mpLane = true;
+    lane1.baseInvincible = !!lobby.enemyBaseInvincible;
     if (team1Human.length === 0) lane1.aiControlled = true;
     populateLane(
       lane1,
@@ -342,6 +359,9 @@ export function buildSoloVsAiMatch(opts: {
   disableShop?: boolean;
   disableSends?: boolean;
   disableRelics?: boolean;
+  disableBonuses?: boolean;
+  disableBaseUpgrades?: boolean;
+  contentFilters?: import("../meta/contentFilters").GameTypeContentFilters;
   fogAlways?: boolean;
   fogThicknessPct?: number;
   fogVisionRadius?: number;
@@ -351,6 +371,14 @@ export function buildSoloVsAiMatch(opts: {
   goldRush?: boolean;
   wildChests?: boolean;
   crampedLane?: boolean;
+  playerBaseInvincible?: boolean;
+  enemyBaseInvincible?: boolean;
+  waveBreakSec?: number;
+  laneClearSpeedPct?: number;
+  respawnMinigame?: boolean;
+  sendLocation?: "own" | "enemy";
+  artifactPlacement?: "free" | "locked";
+  allowBarracks?: boolean;
 }): MpMatch {
   const resolved = resolveMapChoice(opts.mapId);
   const teamSize = opts.teamSize ?? 1;
@@ -412,6 +440,9 @@ export function buildSoloVsAiMatch(opts: {
     disableShop: opts.disableShop,
     disableSends: opts.disableSends,
     disableRelics: opts.disableRelics,
+    disableBonuses: opts.disableBonuses,
+    disableBaseUpgrades: opts.disableBaseUpgrades,
+    contentFilters: opts.contentFilters,
     fogAlways: opts.fogAlways,
     fogThicknessPct: opts.fogThicknessPct,
     fogVisionRadius: opts.fogVisionRadius,
@@ -423,6 +454,12 @@ export function buildSoloVsAiMatch(opts: {
     goldRush: opts.goldRush,
     wildChests: opts.wildChests,
     crampedLane: opts.crampedLane,
+    waveBreakSec: opts.waveBreakSec,
+    laneClearSpeedPct: opts.laneClearSpeedPct,
+    respawnMinigame: opts.respawnMinigame,
+    sendLocation: opts.sendLocation,
+    artifactPlacement: opts.artifactPlacement,
+    allowBarracks: opts.allowBarracks,
   };
 
   /** When callers pass explicit allies/enemies, pin per-seat brains in slotAi. */
@@ -430,10 +467,12 @@ export function buildSoloVsAiMatch(opts: {
 
   const lane0 = createState(opts.playerHeroId, {
     ...sharedBase,
+    playerBaseInvincible: opts.playerBaseInvincible,
     modifiers: opts.playerModifiers,
     ascension: opts.playerModifiers?.ascension ?? 0,
   });
   lane0.mpLane = true;
+  lane0.baseInvincible = !!opts.playerBaseInvincible;
   const playerSeats = [{ slot: 0, heroId: opts.playerHeroId }];
   let allySlot = -10;
   let allySalt = 11;
@@ -455,11 +494,13 @@ export function buildSoloVsAiMatch(opts: {
   const foePrimary = resolvedEnemies[0]!;
   const lane1 = createState(foePrimary.heroId, {
     ...sharedBase,
+    playerBaseInvincible: opts.enemyBaseInvincible,
     modifiers: opts.enemyModifiers,
     ascension: opts.enemyModifiers?.ascension ?? opts.playerModifiers?.ascension ?? 0,
   });
   lane1.mpLane = true;
   lane1.aiControlled = true;
+  lane1.baseInvincible = !!opts.enemyBaseInvincible;
   const enemySeats: { slot: number; heroId: HeroId }[] = [];
   for (let i = 0; i < resolvedEnemies.length; i++) {
     const e = resolvedEnemies[i]!;

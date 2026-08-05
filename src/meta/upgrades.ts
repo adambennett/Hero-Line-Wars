@@ -62,7 +62,8 @@ export type MetaUpgradeId =
   | "unlock_challenge_maps_d"
   | "unlock_challenge_sends_a"
   | "unlock_challenge_sends_b"
-  | "unlock_challenge_sends_c";
+  | "unlock_challenge_sends_c"
+  | "unlock_challenge_crests_a";
 
 export type MetaUpgradeDef = {
   id: MetaUpgradeId;
@@ -610,6 +611,15 @@ export const META_UPGRADES: MetaUpgradeDef[] = [
     costs: [42],
     kind: "unlock",
     requiresChallenge: "dual_commander",
+  },
+  {
+    id: "unlock_challenge_crests_a",
+    name: "Vault Dividend",
+    blurb: "+10% War Crest gains from runs.",
+    maxRank: 1,
+    costs: [55],
+    kind: "unlock",
+    requiresChallenge: "crest_siege",
   },
 ];
 

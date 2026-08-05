@@ -3,16 +3,21 @@ import { isHeroUnlocked, loadMetaStore } from "../meta/store";
 import { ASCENSIONS } from "../meta/ascension";
 import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
-import { DEFAULT_MAX_TURRETS } from "../data/turrets";
-import { utilityDraftLevelOptionsHtml } from "../data/utilities";
 import { isMapUnlocked } from "../meta/contentLocks";
 import {
   pickOne,
   RUN_OPTION_DEFAULTS,
-  RUN_OPTION_POOLS,
   runTip,
   type RunOptionTipKey,
 } from "../ui/runOptionsMeta";
+import {
+  getGameType,
+  gameTypeSelectHtml,
+  gameTypeToMpExtras,
+  listGameTypes,
+  loadSelectedGameTypeId,
+  saveSelectedGameTypeId,
+} from "../meta/gameTypes";
 import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
 import { paintMapThumb } from "../ui/mapThumbs";
 import { isCustomHeroId } from "../custom/types";
@@ -67,6 +72,7 @@ import { loadAiStore } from "../ai/store";
 export type MpUiCallbacks = {
   onBack: () => void;
   onMatchStart: (start: Extract<NetMsg, { k: "start" }>, mySlot: number, isHost: boolean) => void;
+  onEditGameTypes?: () => void;
 };
 
 const MODE_LABEL: Record<MatchMode, string> = {
@@ -89,7 +95,8 @@ export class MultiplayerUi {
   private role: "host" | "join" = "host";
   private joinCode = "";
   private mapChoice: MapId | string | "random" = "random";
-  private maxTurrets = DEFAULT_MAX_TURRETS;
+  private gameTypeId = loadSelectedGameTypeId();
+  private maxTurrets = RUN_OPTION_DEFAULTS.maxTurrets;
   private startingGold = STARTING_GOLD;
   private wavesToWin = WIN_WAVES;
   private friendlyFire = false;
@@ -97,33 +104,6 @@ export class MultiplayerUi {
   private livesPerWave = 0;
   private livesPerRun = 0;
   private ascension = 0;
-  private chestOpenMul = 1;
-  private chestDespawnSec = 28;
-  private chestSpawnChance = 0.08;
-  private enemyDensityMul = 1;
-  private enemyHpMul = 1;
-  private enemySpeedMul = 1;
-  private incomeMul = 1;
-  private respawnMul = 1;
-  private startingBaseLevel = 0;
-  private levelDraftSize = 3;
-  private relicDraftSize = 3;
-  private disableArtifacts = false;
-  private disableChests = false;
-  private disableElites = false;
-  private disableBosses = false;
-  private disableShop = false;
-  private disableSends = false;
-  private disableRelics = false;
-  private fogAlways = false;
-  private fogThicknessPct = 55;
-  private fogVisionRadius = 120;
-  private doubleElites = false;
-  private suddenDeathBaseHp = 0;
-  private glassCannon = false;
-  private goldRush = false;
-  private wildChests = false;
-  private crampedLane = false;
   private preferredCode = randomMpCode();
   private busy = false;
   /** Host hub draft — copied into the PeerJS lobby when the room opens. */
@@ -162,33 +142,6 @@ export class MultiplayerUi {
     livesPerWave?: number;
     livesPerRun?: number;
     ascension?: number;
-    chestOpenMul?: number;
-    chestDespawnSec?: number;
-    chestSpawnChance?: number;
-    enemyDensityMul?: number;
-    enemyHpMul?: number;
-    enemySpeedMul?: number;
-    incomeMul?: number;
-    respawnMul?: number;
-    startingBaseLevel?: number;
-    levelDraftSize?: number;
-    relicDraftSize?: number;
-    disableArtifacts?: boolean;
-    disableChests?: boolean;
-    disableElites?: boolean;
-    disableBosses?: boolean;
-    disableShop?: boolean;
-    disableSends?: boolean;
-    disableRelics?: boolean;
-    fogAlways?: boolean;
-    fogThicknessPct?: number;
-    fogVisionRadius?: number;
-    doubleElites?: boolean;
-    suddenDeathBaseHp?: number;
-    glassCannon?: boolean;
-    goldRush?: boolean;
-    wildChests?: boolean;
-    crampedLane?: boolean;
     heroId?: HeroId;
     preferredCode?: string;
     joinCode?: string;
@@ -205,38 +158,17 @@ export class MultiplayerUi {
     if (opts?.livesPerWave != null) this.livesPerWave = opts.livesPerWave;
     if (opts?.livesPerRun != null) this.livesPerRun = opts.livesPerRun;
     if (opts?.ascension != null) this.ascension = opts.ascension;
-    if (opts?.chestOpenMul != null) this.chestOpenMul = opts.chestOpenMul;
-    if (opts?.chestDespawnSec != null) this.chestDespawnSec = opts.chestDespawnSec;
-    if (opts?.chestSpawnChance != null) this.chestSpawnChance = opts.chestSpawnChance;
-    if (opts?.enemyDensityMul != null) this.enemyDensityMul = opts.enemyDensityMul;
-    if (opts?.enemyHpMul != null) this.enemyHpMul = opts.enemyHpMul;
-    if (opts?.enemySpeedMul != null) this.enemySpeedMul = opts.enemySpeedMul;
-    if (opts?.incomeMul != null) this.incomeMul = opts.incomeMul;
-    if (opts?.respawnMul != null) this.respawnMul = opts.respawnMul;
-    if (opts?.startingBaseLevel != null) this.startingBaseLevel = opts.startingBaseLevel;
-    if (opts?.levelDraftSize != null) this.levelDraftSize = opts.levelDraftSize;
-    if (opts?.relicDraftSize != null) this.relicDraftSize = opts.relicDraftSize;
-    if (opts?.disableArtifacts != null) this.disableArtifacts = opts.disableArtifacts;
-    if (opts?.disableChests != null) this.disableChests = opts.disableChests;
-    if (opts?.disableElites != null) this.disableElites = opts.disableElites;
-    if (opts?.disableBosses != null) this.disableBosses = opts.disableBosses;
-    if (opts?.disableShop != null) this.disableShop = opts.disableShop;
-    if (opts?.disableSends != null) this.disableSends = opts.disableSends;
-    if (opts?.disableRelics != null) this.disableRelics = opts.disableRelics;
-    if (opts?.fogAlways != null) this.fogAlways = opts.fogAlways;
-    if (opts?.fogThicknessPct != null) this.fogThicknessPct = opts.fogThicknessPct;
-    if (opts?.fogVisionRadius != null) this.fogVisionRadius = opts.fogVisionRadius;
-    if (opts?.doubleElites != null) this.doubleElites = opts.doubleElites;
-    if (opts?.suddenDeathBaseHp != null) this.suddenDeathBaseHp = opts.suddenDeathBaseHp;
-    if (opts?.glassCannon != null) this.glassCannon = opts.glassCannon;
-    if (opts?.goldRush != null) this.goldRush = opts.goldRush;
-    if (opts?.wildChests != null) this.wildChests = opts.wildChests;
-    if (opts?.crampedLane != null) this.crampedLane = opts.crampedLane;
     if (opts?.heroId) this.heroId = opts.heroId;
     if (opts?.preferredCode) this.preferredCode = opts.preferredCode.toUpperCase();
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
     this.root.classList.remove("hidden");
+    // Re-entering after the Game Type editor applies the selected type to a live host lobby.
+    const S = getSession();
+    if (S.mode === "host" && S.lobby) {
+      this.applyGameTypeId(loadSelectedGameTypeId());
+    }
     this.refresh();
+    if (S.mode === "host" && S.lobby) this.pushHostOpts();
     startMenuMusic();
   }
 
@@ -301,38 +233,25 @@ export class MultiplayerUi {
 
   private runExtras(): MpRunExtras {
     return {
+      ...gameTypeToMpExtras(getGameType(this.gameTypeId).options),
       utilityDraftLevel: this.utilityDraftLevel,
       ascension: this.ascension,
       livesPerWave: this.livesPerWave,
       livesPerRun: this.livesPerRun,
-      chestOpenMul: this.chestOpenMul,
-      chestDespawnSec: this.chestDespawnSec,
-      chestSpawnChance: this.chestSpawnChance,
-      enemyDensityMul: this.enemyDensityMul,
-      enemyHpMul: this.enemyHpMul,
-      enemySpeedMul: this.enemySpeedMul,
-      incomeMul: this.incomeMul,
-      respawnMul: this.respawnMul,
-      startingBaseLevel: this.startingBaseLevel,
-      levelDraftSize: this.levelDraftSize,
-      relicDraftSize: this.relicDraftSize,
-      disableArtifacts: this.disableArtifacts,
-      disableChests: this.disableChests,
-      disableElites: this.disableElites,
-      disableBosses: this.disableBosses,
-      disableShop: this.disableShop,
-      disableSends: this.disableSends,
-      disableRelics: this.disableRelics,
-      fogAlways: this.fogAlways,
-      fogThicknessPct: this.fogThicknessPct,
-      fogVisionRadius: this.fogVisionRadius,
-      doubleElites: this.doubleElites,
-      suddenDeathBaseHp: this.suddenDeathBaseHp,
-      glassCannon: this.glassCannon,
-      goldRush: this.goldRush,
-      wildChests: this.wildChests,
-      crampedLane: this.crampedLane,
     };
+  }
+
+  private applyGameTypeId(id: string): void {
+    this.gameTypeId = id;
+    saveSelectedGameTypeId(id);
+    const o = getGameType(id).options;
+    this.maxTurrets = o.maxTurrets;
+    this.startingGold = o.startingGold;
+    this.wavesToWin = o.wavesToWin;
+    this.livesPerWave = o.livesPerWave;
+    this.livesPerRun = o.livesPerRun;
+    this.utilityDraftLevel = o.utilityDraftLevel;
+    this.friendlyFire = o.friendlyFire;
   }
 
   private pushHostOpts(): void {
@@ -348,43 +267,10 @@ export class MultiplayerUi {
   }
 
   private resetRunOptions(): void {
-    const d = RUN_OPTION_DEFAULTS;
-    this.mapChoice = d.mapChoice;
-    this.maxTurrets = d.maxTurrets;
-    this.startingGold = d.startingGold;
-    this.wavesToWin = d.wavesToWin;
-    this.livesPerWave = d.livesPerWave;
-    this.livesPerRun = d.livesPerRun;
-    this.utilityDraftLevel = d.utilityDraftLevel;
-    this.friendlyFire = d.friendlyFire;
-    this.ascension = d.ascension;
-    this.chestOpenMul = d.chestOpenMul;
-    this.chestDespawnSec = d.chestDespawnSec;
-    this.chestSpawnChance = d.chestSpawnChance;
-    this.enemyDensityMul = d.enemyDensityMul;
-    this.enemyHpMul = d.enemyHpMul;
-    this.enemySpeedMul = d.enemySpeedMul;
-    this.incomeMul = d.incomeMul;
-    this.respawnMul = d.respawnMul;
-    this.startingBaseLevel = d.startingBaseLevel;
-    this.levelDraftSize = d.levelDraftSize;
-    this.relicDraftSize = d.relicDraftSize;
-    this.disableArtifacts = d.disableArtifacts;
-    this.disableChests = d.disableChests;
-    this.disableElites = d.disableElites;
-    this.disableBosses = d.disableBosses;
-    this.disableShop = d.disableShop;
-    this.disableSends = d.disableSends;
-    this.disableRelics = d.disableRelics;
-    this.fogAlways = d.fogAlways;
-    this.fogThicknessPct = d.fogThicknessPct;
-    this.fogVisionRadius = d.fogVisionRadius;
-    this.doubleElites = d.doubleElites;
-    this.suddenDeathBaseHp = d.suddenDeathBaseHp;
-    this.glassCannon = d.glassCannon;
-    this.goldRush = d.goldRush;
-    this.wildChests = d.wildChests;
-    this.crampedLane = d.crampedLane;
+    // Factory default for MP is Outlast (legacy "standard" id mapped to Race)
+    this.applyGameTypeId("outlast");
+    this.mapChoice = RUN_OPTION_DEFAULTS.mapChoice;
+    this.ascension = RUN_OPTION_DEFAULTS.ascension;
   }
 
   private randomizeRunOptions(): void {
@@ -396,40 +282,7 @@ export class MultiplayerUi {
     ];
     this.mapChoice = pickOne(mapPool);
     this.ascension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
-    this.maxTurrets = pickOne(RUN_OPTION_POOLS.maxTurrets);
-    this.startingGold = pickOne(RUN_OPTION_POOLS.startingGold);
-    this.wavesToWin = pickOne(RUN_OPTION_POOLS.wavesToWin);
-    this.livesPerWave = pickOne(RUN_OPTION_POOLS.livesPerWave);
-    this.livesPerRun = pickOne(RUN_OPTION_POOLS.livesPerRun);
-    this.utilityDraftLevel = pickOne(RUN_OPTION_POOLS.utilityDraftLevel);
-    this.friendlyFire = Math.random() < 0.5;
-    this.chestOpenMul = pickOne(RUN_OPTION_POOLS.chestOpenMul);
-    this.chestDespawnSec = pickOne(RUN_OPTION_POOLS.chestDespawnSec);
-    this.chestSpawnChance = pickOne(RUN_OPTION_POOLS.chestSpawnChance);
-    this.enemyDensityMul = pickOne(RUN_OPTION_POOLS.enemyDensityMul);
-    this.enemyHpMul = pickOne(RUN_OPTION_POOLS.enemyHpMul);
-    this.enemySpeedMul = pickOne(RUN_OPTION_POOLS.enemySpeedMul);
-    this.incomeMul = pickOne(RUN_OPTION_POOLS.incomeMul);
-    this.respawnMul = pickOne(RUN_OPTION_POOLS.respawnMul);
-    this.startingBaseLevel = pickOne(RUN_OPTION_POOLS.startingBaseLevel);
-    this.levelDraftSize = pickOne(RUN_OPTION_POOLS.levelDraftSize);
-    this.relicDraftSize = pickOne(RUN_OPTION_POOLS.relicDraftSize);
-    this.suddenDeathBaseHp = pickOne(RUN_OPTION_POOLS.suddenDeathBaseHp);
-    this.disableArtifacts = Math.random() < 0.5;
-    this.disableChests = Math.random() < 0.5;
-    this.disableElites = Math.random() < 0.5;
-    this.disableBosses = Math.random() < 0.5;
-    this.disableShop = Math.random() < 0.5;
-    this.disableSends = Math.random() < 0.5;
-    this.disableRelics = Math.random() < 0.5;
-    this.fogAlways = Math.random() < 0.5;
-    this.fogThicknessPct = pickOne(RUN_OPTION_POOLS.fogThicknessPct);
-    this.fogVisionRadius = pickOne(RUN_OPTION_POOLS.fogVisionRadius);
-    this.doubleElites = Math.random() < 0.5;
-    this.glassCannon = Math.random() < 0.35;
-    this.goldRush = Math.random() < 0.35;
-    this.wildChests = Math.random() < 0.35;
-    this.crampedLane = Math.random() < 0.35;
+    this.applyGameTypeId(pickOne(listGameTypes()).id);
   }
 
   private bindRunResetRandom(prefix: string, editable: boolean, onChange?: () => void): void {
@@ -448,7 +301,7 @@ export class MultiplayerUi {
 
   private runSetupHtml(prefix: string, editable: boolean): string {
     const dis = editable ? "" : "disabled";
-    const tip = (key: RunOptionTipKey) => ` title="${escapeAttr(runTip(key))}"`;
+    const tip = (key: RunOptionTipKey) => ` data-tip="${escapeAttr(runTip(key))}"`;
     const customMaps = listCustomMaps();
     const builtinMapOpts = MAP_LIST.map(
       (m) =>
@@ -467,79 +320,16 @@ export class MultiplayerUi {
       `<optgroup label="Built-in">${builtinMapOpts}</optgroup>`,
       `<optgroup label="Custom library">${customMapOpts}</optgroup>`,
     ].join("");
-    const turretOpts = RUN_OPTION_POOLS.maxTurrets
-      .map(
-        (n) =>
-          `<option value="${n}" ${this.maxTurrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
-      )
-      .join("");
-    const goldOpts = RUN_OPTION_POOLS.startingGold
-      .map(
-        (g) =>
-          `<option value="${g}" ${this.startingGold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
-      )
-      .join("");
-    const waveOpts = RUN_OPTION_POOLS.wavesToWin
-      .map((w) => {
-        const label = w === 0 ? "Unlimited" : String(w);
-        const def = w === WIN_WAVES ? " (default)" : "";
-        return `<option value="${w}" ${this.wavesToWin === w ? "selected" : ""}>${label}${def}</option>`;
-      })
-      .join("");
-    const livesWaveOpts = RUN_OPTION_POOLS.livesPerWave
-      .map((n) => {
-        const label = n === 0 ? "Unlimited" : String(n);
-        return `<option value="${n}" ${this.livesPerWave === n ? "selected" : ""}>${label}</option>`;
-      })
-      .join("");
-    const livesRunOpts = RUN_OPTION_POOLS.livesPerRun
-      .map((n) => {
-        const label = n === 0 ? "Unlimited" : String(n);
-        return `<option value="${n}" ${this.livesPerRun === n ? "selected" : ""}>${label}</option>`;
-      })
-      .join("");
     const meta = loadMetaStore();
     const ascMax = Math.max(meta.ascensionUnlocked, this.ascension);
     const ascOpts = Array.from({ length: ascMax + 1 }, (_, i) => {
       const def = ASCENSIONS[i]!;
       return `<option value="${i}" ${this.ascension === i ? "selected" : ""}>A${i} · ${escapeAttr(def.name)}</option>`;
     }).join("");
-    const showFf = this.mode !== "1v1";
-    const creativeFlags: Array<[string, string, boolean, RunOptionTipKey]> = [
-      ["no-art", "No artifacts", this.disableArtifacts, "noArtifacts"],
-      ["no-chest", "No chests", this.disableChests, "noChests"],
-      ["no-elite", "No elites", this.disableElites, "noElites"],
-      ["no-boss", "No bosses", this.disableBosses, "noBosses"],
-      ["no-shop", "No shop", this.disableShop, "noShop"],
-      ["no-send", "No sends", this.disableSends, "noSends"],
-      ["no-relic", "No relics", this.disableRelics, "noRelics"],
-      ["fog", "Fog always", this.fogAlways, "fogAlways"],
-      ["dbl-elite", "Double elites", this.doubleElites, "doubleElites"],
-      ["glass", "Glass cannon", this.glassCannon, "glassCannon"],
-      ["gold-rush", "Gold rush", this.goldRush, "goldRush"],
-      ["wild-chests", "Wild chests", this.wildChests, "wildChests"],
-      ["cramped", "Cramped lane", this.crampedLane, "crampedLane"],
-    ];
-    const dflt = RUN_OPTION_DEFAULTS;
-    const creativeActive =
-      creativeFlags.filter(([, , on]) => on).length +
-      [
-        this.enemyDensityMul !== dflt.enemyDensityMul,
-        this.enemyHpMul !== dflt.enemyHpMul,
-        this.enemySpeedMul !== dflt.enemySpeedMul,
-        this.incomeMul !== dflt.incomeMul,
-        this.respawnMul !== dflt.respawnMul,
-        this.startingBaseLevel !== dflt.startingBaseLevel,
-        this.levelDraftSize !== dflt.levelDraftSize,
-        this.relicDraftSize !== dflt.relicDraftSize,
-        this.suddenDeathBaseHp !== dflt.suddenDeathBaseHp,
-        this.fogThicknessPct !== dflt.fogThicknessPct,
-        this.fogVisionRadius !== dflt.fogVisionRadius,
-      ].filter(Boolean).length;
     const headActions = editable
       ? `<div class="panel-head-actions">
-            <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset" title="Restore default run options"><span class="btn-label">Reset</span></button>
-            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize" title="Roll random run options"><span class="btn-label">Randomize</span></button>
+            <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset" data-tip="Restore default run options"><span class="btn-label">Reset</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize" data-tip="Roll random run options"><span class="btn-label">Randomize</span></button>
           </div>`
       : "";
 
@@ -558,108 +348,20 @@ export class MultiplayerUi {
             <span>Ascension</span>
             <select id="${prefix}-ascension" ${dis}${tip("ascension")}>${ascOpts}</select>
           </label>
-          <label class="run-field">
-            <span>Artifacts</span>
-            <select id="${prefix}-turrets" ${dis}${tip("artifacts")}>${turretOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Starting gold</span>
-            <select id="${prefix}-gold" ${dis}${tip("startingGold")}>${goldOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Waves to win</span>
-            <select id="${prefix}-waves" ${dis}${tip("wavesToWin")}>${waveOpts}</select>
-          </label>
-          ${
-            showFf
-              ? `<label class="run-field">
-            <span>Friendly fire</span>
-            <select id="${prefix}-ff" ${dis}${tip("friendlyFire")}>
-              <option value="0" ${!this.friendlyFire ? "selected" : ""}>Off</option>
-              <option value="1" ${this.friendlyFire ? "selected" : ""}>On</option>
-            </select>
-          </label>`
-              : ""
-          }
-          <label class="run-field">
-            <span>Lives / wave</span>
-            <select id="${prefix}-lives-wave" ${dis}${tip("livesWave")}>${livesWaveOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Lives / run</span>
-            <select id="${prefix}-lives-run" ${dis}${tip("livesRun")}>${livesRunOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Utility draft Lv</span>
-            <select id="${prefix}-utility" ${dis}${tip("utilityDraft")}>${utilityDraftLevelOptionsHtml(this.utilityDraftLevel)}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest open</span>
-            <select id="${prefix}-chest-open" ${dis}${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${this.chestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest despawn</span>
-            <select id="${prefix}-chest-despawn" ${dis}${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${this.chestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest spawn</span>
-            <select id="${prefix}-chest-chance" ${dis}${tip("chestSpawn")}>${RUN_OPTION_POOLS.chestSpawnChance.map((n) => `<option value="${n}" ${this.chestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
-          </label>
+          ${gameTypeSelectHtml(this.gameTypeId, `${prefix}-game-type`, !editable)}
         </div>
+        ${
+          editable
+            ? `<div class="run-grid cols-2" style="margin-top:8px">
+          <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-edit-gt"><span class="btn-label">Edit Gametypes</span></button>
+          <p class="menu-note compact" style="margin:0">${escapeAttr(getGameType(this.gameTypeId).description || getGameType(this.gameTypeId).name)}</p>
+        </div>`
+            : `<p class="menu-note compact">${escapeAttr(getGameType(this.gameTypeId).description || getGameType(this.gameTypeId).name)}</p>`
+        }
         <div class="map-preview" id="${prefix}-map-preview" aria-hidden="true">
           <canvas></canvas>
           <span class="map-preview-label"></span>
         </div>
-        <details class="opt-fold"${creativeActive > 0 ? " open" : ""}>
-          <summary>Creative options${creativeActive > 0 ? ` <span class="opt-count">${creativeActive} active</span>` : ""}</summary>
-          <div class="opt-fold-body">
-          <div class="run-grid cols-4">
-            <label class="run-field"><span>Enemy density</span>
-              <select id="${prefix}-enemy-density" ${dis}${tip("enemyDensity")}>${RUN_OPTION_POOLS.enemyDensityMul.map((n) => `<option value="${n}" ${this.enemyDensityMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Enemy HP</span>
-              <select id="${prefix}-enemy-hp" ${dis}${tip("enemyHp")}>${RUN_OPTION_POOLS.enemyHpMul.map((n) => `<option value="${n}" ${this.enemyHpMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Enemy speed</span>
-              <select id="${prefix}-enemy-speed" ${dis}${tip("enemySpeed")}>${RUN_OPTION_POOLS.enemySpeedMul.map((n) => `<option value="${n}" ${this.enemySpeedMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Income</span>
-              <select id="${prefix}-income" ${dis}${tip("income")}>${RUN_OPTION_POOLS.incomeMul.map((n) => `<option value="${n}" ${this.incomeMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Respawn</span>
-              <select id="${prefix}-respawn" ${dis}${tip("respawn")}>${RUN_OPTION_POOLS.respawnMul.map((n) => `<option value="${n}" ${this.respawnMul === n ? "selected" : ""}>${n}×</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Start base Lv</span>
-              <select id="${prefix}-start-base" ${dis}${tip("startBase")}>${RUN_OPTION_POOLS.startingBaseLevel.map((n) => `<option value="${n}" ${this.startingBaseLevel === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Level draft size</span>
-              <select id="${prefix}-level-draft" ${dis}${tip("levelDraft")}>${RUN_OPTION_POOLS.levelDraftSize.map((n) => `<option value="${n}" ${this.levelDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Relic draft size</span>
-              <select id="${prefix}-relic-draft" ${dis}${tip("relicDraft")}>${RUN_OPTION_POOLS.relicDraftSize.map((n) => `<option value="${n}" ${this.relicDraftSize === n ? "selected" : ""}>${n}</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Sudden death HP</span>
-              <select id="${prefix}-sudden" ${dis}${tip("suddenDeath")}>${RUN_OPTION_POOLS.suddenDeathBaseHp.map((n) => `<option value="${n}" ${this.suddenDeathBaseHp === n ? "selected" : ""}>${n === 0 ? "Off" : n}</option>`).join("")}</select>
-            </label>
-          </div>
-          <div class="creative-check-grid">
-            ${creativeFlags
-              .map(
-                ([id, label, on, tipKey]) =>
-                  `<label class="setting-row"${tip(tipKey)}><span>${label}</span><input type="checkbox" id="${prefix}-${id}" ${on ? "checked" : ""} ${dis} /></label>`,
-              )
-              .join("")}
-          </div>
-          <div class="run-grid cols-2">
-            <label class="run-field"><span>Fog thickness</span>
-              <select id="${prefix}-fog-thickness" ${dis}${tip("fogThickness")}>${RUN_OPTION_POOLS.fogThicknessPct.map((n) => `<option value="${n}" ${this.fogThicknessPct === n ? "selected" : ""}>${n}%</option>`).join("")}</select>
-            </label>
-            <label class="run-field"><span>Fog vision</span>
-              <select id="${prefix}-fog-vision" ${dis}${tip("fogVision")}>${RUN_OPTION_POOLS.fogVisionRadius.map((n) => `<option value="${n}" ${this.fogVisionRadius === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
-            </label>
-          </div>
-          </div>
-        </details>
       </section>
     `;
   }
@@ -692,99 +394,21 @@ export class MultiplayerUi {
 
   private bindRunSetup(prefix: string, onChange?: () => void): void {
     const read = () => {
-      const sel = (id: string) => this.root.querySelector<HTMLSelectElement | HTMLInputElement>(`#${prefix}-${id}`);
-      const map = sel("map") as HTMLSelectElement | null;
-      const turrets = sel("turrets") as HTMLSelectElement | null;
-      const gold = sel("gold") as HTMLSelectElement | null;
-      const waves = sel("waves") as HTMLSelectElement | null;
-      const util = sel("utility") as HTMLSelectElement | null;
-      const ff = sel("ff") as HTMLSelectElement | null;
-      const asc = sel("ascension") as HTMLSelectElement | null;
+      const map = this.root.querySelector<HTMLSelectElement>(`#${prefix}-map`);
+      const asc = this.root.querySelector<HTMLSelectElement>(`#${prefix}-ascension`);
+      const gt = this.root.querySelector<HTMLSelectElement>(`#${prefix}-game-type`);
       if (map) this.mapChoice = map.value as MapId | string | "random";
-      if (turrets) this.maxTurrets = Number(turrets.value) || DEFAULT_MAX_TURRETS;
-      if (gold) this.startingGold = Number(gold.value) || STARTING_GOLD;
-      if (waves) this.wavesToWin = Number(waves.value);
-      if (util) this.utilityDraftLevel = Number(util.value);
-      if (ff) this.friendlyFire = ff.value === "1";
       if (asc) this.ascension = Number(asc.value) || 0;
-      const num = (id: string, fallback: number) => {
-        const el = sel(id) as HTMLSelectElement | null;
-        return el ? Number(el.value) || fallback : fallback;
-      };
-      this.livesPerWave = num("lives-wave", 0);
-      this.livesPerRun = num("lives-run", 0);
-      this.chestOpenMul = num("chest-open", 1);
-      this.chestDespawnSec = num("chest-despawn", 28);
-      this.chestSpawnChance = num("chest-chance", 0.08);
-      this.enemyDensityMul = num("enemy-density", 1);
-      this.enemyHpMul = num("enemy-hp", 1);
-      this.enemySpeedMul = num("enemy-speed", 1);
-      this.incomeMul = num("income", 1);
-      this.respawnMul = num("respawn", 1);
-      this.startingBaseLevel = num("start-base", 0);
-      this.levelDraftSize = num("level-draft", 3);
-      this.relicDraftSize = num("relic-draft", 3);
-      this.suddenDeathBaseHp = num("sudden", 0);
-      const chk = (id: string) => !!(sel(id) as HTMLInputElement | null)?.checked;
-      this.disableArtifacts = chk("no-art");
-      this.disableChests = chk("no-chest");
-      this.disableElites = chk("no-elite");
-      this.disableBosses = chk("no-boss");
-      this.disableShop = chk("no-shop");
-      this.disableSends = chk("no-send");
-      this.disableRelics = chk("no-relic");
-      this.fogAlways = chk("fog");
-      this.fogThicknessPct = num("fog-thickness", 55);
-      this.fogVisionRadius = num("fog-vision", 120);
-      this.doubleElites = chk("dbl-elite");
-      this.glassCannon = chk("glass");
-      this.goldRush = chk("gold-rush");
-      this.wildChests = chk("wild-chests");
-      this.crampedLane = chk("cramped");
+      if (gt) this.applyGameTypeId(gt.value);
       this.paintMapPreview(prefix);
       onChange?.();
     };
-    const ids = [
-      "map",
-      "turrets",
-      "gold",
-      "waves",
-      "utility",
-      "ff",
-      "ascension",
-      "lives-wave",
-      "lives-run",
-      "chest-open",
-      "chest-despawn",
-      "chest-chance",
-      "enemy-density",
-      "enemy-hp",
-      "enemy-speed",
-      "income",
-      "respawn",
-      "start-base",
-      "level-draft",
-      "relic-draft",
-      "sudden",
-      "no-art",
-      "no-chest",
-      "no-elite",
-      "no-boss",
-      "no-shop",
-      "no-send",
-      "no-relic",
-      "fog",
-      "fog-thickness",
-      "fog-vision",
-      "dbl-elite",
-      "glass",
-      "gold-rush",
-      "wild-chests",
-      "cramped",
-    ];
-    for (const id of ids) {
+    for (const id of ["map", "ascension", "game-type"]) {
       this.root.querySelector(`#${prefix}-${id}`)?.addEventListener("change", read);
     }
+    this.root.querySelector(`#${prefix}-edit-gt`)?.addEventListener("click", () => {
+      this.cbs.onEditGameTypes?.();
+    });
   }
 
   private syncOptsFromLobby(lobby: LobbyState): void {
@@ -797,33 +421,6 @@ export class MultiplayerUi {
     if (lobby.livesPerWave != null) this.livesPerWave = lobby.livesPerWave;
     if (lobby.livesPerRun != null) this.livesPerRun = lobby.livesPerRun;
     if (lobby.ascension != null) this.ascension = lobby.ascension;
-    if (lobby.chestOpenMul != null) this.chestOpenMul = lobby.chestOpenMul;
-    if (lobby.chestDespawnSec != null) this.chestDespawnSec = lobby.chestDespawnSec;
-    if (lobby.chestSpawnChance != null) this.chestSpawnChance = lobby.chestSpawnChance;
-    if (lobby.enemyDensityMul != null) this.enemyDensityMul = lobby.enemyDensityMul;
-    if (lobby.enemyHpMul != null) this.enemyHpMul = lobby.enemyHpMul;
-    if (lobby.enemySpeedMul != null) this.enemySpeedMul = lobby.enemySpeedMul;
-    if (lobby.incomeMul != null) this.incomeMul = lobby.incomeMul;
-    if (lobby.respawnMul != null) this.respawnMul = lobby.respawnMul;
-    if (lobby.startingBaseLevel != null) this.startingBaseLevel = lobby.startingBaseLevel;
-    if (lobby.levelDraftSize != null) this.levelDraftSize = lobby.levelDraftSize;
-    if (lobby.relicDraftSize != null) this.relicDraftSize = lobby.relicDraftSize;
-    if (lobby.disableArtifacts != null) this.disableArtifacts = lobby.disableArtifacts;
-    if (lobby.disableChests != null) this.disableChests = lobby.disableChests;
-    if (lobby.disableElites != null) this.disableElites = lobby.disableElites;
-    if (lobby.disableBosses != null) this.disableBosses = lobby.disableBosses;
-    if (lobby.disableShop != null) this.disableShop = lobby.disableShop;
-    if (lobby.disableSends != null) this.disableSends = lobby.disableSends;
-    if (lobby.disableRelics != null) this.disableRelics = lobby.disableRelics;
-    if (lobby.fogAlways != null) this.fogAlways = lobby.fogAlways;
-    if (lobby.fogThicknessPct != null) this.fogThicknessPct = lobby.fogThicknessPct;
-    if (lobby.fogVisionRadius != null) this.fogVisionRadius = lobby.fogVisionRadius;
-    if (lobby.doubleElites != null) this.doubleElites = lobby.doubleElites;
-    if (lobby.suddenDeathBaseHp != null) this.suddenDeathBaseHp = lobby.suddenDeathBaseHp;
-    if (lobby.glassCannon != null) this.glassCannon = lobby.glassCannon;
-    if (lobby.goldRush != null) this.goldRush = lobby.goldRush;
-    if (lobby.wildChests != null) this.wildChests = lobby.wildChests;
-    if (lobby.crampedLane != null) this.crampedLane = lobby.crampedLane;
   }
 
   private heroGridHtml(): string {
@@ -841,7 +438,7 @@ export class MultiplayerUi {
       const selected = h.id === this.heroId;
       const unlocked = isHeroUnlocked(h.id);
       return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-hero="${h.id}" ${unlocked ? "" : "disabled title=\"Unlock in Barracks\""}>
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-hero="${h.id}" ${unlocked ? "" : "disabled data-tip=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong class="btn-label">${escapeAttr(h.name)}</strong>
           <span>${unlocked ? escapeAttr(h.blurb) : "Locked"}</span>

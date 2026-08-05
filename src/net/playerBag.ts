@@ -24,6 +24,12 @@ export type PlayerBag = {
   shopRefreshesLeft: number;
   shopRefreshTimer: number;
   shopFrozen: boolean;
+  shopRerollCost: number;
+  shopRerollBuysWave: number;
+  shopStockRerollBuys: number;
+  shopStockRerollDiscount: number;
+  pendingArtifact: import("../data/turrets").TurretKind | null;
+  pendingArtifactDebounce: number;
   relics: RelicId[];
   relicDraft: RelicId[] | null;
   level: number;
@@ -75,6 +81,12 @@ const BAG_KEYS: (keyof PlayerBag)[] = [
   "shopRefreshesLeft",
   "shopRefreshTimer",
   "shopFrozen",
+  "shopRerollCost",
+  "shopRerollBuysWave",
+  "shopStockRerollBuys",
+  "shopStockRerollDiscount",
+  "pendingArtifact",
+  "pendingArtifactDebounce",
   "relics",
   "relicDraft",
   "level",
@@ -130,6 +142,12 @@ export function createPlayerBag(from: GameState): PlayerBag {
     shopRefreshesLeft: from.shopRefreshesLeft,
     shopRefreshTimer: from.shopRefreshTimer,
     shopFrozen: false,
+    shopRerollCost: from.shopRerollCost,
+    shopRerollBuysWave: from.shopRerollBuysWave,
+    shopStockRerollBuys: from.shopStockRerollBuys,
+    shopStockRerollDiscount: from.shopStockRerollDiscount,
+    pendingArtifact: null,
+    pendingArtifactDebounce: 0,
     relics: [],
     relicDraft: null,
     level: 1,

@@ -589,6 +589,14 @@ export function hostSetOpts(
     if (extras.goldRush != null) S.lobby.goldRush = extras.goldRush;
     if (extras.wildChests != null) S.lobby.wildChests = extras.wildChests;
     if (extras.crampedLane != null) S.lobby.crampedLane = extras.crampedLane;
+    if (extras.playerBaseInvincible != null) S.lobby.playerBaseInvincible = extras.playerBaseInvincible;
+    if (extras.enemyBaseInvincible != null) S.lobby.enemyBaseInvincible = extras.enemyBaseInvincible;
+    if (extras.waveBreakSec != null) S.lobby.waveBreakSec = extras.waveBreakSec;
+    if (extras.laneClearSpeedPct != null) S.lobby.laneClearSpeedPct = extras.laneClearSpeedPct;
+    if (extras.respawnMinigame != null) S.lobby.respawnMinigame = extras.respawnMinigame;
+    if (extras.sendLocation != null) S.lobby.sendLocation = extras.sendLocation;
+    if (extras.artifactPlacement != null) S.lobby.artifactPlacement = extras.artifactPlacement;
+    if (extras.allowBarracks != null) S.lobby.allowBarracks = extras.allowBarracks;
   }
   netBroadcast({
     k: "opts",

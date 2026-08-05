@@ -15,18 +15,71 @@ export type View = {
   offsetY: number;
 };
 
-export function computeView(canvas: HTMLCanvasElement): View {
-  // Tight chrome margins — HUD docks to the lane edges, so the playfield can
-  // claim most of the viewport (hint text is gone).
-  const marginTop = canvas.height * 0.105;
-  const marginBottom = canvas.height * 0.09;
-  const availW = canvas.width * 0.995;
-  const availH = Math.max(1, canvas.height - marginTop - marginBottom);
-  const scale = Math.min(availW / MAP_W, availH / MAP_H);
+/** CSS-pixel chrome reserved around the playfield for HUD / floor UI. */
+export type ViewChrome = {
+  /** Top band (gold, sends, XP, wave). */
+  topCss: number;
+  /** Bottom band (HP bar, pause, abilities). */
+  bottomCss: number;
+  /** Side gutters as fraction of canvas width (0–0.05). */
+  sideFrac?: number;
+};
+
+/**
+ * Vertical world band to fit and pin under the top HUD.
+ * Prefer the map's playable lane (laneTop…laneBottom), not full MAP_H — otherwise
+ * maps with gutter above the blue floor leave a big empty strip under the XP bar.
+ */
+export type ViewWorldBand = {
+  top: number;
+  bottom: number;
+};
+
+export const DEFAULT_VIEW_CHROME: ViewChrome = {
+  // Tall enough for gold + 2-col sends + XP; refined at runtime by Game.
+  topCss: 148,
+  bottomCss: 96,
+  sideFrac: 0.006,
+};
+
+/**
+ * Fit the playable world band into the viewport under HUD chrome.
+ * Scale / offsets are device pixels (canvas buffer). World Y `band.top` is
+ * aligned to the bottom of top chrome so the blue lane sits under the XP bar.
+ */
+export function computeView(
+  canvas: HTMLCanvasElement,
+  chrome: ViewChrome = DEFAULT_VIEW_CHROME,
+  band: ViewWorldBand = { top: 0, bottom: MAP_H },
+): View {
+  const cssW = Math.max(1, canvas.clientWidth || window.innerWidth);
+  const cssH = Math.max(1, canvas.clientHeight || window.innerHeight);
+  const dprX = canvas.width / cssW;
+  const dprY = canvas.height / cssH;
+  const topCss = Math.max(0, chrome.topCss);
+  const bottomCss = Math.max(0, chrome.bottomCss);
+  const sideFrac = chrome.sideFrac ?? 0.006;
+  const worldTop = Math.min(band.top, band.bottom);
+  const worldBottom = Math.max(band.top, band.bottom);
+  const worldH = Math.max(80, worldBottom - worldTop);
+  const marginXCss = cssW * sideFrac;
+  // Leave a dedicated left gutter for the vertical base-HP rail outside the blue.
+  const leftGutterCss = Math.max(marginXCss, 26);
+  const rightGutterCss = marginXCss;
+  const availWCss = Math.max(1, cssW - leftGutterCss - rightGutterCss);
+  const availHCss = Math.max(1, cssH - topCss - bottomCss);
+  // Fit the playable lane height (not the full MAP_H gutters), so Classic /
+  // Open Flank don't leave an empty strip under the XP bar the way Mazing
+  // nearly doesn't (small laneTop).
+  const scaleCss = Math.min(availWCss / MAP_W, availHCss / worldH);
+  const freeXCss = Math.max(0, availWCss - MAP_W * scaleCss);
+  const scale = scaleCss * dprY;
+  // Pin playable top flush under HUD. Leftover free height stays under the lane.
+  const offsetY = topCss * dprY - worldTop * scale;
   return {
     scale,
-    offsetX: (canvas.width - MAP_W * scale) / 2,
-    offsetY: marginTop + (availH - MAP_H * scale) / 2,
+    offsetX: (leftGutterCss + freeXCss / 2) * dprX,
+    offsetY,
   };
 }
 
@@ -49,10 +102,15 @@ function drawHpBar(
   const p = worldToScreen(view, x, y - radius - 8);
   const w = 28 * view.scale;
   const h = 4 * view.scale;
+  // Keep bars fully inside the playable world strip (base hugs the left wall).
+  const half = w / 2;
+  const minCx = view.offsetX + half + 5;
+  const maxCx = view.offsetX + MAP_W * view.scale - half - 5;
+  const cx = Math.min(maxCx, Math.max(minCx, p.x));
   ctx.fillStyle = "#1a2030";
-  ctx.fillRect(p.x - w / 2, p.y, w, h);
+  ctx.fillRect(cx - half, p.y, w, h);
   ctx.fillStyle = hp / maxHp > 0.35 ? "#3ecf8e" : "#ff5f5f";
-  ctx.fillRect(p.x - w / 2, p.y, w * Math.max(0, hp / maxHp), h);
+  ctx.fillRect(cx - half, p.y, w * Math.max(0, hp / maxHp), h);
 }
 
 function drawEnemyShape(ctx: CanvasRenderingContext2D, e: EnemyUnit): void {
@@ -490,6 +548,27 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     ctx.globalAlpha = 1;
   }
 
+  // Floating damage numbers (settings-gated)
+  if (loadSettings().showDamageNumbers) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const f of state.damageFloaters) {
+      const t = Math.max(0, f.life / f.maxLife);
+      const alpha = t < 0.25 ? t / 0.25 : 1;
+      const size = (13 + (f.scale - 1) * 10) * (0.85 + t * 0.2);
+      ctx.globalAlpha = alpha;
+      ctx.font = `800 ${size.toFixed(1)}px Orbitron, Rajdhani, sans-serif`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(8,12,22,0.75)";
+      ctx.strokeText(f.text, f.x, f.y);
+      ctx.fillStyle = f.color;
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
   // Beam (Prism / Gunner laser)
   if (state.beam) {
     const col = state.beam.color ?? "#5ef0a8";
@@ -797,6 +876,32 @@ export function draw(ctx: CanvasRenderingContext2D, state: GameState, view: View
     if (t.alive) drawHpBar(ctx, view, t.x, t.y, t.radius, t.hp, t.maxHp);
   }
   drawHpBar(ctx, view, base.x, base.y, base.radius, state.baseHp, base.maxHp);
+
+  // Respawn precision minigame — bar under the downed hero / respawn pad.
+  if (!state.hero.alive && state.respawnMinigame && state.respawnTimer > 1) {
+    const g = state.respawnMinigame;
+    const pad = mapRespawn(map);
+    const barW = 140;
+    const barH = 14;
+    const bx = pad.x - barW / 2;
+    const by = pad.y + pad.radius + 18;
+    ctx.save();
+    ctx.fillStyle = "#0c1424cc";
+    ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 4);
+    ctx.fillStyle = "#1a2840";
+    ctx.fillRect(bx, by, barW, barH);
+    ctx.fillStyle = g.lastHit === false && g.feedback > 0 ? "#ff6b6b88" : "#3d9a6a";
+    ctx.fillRect(bx + g.zoneStart * barW, by, (g.zoneEnd - g.zoneStart) * barW, barH);
+    ctx.fillStyle = "#e8eef8";
+    ctx.fillRect(bx + g.cursor * barW - 2, by - 4, 4, barH + 8);
+    ctx.strokeStyle = "#5a7aaa";
+    ctx.strokeRect(bx, by, barW, barH);
+    ctx.fillStyle = "#9eb0ce";
+    ctx.font = "11px Rajdhani, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("SPACE", pad.x, by + barH + 14);
+    ctx.restore();
+  }
 
   // Wave / boss banner is HTML (#wave-banner) above the send menu — keep canvas clear.
   drawFeedbackOverlay(ctx, state);

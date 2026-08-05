@@ -1,5 +1,102 @@
 # Hero Line Wars — Patch Notes
 
+## 2026-08-04 · v0.0.6
+
+A large content and systems update:
+- Campaign
+- Named Game Types
+- Armor and energy shields
+- Free Artifact placement
+- More level-up bonuses
+
+### Campaign
+- New **Campaign** mode from the main menu: branching 3-act map with combat,
+  elite, boss, shop, event, rest, and chest nodes.
+- Lobby: pick hero and game type, then (optional) choose **1 of 3 run-start
+  bonuses** before the map — short power bumps, often with HP tradeoffs. Toggle
+  start bonuses in **Settings** (on by default).
+- Fights are 10-wave runs; base HP carries between nodes. Mid-fight progress is
+  checkpointed — leave and return to the **same map** (Random does not re-roll on
+  resume). **Back to menu** from campaign combat returns to the map without an
+  abandon scare; intentional abandon still confirms.
+- Map screen: standout **stats panel** (Credits, base, hero, act) and a **Bag**
+  for items, relics, and run perks.
+- Campaign shops and chests show clearer rewards (relic name, description, art).
+
+### Game Types
+- SP, MP, and Campaign use **named game types** instead of a raw options grid:
+  **Outlast** (default for SP/MP — unlimited waves), **Race** (clear a set number
+  of waves; default for Campaign), and **Survival** (run lives, invincible bases,
+  sends still go to the enemy lane by default). SP/MP **Reset** restores Outlast
+  plus the default 0-ally / 1-enemy AI roster.
+- **Game Type Editor** in Workshop (and Edit Gametypes from lobbies): tune rules,
+  write a short description, import/export JSON, and save custom types. Lists show
+  your description, not a wall of setting names.
+- **Content filters** on custom types — restrict heroes, bonuses, items,
+  Artifacts, relics, enemies, sends, maps, and base upgrades. Built-ins leave
+  everything enabled. Empty a category (e.g. all sends or Artifacts) and that
+  feature/UI stays off for the type. Saves still need at least one hero and one
+  enemy.
+- Extra rules you can dial in: send own vs enemy lane, Artifact slots (Map Default
+  / fixed counts / Unlimited), **Free** vs **Locked** Artifact placement,
+  lane-clear speed **%**, between-wave timer, invincible player/enemy bases,
+  respawn minigame, whether **Barracks combat upgrades** apply, and other options
+  that used to live only as checkboxes.
+
+### Artifacts
+- Default on built-ins: buy an Artifact and **place it yourself** with the next
+  attack click (short placement debounce — disable under Settings if you prefer).
+  Custom types can keep map-locked auto slots.
+- You cannot place more Artifacts than the map allows unless the type sets
+  Unlimited slots.
+
+### Shop & economy
+- **Reroll Token** is a permanent dedicated shop row. Price scales with wave and
+  climbs each purchase that wave; resets on the next wave.
+- **Reroll stock** refreshes gear and the Artifact offer for gold that scales up
+  over the whole run (some chest finds can ease the cost). The token offer itself
+  does not re-roll.
+- Clear separators between gear, Artifact, and token. Buys are click-only so send
+  hotkeys still work with the shop open. The shop hides entirely while paused.
+
+### Combat
+- Sends sit in a compact **2-column** card next to gold (base upgrade full-width
+  on top; packs arranged 1|3 / 2|4 / ·|5) so wide maps like Mazing keep a stable
+  panel instead of stretching across the mid-lane.
+- **Armor** (flat value, no regen) and **Energy Shields** (regen after a quiet
+  stretch). Warden passive is **Platebound**; Prism is **Aegis Lattice**. New
+  armored/shielded creeps, elites (**Ironclad**, **Aegis Drone**), and bosses
+  (**Bulwark**, **Wardlord**, **Aegis Colossus**).
+- New pressure creeps: **Pusher** (melee shove toward spawn) and **Knocker**
+  (knockback bolts).
+- With **Show damage numbers** on, hits spawn floating combat text.
+- **Respawn precision minigame** (default on for built-in types): time Space while
+  dead to cut respawn, floored at 1 second.
+
+### Level-ups & base upgrades
+- Many new **global** level bonuses — extra common variety, plus new Rare /
+  Mythic / Legendary options any hero can draft (hero-tied rare+ are still there).
+- Base branch upgrades now have **rarities**. Compendium tab is **Base Upgrades**.
+
+### Meta & challenges
+- Barracks **combat** ranks no longer apply in multiplayer or campaign by default
+  (unlocks still do). Re-enable per game type for SP/MP, or with the **Barracks
+  in Campaign** cheat.
+- New challenge **Crest Siege**: reach wave 18 on Ascension 3+ with ≤4 deaths —
+  large Crest payout and a barracks unlock (fills the challenges grid).
+
+### Compendium & info
+- Ascension list shows each level's own effect only (not a stacked A1…An summary).
+- Bonuses tab sorts commons-first by default.
+- Game Info is fuller and fully expanded by default.
+
+### Menus
+- Main menu is centered and roomier; Workshop includes **Game Type Editor**
+  between Map Editor and Hero Editor.
+- SP **Reset** restores the selected game type's defaults and AI roster to
+  **0 ally / 1 enemy**.
+- Lobbies pick a game type first; deeper rules live in the editor.
+
 ## 2026-08-04 · v0.0.5
 
 ### Bug Fix

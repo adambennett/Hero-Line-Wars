@@ -34,7 +34,7 @@ export const MAX_VISIBLE_SEND_PACKS = 5;
  * full list drowned the top HUD. Hotkeys are remapped to 1..N for the visible set.
  */
 export function availableSendPacks(state: GameState): SendPackDef[] {
-  const packs = unlockedSendPacks(state.baseLevel, state.hero.heroId);
+  const packs = unlockedSendPacks(state.baseLevel, state.hero.heroId, state.contentFilters);
   // Strongest first by base cost (tier proxy), keep top N, then show cheap→expensive.
   const strongest = [...packs]
     .sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name))
@@ -81,14 +81,20 @@ export function buySendPack(state: GameState, packId: SendPackId): string | null
     enemies: def.enemies,
     hpScale,
   };
-  if (state.mpLane || state.endless) {
+  // Own lane (explicit or endless default), MP always buffers for host routing,
+  // otherwise classic send into the rival wave.
+  const toOwn = state.sendLocation === "own" || (!state.mpLane && state.endless);
+  if (toOwn) {
+    state.pendingSends.push(pending);
+  } else if (state.mpLane) {
     state.pendingSends.push(pending);
   } else {
     queueSendToOpponent(state, pending, def.name);
   }
   state.sendsThisRun += 1;
 
-  state.toast = state.endless
+  const ownMsg = toOwn || (state.endless && state.sendLocation !== "enemy");
+  state.toast = ownMsg
     ? `Queued ${def.name} into your next wave (+${income.toFixed(2)}/s)`
     : `Sent ${def.name} to enemy (+${income.toFixed(2)}/s)`;
   state.toastTimer = 1.6;

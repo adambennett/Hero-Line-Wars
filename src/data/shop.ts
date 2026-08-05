@@ -1,5 +1,7 @@
 import { TURRET_DEFS, isTurretKind, type TurretKind } from "./turrets";
 import type { Rarity } from "./rarity";
+import type { GameTypeContentFilters } from "../meta/contentFilters";
+import { isIdEnabled } from "../meta/contentFilters";
 import { isItemUnlocked } from "../meta/contentLocks";
 
 export type ShopItemId =
@@ -636,6 +638,9 @@ export const SHOP_REFRESHES_PER_WAVE = 2;
 /** Seconds between mid-wave shop refreshes while the wave is active. */
 export const SHOP_REFRESH_INTERVAL_SEC = 10;
 
+/** Never rolled into the random 3 — always sold as the dedicated 4th slot. */
+const SHOP_EXCLUDED_FROM_ROLL = new Set<ShopItemId>(["reroll_token", "reroll_pouch"]);
+
 export function getShopItem(id: ShopItemId): ShopItemDef | undefined {
   return SHOP_ITEMS.find((i) => i.id === id);
 }
@@ -645,8 +650,17 @@ export function isTurretArtifact(id: ShopItemId): id is TurretKind {
 }
 
 /** Roll a fresh offer of distinct items. Prefer not repeating the previous offer. */
-export function rollShopOffer(previous: ShopItemId[] = []): ShopItemId[] {
-  const pool = SHOP_ITEMS.map((i) => i.id).filter((id) => isItemUnlocked(id));
+export function rollShopOffer(
+  previous: ShopItemId[] = [],
+  contentFilters?: GameTypeContentFilters | null,
+): ShopItemId[] {
+  const pool = SHOP_ITEMS.map((i) => i.id).filter((id) => {
+    if (!isItemUnlocked(id) || SHOP_EXCLUDED_FROM_ROLL.has(id)) return false;
+    const item = getShopItem(id);
+    if (!item) return false;
+    if (item.category === "artifact") return isIdEnabled(contentFilters, "artifacts", id);
+    return isIdEnabled(contentFilters, "items", id);
+  });
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j]!, pool[i]!];

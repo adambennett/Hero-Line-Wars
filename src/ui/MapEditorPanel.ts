@@ -186,7 +186,7 @@ export class MapEditorPanel {
     checked: boolean | undefined,
   ): string {
     const tip = SPECIAL_TOOLTIPS[flag] ?? "";
-    return `<label class="chk" title="${escapeAttr(tip)}"><input type="checkbox" data-me-flag="${flag}" ${checked ? "checked" : ""}/> ${label}</label>`;
+    return `<label class="chk" data-tip="${escapeAttr(tip)}"><input type="checkbox" data-me-flag="${flag}" ${checked ? "checked" : ""}/> ${label}</label>`;
   }
 
   render(): string {
@@ -234,7 +234,7 @@ export class MapEditorPanel {
           <label class="run-field"><span>Shape</span>
             <select data-me-shape>${shapeOpts}</select>
           </label>
-          <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane" title="Playable bounds return to this shape's default size">Reset lane bounds</button>
+          <button type="button" class="menu-btn tiny ghost me-reset-lane" data-action="me-reset-lane" data-tip="Playable bounds return to this shape's default size">Reset lane bounds</button>
           <h3 class="workshop-section-label">Specials</h3>
           <div class="me-specials-grid">
             ${this.specialFlagHtml("shiftingObstacles", "Shifting walls", s.shiftingObstacles)}
@@ -272,7 +272,7 @@ export class MapEditorPanel {
             ${tools
               .map(
                 (t) =>
-                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}" title="${escapeAttr(TOOL_TOOLTIPS[t.id])}">${t.label}</button>`,
+                  `<button type="button" class="menu-btn tiny ${this.tool === t.id ? "primary" : "ghost"}" data-action="me-tool" data-tool="${t.id}" data-tip="${escapeAttr(TOOL_TOOLTIPS[t.id])}">${t.label}</button>`,
               )
               .join("")}
           </div>

@@ -122,8 +122,7 @@ function tryAiSend(state: GameState): void {
     hpScale: pack.hpScale * (1 + opp.baseLevel * 0.05),
   };
   state.pendingSends.push(pending);
-  state.toast = `Enemy sent ${pack.name}!`;
-  state.toastTimer = 1.5;
+  // Announced on the rival panel (sendFlash) — no top-left toast (obscured by gold HUD).
 }
 
 export function updateOpponent(state: GameState, dt: number): void {
@@ -164,7 +163,7 @@ export function updateOpponent(state: GameState, dt: number): void {
         opp.pressure = Math.min(1, opp.pressure + 0.08);
       }
     }
-    if (Math.random() < 0.015 * dt * (1 + opp.pressure)) {
+    if (!state.enemyBaseInvincible && Math.random() < 0.015 * dt * (1 + opp.pressure)) {
       opp.baseHp = Math.max(0, opp.baseHp - (1 + opp.pressure * 2));
     }
 

@@ -72,6 +72,9 @@ export type LobbyState = {
   disableShop?: boolean;
   disableSends?: boolean;
   disableRelics?: boolean;
+  disableBonuses?: boolean;
+  disableBaseUpgrades?: boolean;
+  contentFilters?: import("../meta/contentFilters").GameTypeContentFilters;
   fogAlways?: boolean;
   fogThicknessPct?: number;
   fogVisionRadius?: number;
@@ -81,6 +84,14 @@ export type LobbyState = {
   goldRush?: boolean;
   wildChests?: boolean;
   crampedLane?: boolean;
+  playerBaseInvincible?: boolean;
+  enemyBaseInvincible?: boolean;
+  waveBreakSec?: number;
+  laneClearSpeedPct?: number;
+  artifactPlacement?: "free" | "locked";
+  allowBarracks?: boolean;
+  respawnMinigame?: boolean;
+  sendLocation?: "own" | "enemy";
 };
 
 /** Host-synced creative / run extras carried on lobby + start. */
@@ -107,6 +118,9 @@ export type MpRunExtras = {
   disableShop?: boolean;
   disableSends?: boolean;
   disableRelics?: boolean;
+  disableBonuses?: boolean;
+  disableBaseUpgrades?: boolean;
+  contentFilters?: import("../meta/contentFilters").GameTypeContentFilters;
   fogAlways?: boolean;
   fogThicknessPct?: number;
   fogVisionRadius?: number;
@@ -116,6 +130,14 @@ export type MpRunExtras = {
   goldRush?: boolean;
   wildChests?: boolean;
   crampedLane?: boolean;
+  playerBaseInvincible?: boolean;
+  enemyBaseInvincible?: boolean;
+  waveBreakSec?: number;
+  laneClearSpeedPct?: number;
+  artifactPlacement?: "free" | "locked";
+  allowBarracks?: boolean;
+  respawnMinigame?: boolean;
+  sendLocation?: "own" | "enemy";
 };
 
 export type NetMode = "host" | "client" | null;
@@ -294,6 +316,16 @@ export type LaneSnap = {
     hostile?: boolean;
   }[];
   fx: { x: number; y: number; radius: number; color: string; life: number; maxLife: number }[];
+  damageFloaters?: {
+    x: number;
+    y: number;
+    text: string;
+    color: string;
+    life: number;
+    maxLife: number;
+    scale: number;
+    vy: number;
+  }[];
   beam: {
     x1: number;
     y1: number;

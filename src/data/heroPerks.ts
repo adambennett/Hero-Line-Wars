@@ -59,7 +59,7 @@ export const HERO_PERK_DEFS: HeroPerkDef[] = [
   p("ranger_trailblazer", "ranger", "Trailblazer", "Dash cools 18% faster.", "Mobility", "mythic", { mobilityCdMul: 0.82 }),
   p("ranger_skyfall", "ranger", "Skyfall Volley", "Volley deals +30% damage.", "Ultimate", "legendary", { abilityDamageMul: 1.3, ultimateCdMul: 0.9 }),
   // Warden
-  p("warden_iron_bastion", "warden", "Iron Bastion", "+25 max HP; Bastion barrier stronger.", "Passive", "rare", { maxHpFlat: 25, passiveMul: 1.35 }),
+  p("warden_iron_bastion", "warden", "Iron Bastion", "+25 max HP; Platebound armor +35%.", "Passive", "rare", { maxHpFlat: 25, passiveMul: 1.35 }),
   p("warden_bulwark_tempo", "warden", "Bulwark Tempo", "Bulwark Step cools 20% faster.", "Mobility", "mythic", { mobilityCdMul: 0.8 }),
   p("warden_tempest_spin", "warden", "Tempest Spin", "Whirlwind +25% damage and area.", "Ultimate", "legendary", { abilityDamageMul: 1.25, abilityAreaMul: 1.2 }),
   // Scatter
@@ -71,7 +71,7 @@ export const HERO_PERK_DEFS: HeroPerkDef[] = [
   p("arbalest_anchor_chain", "arbalest", "Anchor Chain", "Anchor Step cools 18% faster.", "Mobility", "mythic", { mobilityCdMul: 0.82 }),
   p("arbalest_breach_bolt", "arbalest", "Breach Bolt", "Siege Bolt +30% damage.", "Ultimate", "legendary", { abilityDamageMul: 1.3 }),
   // Prism
-  p("prism_refraction_lens", "prism", "Refraction Lens", "Beam splash +40%.", "Passive", "rare", { passiveMul: 1.4, damageMul: 1.08 }),
+  p("prism_refraction_lens", "prism", "Lattice Lens", "Shield capacity +40%; beam damage +8%.", "Passive", "rare", { passiveMul: 1.4, damageMul: 1.08 }),
   p("prism_phase_lattice", "prism", "Phase Lattice", "Phase Blink cools 20% faster.", "Mobility", "mythic", { mobilityCdMul: 0.8 }),
   p("prism_nova_core", "prism", "Nova Core", "Prism Storm +30% damage/area.", "Ultimate", "legendary", { abilityDamageMul: 1.3, abilityAreaMul: 1.15 }),
   // Frost

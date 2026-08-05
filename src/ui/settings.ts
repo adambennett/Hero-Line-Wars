@@ -1,4 +1,4 @@
-const STORAGE_KEY = "hlw-settings-v6";
+const STORAGE_KEY = "hlw-settings-v7";
 
 /** Mouse: 0 left, 1 middle, 2 right. Keyboard: KeyboardEvent.code. Gamepad: button index. */
 export type Binding =
@@ -49,6 +49,13 @@ export type ClientSettings = {
    * are never registered on this machine for that match.
    */
   rejectPeerCustoms: boolean;
+  /**
+   * When true, free Artifact placement waits briefly after purchase so the
+   * buy-click does not also place (default on).
+   */
+  artifactPlaceDebounce: boolean;
+  /** Campaign: offer 1-of-3 run start bonuses after character select (default on). */
+  campaignRunStartBonuses: boolean;
   keybinds: Keybinds;
   /** Prefer gamepad when a pad is connected and recently used. */
   gamepadEnabled: boolean;
@@ -114,6 +121,8 @@ const DEFAULTS: ClientSettingsFull = {
   damageScreenFx: "full",
   autoOpenShop: false,
   rejectPeerCustoms: false,
+  artifactPlaceDebounce: true,
+  campaignRunStartBonuses: true,
   keybinds: { ...DEFAULT_KEYBINDS },
   gamepadEnabled: true,
   gamepadBinds: { ...DEFAULT_GAMEPAD },
@@ -128,6 +137,7 @@ export function loadSettings(): ClientSettingsFull {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem("hlw-settings-v6") ??
       localStorage.getItem("hlw-settings-v5") ??
       localStorage.getItem("hlw-settings-v4") ??
       localStorage.getItem("hlw-settings-v3") ??
@@ -150,6 +160,14 @@ export function loadSettings(): ClientSettingsFull {
         typeof parsed.rejectPeerCustoms === "boolean"
           ? parsed.rejectPeerCustoms
           : DEFAULTS.rejectPeerCustoms,
+      artifactPlaceDebounce:
+        typeof parsed.artifactPlaceDebounce === "boolean"
+          ? parsed.artifactPlaceDebounce
+          : DEFAULTS.artifactPlaceDebounce,
+      campaignRunStartBonuses:
+        typeof parsed.campaignRunStartBonuses === "boolean"
+          ? parsed.campaignRunStartBonuses
+          : DEFAULTS.campaignRunStartBonuses,
       keybinds: {
         ...DEFAULT_KEYBINDS,
         ...(parsed.keybinds ?? {}),

@@ -208,9 +208,9 @@ export const HEROES: Record<HeroId, HeroDef> = {
     aimMode: "engage",
     attackHint: "Aimed melee cleave — need a foe in range",
     passive: {
-      id: "bastion",
-      name: "Bastion",
-      blurb: "At the start of each wave, gain a 1.8s damage barrier.",
+      id: "platebound",
+      name: "Platebound",
+      blurb: "Start with 42 Armor. Armor chips under fire and does not regenerate.",
     },
     abilities: [
       {
@@ -323,9 +323,9 @@ export const HEROES: Record<HeroId, HeroDef> = {
     aimMode: "auto",
     attackHint: "Auto-aim continuous beam",
     passive: {
-      id: "refraction",
-      name: "Refraction",
-      blurb: "Beam hits splash 25% damage to one nearby enemy.",
+      id: "aegis_lattice",
+      name: "Aegis Lattice",
+      blurb: "Start with 28 Energy Shield. Shields fully recharge after 3.2s without taking hits. Basics deal bonus damage to shielded foes.",
     },
     abilities: [
       {

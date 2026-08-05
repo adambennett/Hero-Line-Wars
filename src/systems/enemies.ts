@@ -19,7 +19,7 @@ import {
 } from "../data/constants";
 import { dist, normalize } from "../game/math";
 import type { EnemyUnit, GameState, HeroRuntime, TurretUnit } from "../game/state";
-import { addFx, applyPlayerDamage, killEnemy, pushProjectile } from "./combat";
+import { addFx, applyPlayerDamage, applyHeroKnockback, killEnemy, pushProjectile } from "./combat";
 import { FLOW_CELL, flowFieldFor, flowReachable, sampleFlow } from "./flowField";
 import { baseDamageTakenMul } from "./relics";
 import { damageTurret, livingTurrets } from "./turrets";
@@ -438,7 +438,7 @@ export function createEnemy(
   if (isBossKind(kind)) tierMul = WAVE_SCALE.bossHpMul * state.modifiers.eliteBossHpExtra;
   const hpScale =
     (opts?.hpScale ?? 1) * waveScale * tierMul * state.modifiers.enemyHpMul;
-  return {
+  const e: EnemyUnit = {
     id: state.nextId++,
     x,
     y,
@@ -475,7 +475,29 @@ export function createEnemy(
     stuckCount: 0,
     dashTimer: 0,
     dashCd: def.dashCooldown ? Math.random() * def.dashCooldown : 0,
+    armor: def.armor ?? 0,
+    maxArmor: def.armor ?? 0,
+    shield: def.shield ?? 0,
+    maxShield: def.shield ?? 0,
+    shieldQuiet: 0,
+    knockbackForce: def.knockbackForce,
+    projectileKnockback: def.projectileKnockback,
   };
+
+  // Occasional armored / shielded variants of normal creeps (not already special).
+  if (!def.armor && !def.shield && !isEliteKind(kind) && !isBossKind(kind)) {
+    const roll = Math.random();
+    if (roll < 0.12) {
+      const armor = 18 + state.wave * 2;
+      e.armor = armor;
+      e.maxArmor = armor;
+    } else if (roll < 0.22) {
+      const shield = 14 + state.wave * 1.5;
+      e.shield = shield;
+      e.maxShield = shield;
+    }
+  }
+  return e;
 }
 
 function fireEnemyShot(
@@ -506,13 +528,21 @@ function fireEnemyShot(
       life: def.projectileLife,
       heroSlowMul: def.heroSlowMul,
       heroSlowDuration: def.heroSlowDuration,
+      knockback: e.projectileKnockback ?? def.projectileKnockback,
     });
   }
 }
 
+/** Push hero toward the enemy spawn (lane right), with a cooldown so pushers aren't oppressive. */
+export { applyHeroKnockback } from "./combat";
+
 export function updateEnemies(state: GameState, dt: number): void {
   const map = state.map;
   const base = map.base;
+
+  for (const h of livingHeroes(state)) {
+    if ((h.knockbackCd ?? 0) > 0) h.knockbackCd = Math.max(0, (h.knockbackCd ?? 0) - dt);
+  }
 
   for (const e of state.enemies) {
     if (!e.alive) continue;
@@ -650,6 +680,9 @@ export function updateEnemies(state: GameState, dt: number): void {
       if (!gyroImmune && !phaseImmune) {
         const contactMul = focusHero.barrierTimer > 0 ? 0.35 : 1;
         damageHero(state, focusHero, e.contactDamage * contactMul * dt);
+        if ((e.knockbackForce ?? 0) > 0) {
+          applyHeroKnockback(state, focusHero, e.knockbackForce ?? 0);
+        }
       }
     }
 
@@ -666,6 +699,12 @@ export function updateEnemies(state: GameState, dt: number): void {
     }
 
     if (dist(e, base) <= base.radius) {
+      if (state.baseInvincible) {
+        // Still spend the creep; base shrugs it off.
+        e.alive = false;
+        addFx(state, base.x, base.y, 26, "#9ad4ff66", 0.3);
+        continue;
+      }
       const dmg = e.baseDamage * baseDamageTakenMul(state);
       state.baseHp -= dmg;
       state.baseDamageTaken += dmg;

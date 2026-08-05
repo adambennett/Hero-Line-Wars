@@ -9,34 +9,57 @@ export function livingTurrets(state: GameState): TurretUnit[] {
   return state.turrets.filter((t) => t.alive);
 }
 
+/** Soft + map-aware artifact cap. Unlimited (-2 raw) uses a high soft cap. */
 export function effectiveMaxTurrets(state: GameState): number {
-  return (
-    state.maxTurrets +
-    (hasRelic(state, "architects_favor") ? 1 : 0)
-  );
+  const mapSlots = state.map.turretSlots.length;
+  const favor = hasRelic(state, "architects_favor") ? 1 : 0;
+  const soft = state.maxTurrets + favor;
+  if (soft <= 0) return 0;
+  if (state.artifactPlacement === "free" || state.unlimitedArtifacts) {
+    return soft;
+  }
+  if (mapSlots <= 0) return 0;
+  return Math.min(soft, mapSlots);
 }
 
-export function placeTurret(state: GameState, kind: TurretKind): string | null {
+export function placeTurret(
+  state: GameState,
+  kind: TurretKind,
+  at?: { x: number; y: number },
+): string | null {
   const alive = livingTurrets(state).length;
   const cap = effectiveMaxTurrets(state);
   if (alive >= cap) return `Turret cap reached (${cap})`;
 
   const def = TURRET_DEFS[kind];
-  const slot = nextTurretSlot(state);
-  if (!slot) return "No free turret slots";
+  let x: number;
+  let y: number;
+  let slotIndex: number;
+
+  if (at) {
+    x = at.x;
+    y = at.y;
+    slotIndex = -1 - alive;
+  } else {
+    const slot = nextTurretSlot(state);
+    if (!slot) return "No free turret slots on this map";
+    x = slot.x;
+    y = slot.y;
+    slotIndex = slot.index;
+  }
 
   const hpBonus = hasRelic(state, "architects_favor") ? 20 : 0;
   const turret: TurretUnit = {
     id: state.nextId++,
     kind,
-    x: slot.x,
-    y: slot.y,
+    x,
+    y,
     hp: def.maxHp + hpBonus,
     maxHp: def.maxHp + hpBonus,
     radius: def.radius,
     alive: true,
     fireCd: 0.4,
-    slotIndex: slot.index,
+    slotIndex,
   };
   state.turrets.push(turret);
   addFx(state, turret.x, turret.y, 28, def.stroke + "88", 0.4);
@@ -45,25 +68,35 @@ export function placeTurret(state: GameState, kind: TurretKind): string | null {
 
 function nextTurretSlot(state: GameState): { x: number; y: number; index: number } | null {
   const slots = state.map.turretSlots;
+  if (slots.length === 0) return null;
   const used = new Set(livingTurrets(state).map((t) => t.slotIndex));
   const free: { x: number; y: number; index: number }[] = [];
-  for (let i = 0; i < slots.length; i++) {
+  const limit = Math.min(slots.length, effectiveMaxTurrets(state));
+  for (let i = 0; i < limit; i++) {
     if (used.has(i)) continue;
     const s = slots[i]!;
     free.push({ x: s.x, y: s.y, index: i });
   }
-  if (free.length > 0) {
-    return free[Math.floor(Math.random() * free.length)]!;
+  if (free.length === 0) return null;
+  return free[Math.floor(Math.random() * free.length)]!;
+}
+
+/** Attempt free-placement for a pending artifact; returns true if placed. */
+export function tryPlacePendingArtifact(state: GameState, x: number, y: number): boolean {
+  if (!state.pendingArtifact) return false;
+  if (state.pendingArtifactDebounce > 0) return false;
+  const kind = state.pendingArtifact;
+  const err = placeTurret(state, kind, { x, y });
+  if (err) {
+    state.toast = err;
+    state.toastTimer = 1.4;
+    return false;
   }
-  // Overflow: place near base with a slight offset
-  if (slots.length === 0) return null;
-  const base = state.map.base;
-  const n = livingTurrets(state).length;
-  return {
-    x: base.x + 70 + (n % 3) * 28 + (Math.random() * 20 - 10),
-    y: base.y - 40 + Math.floor(n / 3) * 40 + (Math.random() * 16 - 8),
-    index: 100 + n,
-  };
+  state.pendingArtifact = null;
+  state.artifactsPlaced += 1;
+  state.toast = "Artifact placed";
+  state.toastTimer = 1.2;
+  return true;
 }
 
 function fireBolt(

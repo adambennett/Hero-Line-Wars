@@ -89,12 +89,16 @@ export function tryLevelUp(state: GameState): void {
 
 export function openLevelDraft(state: GameState): void {
   if (state.pendingLevelUps <= 0) return;
+  if (state.disableBonuses || (state.levelDraftSize ?? 0) <= 0) {
+    state.pendingLevelUps = 0;
+    return;
+  }
   // One level draft per pending level-up — the queue must not double-offer.
   if (hasDraftPending(state, "level")) return;
   const size = levelDraftChoiceCount(state);
   openOrQueueDraft(state, {
     kind: "level",
-    choices: draftLevelPassives(size, state.hero.heroId),
+    choices: draftLevelPassives(size, state.hero.heroId, state.contentFilters),
   });
   state.levelDraftsTaken += 1;
 }
@@ -103,7 +107,11 @@ export function rerollLevelDraft(state: GameState): boolean {
   if (!state.levelDraft) return false;
   if (state.rerollTokens <= 0) return false;
   state.rerollTokens -= 1;
-  state.levelDraft = draftLevelPassives(levelDraftChoiceCount(state), state.hero.heroId);
+  state.levelDraft = draftLevelPassives(
+    levelDraftChoiceCount(state),
+    state.hero.heroId,
+    state.contentFilters,
+  );
   return true;
 }
 
@@ -111,7 +119,11 @@ export function rerollRelicDraft(state: GameState): boolean {
   if (!state.relicDraft) return false;
   if (state.rerollTokens <= 0) return false;
   state.rerollTokens -= 1;
-  state.relicDraft = draftRelicChoices(state.relics, state.relicDraftSize ?? 3);
+  state.relicDraft = draftRelicChoices(
+    state.relics,
+    state.relicDraftSize ?? 3,
+    state.contentFilters,
+  );
   return true;
 }
 
@@ -144,6 +156,125 @@ export function applyLevelPassive(state: GameState, id: LevelPassiveId): void {
       break;
     case "fortune":
       state.incomePerSec += 0.35;
+      break;
+    case "thick_hide":
+      state.hero.maxHp += 22;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 22);
+      break;
+    case "keen_eye":
+      state.hero.damageBonus += 4;
+      break;
+    case "sprint_laces":
+      state.hero.speedBonus += 25;
+      break;
+    case "coin_purse":
+      state.incomePerSec += 0.25;
+      break;
+    case "second_wind":
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 40);
+      break;
+    case "honed_edge":
+      state.hero.damageBonus += 5;
+      break;
+    case "quick_hands":
+      state.hero.attackSpeedMul *= 0.93;
+      break;
+    case "field_ration":
+      state.hero.maxHp += 18;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 18);
+      break;
+    case "steady_aim":
+      state.hero.luck += 0.05;
+      break;
+    case "scrap_scavenger":
+      state.hero.killGoldBonus += 1;
+      break;
+    case "iron_soles":
+      state.hero.speedBonus += 18;
+      state.hero.maxHp += 10;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 10);
+      break;
+    case "blood_warmth":
+      state.hero.maxHp += 15;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 15);
+      state.hero.damageBonus += 3;
+      break;
+    case "bounty_scrap":
+      state.incomePerSec += 0.15;
+      state.gold += 12;
+      break;
+    case "light_step":
+      state.hero.speedBonus += 20;
+      break;
+    case "ranged_focus":
+      state.hero.damageBonus += 3;
+      state.hero.attackSpeedMul *= 0.95;
+      break;
+    case "calloused":
+      state.hero.maxHp += 25;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 25);
+      break;
+    case "war_tax":
+      state.incomePerSec += 0.65;
+      state.hero.damageBonus += 8;
+      break;
+    case "bulwark_frame":
+      state.hero.maxHp += 50;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 50);
+      break;
+    case "adrenaline_surge":
+      state.hero.attackSpeedMul *= 0.85;
+      state.hero.speedBonus += 40;
+      break;
+    case "crit_lattice":
+      state.hero.luck += 0.14;
+      break;
+    case "gold_vein":
+      state.hero.killGoldBonus += 2;
+      state.incomePerSec += 0.4;
+      break;
+    case "apex_tempo":
+      state.hero.attackSpeedMul *= 0.8;
+      state.hero.damageBonus += 10;
+      break;
+    case "phoenix_sinew":
+      state.hero.maxHp += 70;
+      state.hero.hp = state.hero.maxHp;
+      state.hero.speedBonus += 25;
+      break;
+    case "siege_blood":
+      state.hero.damageBonus += 18;
+      state.hero.killGoldBonus += 1.5;
+      break;
+    case "fortune_engine":
+      state.incomePerSec += 1.1;
+      break;
+    case "ghost_stride":
+      state.hero.speedBonus += 70;
+      state.hero.attackSpeedMul *= 0.9;
+      break;
+    case "godfall_edge":
+      state.hero.damageBonus += 30;
+      state.hero.luck += 0.18;
+      break;
+    case "immortal_grove":
+      state.hero.maxHp += 100;
+      state.hero.hp = state.hero.maxHp;
+      state.incomePerSec += 0.5;
+      break;
+    case "treasury_core":
+      state.incomePerSec += 1.6;
+      state.hero.killGoldBonus += 3;
+      break;
+    case "void_reflex":
+      state.hero.attackSpeedMul *= 0.72;
+      state.hero.speedBonus += 55;
+      break;
+    case "worldbreaker":
+      state.hero.damageBonus += 22;
+      state.hero.maxHp += 45;
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 45);
+      state.hero.attackSpeedMul *= 0.88;
       break;
   }
   state.levelPassives.push(id);

@@ -25,10 +25,23 @@
             </div>
             <div id="hud-stats"></div>
           </div>
+          <div id="send-bar" class="send-bar-compact">
+            <div class="send-bar-label">Send</div>
+            <div id="send-bar-items" class="send-bar-grid" aria-label="Sends and base upgrade">
+              <button type="button" id="upgrade-base-btn" class="send-chip upgrade-base-chip">
+                <span class="send-key">▲</span>
+                <span class="send-meta">
+                  <span class="up-label send-name">Upgrade Base</span>
+                  <span class="up-cost send-cost">—</span>
+                </span>
+              </button>
+            </div>
+          </div>
+          <div class="hud-top-spacer" aria-hidden="true"></div>
           <aside id="opponent-panel" aria-label="Enemy lane">
             <div class="opp-head">
               <strong id="opp-name">Enemy</strong>
-              <button type="button" id="lane-flip-btn" title="Toggle enemy lane view">View lane</button>
+              <button type="button" id="lane-flip-btn" data-tip="Toggle enemy lane view">View lane</button>
             </div>
             <div id="opp-stats" class="opp-stats"></div>
           </aside>
@@ -52,13 +65,6 @@
           <div id="wave-tier" class="hidden"></div>
           <div id="lane-enemy-counts" aria-live="polite"></div>
         </div>
-        <div id="send-bar">
-          <div class="send-bar-label">Send to enemy lane (raises your income)</div>
-          <div class="send-bar-row">
-            <button type="button" id="upgrade-base-btn" class="upgrade-base-btn">Upgrade Base</button>
-            <div id="send-bar-items"></div>
-          </div>
-        </div>
         <div id="xp-bar" aria-label="Hero XP">
           <div class="xp-bar-meta">
             <span id="xp-level">Lv 1</span>
@@ -73,9 +79,9 @@
           </div>
           <div class="hp-track"><div id="hp-fill"></div></div>
         </div>
-        <button type="button" id="pause-btn" title="Pause (Esc)">Pause</button>
+        <button type="button" id="pause-btn" data-tip="Pause (Esc)">Pause</button>
         <div id="hud-abilities"></div>
-        <button type="button" id="inv-btn" title="Inventory">Bag</button>
+        <button type="button" id="inv-btn" data-tip="Inventory">Bag</button>
       </div>
 
       <aside id="inv-panel" class="hidden">
@@ -90,7 +96,7 @@
         <p id="shop-meta" class="panel-note">Rotating stock — gear + artifacts, refreshes twice per wave.</p>
         <button type="button" id="shop-freeze-btn" class="shop-freeze-btn hidden">Freeze timer</button>
         <div id="shop-items" class="panel-list"></div>
-        <p class="panel-note close-hint">F to close · hotkeys 4–6 for offered items (when shop open)</p>
+        <p class="panel-note close-hint">F to close · click items to buy</p>
       </aside>
 
       <div id="relic-draft" class="hidden">

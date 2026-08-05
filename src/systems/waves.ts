@@ -43,11 +43,11 @@ export function planWaveSpawns(state: GameState, wave: number = state.wave): Wav
   const specials: EnemyKind[] = [];
 
   if (tier === "elite" && elitesOn) {
-    specials.push(pickEliteKind());
-    if (state.doubleElites) specials.push(pickEliteKind());
+    specials.push(pickEliteKind(state.contentFilters));
+    if (state.doubleElites) specials.push(pickEliteKind(state.contentFilters));
   } else if (tier === "boss" && bossesOn) {
-    specials.push(pickBossKind());
-    if (state.doubleElites && elitesOn) specials.push(pickEliteKind());
+    specials.push(pickBossKind(state.contentFilters));
+    if (state.doubleElites && elitesOn) specials.push(pickEliteKind(state.contentFilters));
   }
 
   let count = Math.round(

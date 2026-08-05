@@ -1,5 +1,7 @@
 import type { HeroId } from "./heroes";
 import { isSendUnlocked } from "../meta/contentLocks";
+import type { GameTypeContentFilters } from "../meta/contentFilters";
+import { isIdEnabled } from "../meta/contentFilters";
 
 export type SendPackId = string;
 
@@ -912,12 +914,17 @@ export const SEND_PACKS: SendPackDef[] = [
 ];
 
 /** Packs visible/buyable at the player's current base level (plus scale from upgrades). */
-export function unlockedSendPacks(baseLevel: number, heroId?: HeroId): SendPackDef[] {
+export function unlockedSendPacks(
+  baseLevel: number,
+  heroId?: HeroId,
+  contentFilters?: GameTypeContentFilters | null,
+): SendPackDef[] {
   return SEND_PACKS.filter(
     (p) =>
       p.minBaseLevel <= baseLevel &&
       (!p.heroId || p.heroId === heroId) &&
-      isSendUnlocked(p.id),
+      isSendUnlocked(p.id) &&
+      isIdEnabled(contentFilters, "sends", p.id),
   );
 }
 

@@ -35,7 +35,8 @@ export type ChallengeId =
   | "polarity_prodigy"
   | "time_keeper"
   | "swarm_lord"
-  | "momentum_master";
+  | "momentum_master"
+  | "crest_siege";
 
 export type ChallengeDef = {
   id: ChallengeId;
@@ -43,6 +44,8 @@ export type ChallengeDef = {
   blurb: string;
   /** Barracks unlock that becomes purchasable after completion. */
   unlocks: MetaUpgradeId;
+  /** Flat Crests granted on first completion. */
+  crestReward?: number;
   /** How progress is evaluated. */
   kind:
     | "win_no_sends"
@@ -300,6 +303,15 @@ export const CHALLENGES: ChallengeDef[] = [
     kind: "reach_wave",
     threshold: 14,
   },
+  {
+    id: "crest_siege",
+    name: "Crest Siege",
+    blurb: "Reach wave 18 on Ascension 3+ with ≤4 deaths.",
+    unlocks: "unlock_challenge_crests_a",
+    crestReward: 85,
+    kind: "reach_wave",
+    threshold: 18,
+  },
 ];
 
 export type RunChallengeStats = {
@@ -381,6 +393,8 @@ export function evaluateChallenges(stats: RunChallengeStats): ChallengeId[] {
       case "reach_wave":
         ok = stats.wave >= c.threshold;
         if (c.id === "legend_seeker") ok = stats.wave >= 15 && stats.ascension >= 6;
+        if (c.id === "crest_siege")
+          ok = stats.wave >= 18 && stats.ascension >= 3 && stats.deaths <= 4;
         break;
       case "open_chests":
         ok = stats.chestsOpened >= c.threshold;
@@ -423,7 +437,13 @@ export function evaluateChallenges(stats: RunChallengeStats): ChallengeId[] {
       default:
         break;
     }
-    if (ok && markComplete(store, c.id)) newly.push(c.id);
+    if (ok && markComplete(store, c.id)) {
+      if (c.crestReward && c.crestReward > 0) {
+        store.crests += c.crestReward;
+        store.lifetimeCrests = (store.lifetimeCrests ?? 0) + c.crestReward;
+      }
+      newly.push(c.id);
+    }
   }
 
   if (newly.length) saveMetaStore(store);

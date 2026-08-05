@@ -2,6 +2,8 @@
 
 import type { Rarity } from "./rarity";
 import { isRelicUnlocked } from "../meta/contentLocks";
+import type { GameTypeContentFilters } from "../meta/contentFilters";
+import { isIdEnabled } from "../meta/contentFilters";
 
 export type RelicId =
   | "crowded_ledger"
@@ -556,8 +558,14 @@ export const RELICS: Record<RelicId, RelicDef> = {
 export const RELIC_LIST: RelicDef[] = Object.values(RELICS);
 
 /** Pick up to `count` relics the run does not already own. Soft-bias toward mid rarities. */
-export function draftRelicChoices(owned: RelicId[], count = 3): RelicId[] {
-  const pool = RELIC_LIST.map((r) => r.id).filter((id) => !owned.includes(id) && isRelicUnlocked(id));
+export function draftRelicChoices(
+  owned: RelicId[],
+  count = 3,
+  contentFilters?: GameTypeContentFilters | null,
+): RelicId[] {
+  const pool = RELIC_LIST.map((r) => r.id).filter(
+    (id) => !owned.includes(id) && isRelicUnlocked(id) && isIdEnabled(contentFilters, "relics", id),
+  );
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j]!, pool[i]!];

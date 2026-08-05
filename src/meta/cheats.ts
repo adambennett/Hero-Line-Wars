@@ -20,6 +20,8 @@ export type CheatOptions = {
   oneShot: boolean;
   freeShop: boolean;
   revealFog: boolean;
+  /** When cheats on: apply Barracks combat upgrades in Campaign fights. */
+  barracksInCampaign: boolean;
 };
 
 const DEFAULT_CHEATS: CheatOptions = {
@@ -32,6 +34,7 @@ const DEFAULT_CHEATS: CheatOptions = {
   oneShot: false,
   freeShop: false,
   revealFog: false,
+  barracksInCampaign: false,
 };
 
 function emptyCheatMeta(): MetaStore {

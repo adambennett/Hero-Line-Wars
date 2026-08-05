@@ -16,6 +16,7 @@ export function upgradeBaseCost(state: GameState): number {
 }
 
 export function tryUpgradeBase(state: GameState): string | null {
+  if (state.disableBaseUpgrades) return "Base upgrades disabled";
   if (state.curseUpgradeBlock > 0) return "Base upgrades cursed!";
   if (state.pausedForDraft) return "Finish your draft first";
   const cost = upgradeBaseCost(state);
@@ -37,7 +38,18 @@ export function tryUpgradeBase(state: GameState): string | null {
   }
 
   if (shouldOfferBaseBranch(state.baseLevel) && !hasDraftPending(state, "base")) {
-    openOrQueueDraft(state, { kind: "base", choices: draftBaseBranches(state.baseBranches) });
+    if (state.disableBaseUpgrades) {
+      state.toast = `Base upgraded to Lv ${state.baseLevel}!`;
+      state.toastTimer = 2;
+      return null;
+    }
+    const choices = draftBaseBranches(state.baseBranches, state.contentFilters);
+    if (!choices.length) {
+      state.toast = `Base upgraded to Lv ${state.baseLevel}!`;
+      state.toastTimer = 2;
+      return null;
+    }
+    openOrQueueDraft(state, { kind: "base", choices });
     state.toast = `Base Lv ${state.baseLevel} — choose a branch!`;
     state.toastTimer = 2;
     return null;

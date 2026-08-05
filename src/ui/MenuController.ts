@@ -1,15 +1,54 @@
 ﻿import { HEROES, HERO_LIST, type HeroId } from "../data/heroes";
 import { LEVEL_PASSIVE_LIST } from "../data/xp";
-import { MAP_LIST, type MapId } from "../data/maps";
-import { RELIC_LIST } from "../data/relics";
+import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
+import { RELIC_LIST, RELICS } from "../data/relics";
 import { SHOP_ITEMS } from "../data/shop";
 import { SEND_PACKS } from "../data/send";
 import { ENEMY_DEFS, isBossKind, isEliteKind, type EnemyKind } from "../data/enemies";
 import { RARITY_LABEL, RARITY_COLOR, RARITY_ORDER, type Rarity } from "../data/rarity";
+import { BASE_BRANCHES, type BaseBranchId } from "../data/baseBranches";
 import {
-  utilityDraftLevelOptionsHtml,
-} from "../data/utilities";
-import { DEFAULT_MAX_TURRETS } from "../data/turrets";
+  availableNext,
+  CAMPAIGN_EVENTS,
+  CAMPAIGN_SHOP,
+  advanceTo,
+  beginCombatCheckpoint,
+  campaignNode,
+  completeCombatNode,
+  createCampaignRun,
+  loadCampaignRun,
+  rollCombatRewards,
+  applyCombatRewards,
+  rollPendingChestRelic,
+  saveCampaignRun,
+  type CampaignRun,
+} from "../campaign/run";
+import {
+  getGameType,
+  gameTypeSelectHtml,
+  gameTypeToRunOptions,
+  listGameTypes,
+  loadCustomListSans,
+  loadSelectedGameTypeId,
+  newGameTypeId,
+  saveCustomGameTypes,
+  saveSelectedGameTypeId,
+  type GameTypeDef,
+  type GameTypeOptions,
+  defaultGameTypeOptions,
+  defaultGameTypeDescription,
+  exportGameTypeJson,
+  importGameTypeJson,
+  BUILTIN_GAME_TYPES,
+  normalizeGameTypeId,
+} from "../meta/gameTypes";
+import { emptyContentFilters, validateContentFilters } from "../meta/contentFilters";
+import {
+  getRunStartBonus,
+  rollRunStartBonusChoices,
+  type RunStartBonusDef,
+} from "../campaign/runStartBonuses";
+import { gameTypeOptionsFieldsHtml, readGameTypeOptionsFromDom } from "./gameTypeFields";
 import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import type { RunOptions } from "../game/state";
 import type { LobbyAiHeroPick, LobbyAiKind, MatchMode, MatchPrivacy } from "../net/types";
@@ -112,6 +151,8 @@ export type MenuScreen =
   | "compendium"
   | "game-info"
   | "patch-notes"
+  | "campaign"
+  | "game-types"
   | "settings"
   | "controls"
   | "ai-lab"
@@ -129,6 +170,8 @@ const SCREEN_LABELS: Record<MenuScreen, string> = {
   compendium: "Compendium",
   "game-info": "Game Info",
   "patch-notes": "Patch Notes",
+  campaign: "Campaign",
+  "game-types": "Game Types",
   settings: "Settings",
   controls: "Controls",
   "ai-lab": "AI Lab",
@@ -199,6 +242,8 @@ export type MenuCallbacks = {
   onRunOptionsChanged?: (opts: Partial<RunOptions>) => void;
   /** Pause-menu Settings → back returns to the in-run pause overlay. */
   onResumePause?: () => void;
+  /** Campaign combat exit (quit / lose / win). */
+  onCampaignCombatEnd?: (result: "won" | "lost" | "abandon") => void;
 };
 
 type CompTab =
@@ -210,7 +255,21 @@ type CompTab =
   | "enemies"
   | "sends"
   | "maps"
-  | "ascensions";
+  | "ascensions"
+  | "branches";
+
+const COMP_TAB_LABELS: Record<CompTab, string> = {
+  heroes: "Heroes",
+  bonuses: "Bonuses",
+  items: "Items",
+  artifacts: "Artifacts",
+  relics: "Relics",
+  enemies: "Enemies",
+  sends: "Sends",
+  maps: "Maps",
+  ascensions: "Ascensions",
+  branches: "Base Upgrades",
+};
 
 const ENEMY_KINDS = Object.keys(ENEMY_DEFS) as EnemyKind[];
 
@@ -235,7 +294,7 @@ export class MenuController {
     joinCode: "",
     hostCode: randomLobbyCode(),
     mapChoice: "random",
-    maxTurrets: DEFAULT_MAX_TURRETS,
+    maxTurrets: RUN_OPTION_DEFAULTS.maxTurrets,
     startingGold: STARTING_GOLD,
     wavesToWin: WIN_WAVES,
     friendlyFire: false,
@@ -272,48 +331,11 @@ export class MenuController {
     crampedLane: false,
   };
   private spMapChoice: MapId | string | "random" = "random";
-  private spMaxTurrets = DEFAULT_MAX_TURRETS;
-  private spStartingGold = STARTING_GOLD;
-  private spWavesToWin = WIN_WAVES;
-  private spFriendlyFire = false;
   private spAscension = 0;
-  private spLivesPerWave = 0;
-  private spLivesPerRun = 0;
   private spTeamSize: 1 | 2 | 3 = 1;
-  /** AI allies on your lane (max 2 — you fill the third seat). */
   private spAllies: { id: string; heroId: LobbyAiHeroPick; ai: LobbyAiKind }[] = [];
-  /** AI enemies on the rival lane (1–3). */
   private spEnemies: { id: string; heroId: LobbyAiHeroPick; ai: LobbyAiKind }[] = [];
   private spEndless = false;
-  private spChestOpenMul = 1;
-  private spChestDespawnSec = 28;
-  private spChestSpawnChance = 0.08;
-  private spEnemyDensity = 1;
-  private spEnemyHp = 1;
-  private spEnemySpeed = 1;
-  private spIncomeMul = 1;
-  private spRespawnMul = 1;
-  private spStartingBase = 0;
-  private spLevelDraftSize = 3;
-  private spRelicDraftSize = 3;
-  private spUtilityDraftLevel = 10;
-  private spDisableArtifacts = false;
-  private spDisableChests = false;
-  private spDisableElites = false;
-  private spDisableBosses = false;
-  private spDisableShop = false;
-  private spDisableSends = false;
-  private spDisableRelics = false;
-  private spFogAlways = false;
-  private spFogThicknessPct = 55;
-  private spFogVisionRadius = 120;
-  private spDoubleElites = false;
-  private spSuddenDeath = 0;
-  private spGlassCannon = false;
-  private spGoldRush = false;
-  private spWildChests = false;
-  private spCrampedLane = false;
-  private spAllyAi = 1;
   /** AI Lab training duel run / creative options (mirrors solo setup). */
   private aiTrainAscension = 0;
   private aiTrainEnemyDensity = 1;
@@ -338,6 +360,24 @@ export class MenuController {
   private toast = "";
   /** Index into PATCH_NOTE_PAGES (0 = newest). */
   private patchPageIndex = 0;
+  private campaign: CampaignRun | null = loadCampaignRun();
+  private campaignEventId: string | null = null;
+  private campaignToast = "";
+  private campaignConfirmAbandon = false;
+  /** Lobby phase before run; map phase when alive. */
+  private campaignLobby = !loadCampaignRun()?.alive;
+  /** True while Bag overlay is open on campaign map. */
+  private campaignBagOpen = false;
+  /** Run-start bonus choices pending (after New run hero select). */
+  private campaignStartBonusChoices: RunStartBonusDef[] | null = null;
+  private campaignLobbyGameTypeId = "race";
+  private selectedGameTypeId = loadSelectedGameTypeId();
+  private gtEditId: string = "outlast";
+  private gtEditOptions: GameTypeOptions = defaultGameTypeOptions();
+  private gtEditName = "Outlast";
+  private gtEditDescription = "";
+  private gtReturnScreen: MenuScreen = "singleplayer";
+  private gtReturnToMp = false;
   private rebinding: BindableAction | null = null;
   private rebindingPad = false;
   private unbindListen: (() => void) | null = null;
@@ -425,7 +465,11 @@ export class MenuController {
    */
   private backButton(target: MenuScreen): string {
     const label =
-      target === this.prevScreen ? "← Back" : `← ${SCREEN_LABELS[target] ?? "Main Menu"}`;
+      target === "main"
+        ? "← Main Menu"
+        : target === this.prevScreen
+          ? "← Back"
+          : `← ${SCREEN_LABELS[target] ?? "Main Menu"}`;
     return `<button type="button" class="menu-back" data-action="goto" data-screen="${target}">${label}</button>`;
   }
 
@@ -481,6 +525,206 @@ export class MenuController {
       }
       return;
     }
+    if (action === "campaign-new") {
+      const gt = getGameType(this.campaignLobbyGameTypeId).options;
+      this.campaign = createCampaignRun(this.selectedHero, gt);
+      this.campaignEventId = null;
+      this.campaignConfirmAbandon = false;
+      this.campaignBagOpen = false;
+      if (this.settings.campaignRunStartBonuses !== false) {
+        this.campaignStartBonusChoices = rollRunStartBonusChoices(this.campaign.seed);
+        this.campaignLobby = false;
+        this.campaignToast = "Pick a run start bonus.";
+        saveCampaignRun(this.campaign);
+        this.render();
+        return;
+      }
+      this.campaignStartBonusChoices = null;
+      this.campaignToast = "Run started — pick a path.";
+      this.campaignLobby = false;
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (action === "campaign-start-bonus" && t.dataset.id && this.campaign) {
+      const bonus = getRunStartBonus(t.dataset.id);
+      if (bonus) {
+        bonus.apply(this.campaign);
+        this.campaignToast = `${bonus.name} taken.`;
+      }
+      this.campaignStartBonusChoices = null;
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (action === "campaign-bag") {
+      this.campaignBagOpen = !this.campaignBagOpen;
+      this.render();
+      return;
+    }
+    if (action === "campaign-bag-close") {
+      this.campaignBagOpen = false;
+      this.render();
+      return;
+    }
+    if (action === "campaign-abandon") {
+      this.campaignConfirmAbandon = true;
+      this.render();
+      return;
+    }
+    if (action === "campaign-abandon-yes") {
+      this.campaign = null;
+      this.campaignEventId = null;
+      this.campaignConfirmAbandon = false;
+      this.campaignLobby = true;
+      saveCampaignRun(null);
+      this.render();
+      return;
+    }
+    if (action === "campaign-abandon-no") {
+      this.campaignConfirmAbandon = false;
+      this.render();
+      return;
+    }
+    if (action === "campaign-go" && t.dataset.node && this.campaign) {
+      this.resolveCampaignNode(t.dataset.node);
+      return;
+    }
+    if (action === "campaign-event" && t.dataset.choice && this.campaign && this.campaignEventId) {
+      const ev = CAMPAIGN_EVENTS.find((e) => e.id === this.campaignEventId);
+      if (ev) {
+        this.campaignToast = ev.apply(this.campaign, t.dataset.choice);
+        this.campaignEventId = null;
+        saveCampaignRun(this.campaign);
+        this.render();
+      }
+      return;
+    }
+    if (action === "campaign-shop" && t.dataset.shop && this.campaign) {
+      const item = CAMPAIGN_SHOP.find((s) => s.id === t.dataset.shop);
+      if (item && this.campaign.coins >= item.cost) {
+        this.campaign.coins -= item.cost;
+        item.apply(this.campaign);
+        this.campaignToast = `Bought ${item.name}`;
+        saveCampaignRun(this.campaign);
+        this.render();
+      } else {
+        this.campaignToast = "Not enough coins";
+        this.render();
+      }
+      return;
+    }
+    if (action === "campaign-rest" && t.dataset.rest && this.campaign) {
+      if (t.dataset.rest === "heal") {
+        this.campaign.baseHp = Math.min(
+          this.campaign.baseMaxHp,
+          this.campaign.baseHp + Math.round(this.campaign.baseMaxHp * 0.35),
+        );
+        this.campaignToast = "Rested — base repaired.";
+      } else if (t.dataset.rest === "mobility") {
+        this.campaign.abilityUpgrades.mobility += 1;
+        this.campaignToast = "Mobility upgraded.";
+      } else if (t.dataset.rest === "ultimate") {
+        this.campaign.abilityUpgrades.ultimate += 1;
+        this.campaignToast = "Ultimate upgraded.";
+      } else if (t.dataset.rest === "passive") {
+        this.campaign.abilityUpgrades.passive += 1;
+        this.campaignToast = "Passive upgraded.";
+      }
+      // Advance past rest once chosen
+      this.campaign.activeCombatNodeId = null;
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (action === "campaign-chest" && this.campaign) {
+      if (t.dataset.take === "1" && this.campaign.pendingChestRelicId) {
+        const id = this.campaign.pendingChestRelicId;
+        if (!this.campaign.relics.includes(id)) this.campaign.relics.push(id);
+        this.campaignToast = `Claimed ${RELICS[id]?.name ?? id}`;
+      } else {
+        this.campaignToast = "Left the chest.";
+      }
+      this.campaign.pendingChestRelicId = null;
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (action === "gt-pick" && t.dataset.id) {
+      this.openGameTypeEditor(t.dataset.id);
+      return;
+    }
+    if (action === "gt-new") {
+      this.gtEditId = newGameTypeId();
+      this.gtEditName = "Custom type";
+      this.gtEditDescription = defaultGameTypeDescription("Custom type");
+      this.gtEditOptions = { ...getGameType(this.selectedGameTypeId).options };
+      this.render();
+      return;
+    }
+    if (action === "gt-save") {
+      this.commitGameTypeEditor();
+      return;
+    }
+    if (action === "gt-delete") {
+      this.deleteEditingGameType();
+      return;
+    }
+    if (action === "gt-use") {
+      this.commitGameTypeEditor();
+      this.applyGameType(this.gtEditId);
+      this.leaveGameTypeEditor();
+      return;
+    }
+    if (action === "gt-export") {
+      this.gtEditOptions = readGameTypeOptionsFromDom(this.root, "gt");
+      const nameEl = this.root.querySelector<HTMLInputElement>("#gt-name");
+      const descEl = this.root.querySelector<HTMLTextAreaElement>("#gt-desc");
+      if (nameEl?.value.trim()) this.gtEditName = nameEl.value.trim().slice(0, 40);
+      if (descEl) this.gtEditDescription = descEl.value.trim().slice(0, 160);
+      exportGameTypeJson({
+        id: this.gtEditId,
+        name: this.gtEditName || "Custom type",
+        description: this.gtEditDescription || defaultGameTypeDescription(this.gtEditName),
+        builtin: false,
+        options: this.gtEditOptions,
+      });
+      return;
+    }
+    if (action === "gt-import") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/json,.json";
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const parsed = JSON.parse(String(reader.result));
+            const res = importGameTypeJson(parsed);
+            if (typeof res === "string") {
+              this.setToast(res);
+              return;
+            }
+            const customs = loadCustomListSans(res.id);
+            customs.push(res);
+            saveCustomGameTypes(customs);
+            this.openGameTypeEditor(res.id);
+            this.setToast(`Imported “${res.name}”`);
+          } catch {
+            this.setToast("Could not parse game type JSON.");
+          }
+        };
+        reader.readAsText(file);
+      });
+      input.click();
+      return;
+    }
+    if (action === "gt-back-mp") {
+      this.leaveGameTypeEditor();
+      return;
+    }
 
     switch (action) {
       case "resume-pause":
@@ -510,57 +754,26 @@ export class MenuController {
           this.setToast("Commission that hero in the Barracks first.");
           break;
         }
-        if (!this.spEndless) this.ensureSpAiRoster();
-        this.callbacks.onStartSingleplayer(this.selectedHero, {
-          mapId: this.spMapChoice,
-          maxTurrets: this.spMaxTurrets,
-          startingGold: this.spStartingGold,
-          wavesToWin: this.spEndless ? 0 : this.spWavesToWin,
-          friendlyFire: this.spEndless ? false : this.spFriendlyFire,
-          ascension: this.spAscension,
-          livesPerWave: this.spLivesPerWave,
-          livesPerRun: this.spLivesPerRun,
-          teamSize: this.spEndless
-            ? 1
-            : (Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3),
-          endless: this.spEndless,
-          aiAllies: this.spEndless
-            ? undefined
-            : this.spAllies.map(({ heroId, ai }) => ({ heroId, ai })),
-          aiEnemies: this.spEndless
-            ? undefined
-            : this.spEnemies.map(({ heroId, ai }) => ({ heroId, ai })),
-          chestOpenMul: this.spChestOpenMul,
-          chestDespawnSec: this.spChestDespawnSec,
-          chestSpawnChance: this.spChestSpawnChance,
-          enemyDensityMul: this.spEnemyDensity,
-          enemyHpMul: this.spEnemyHp,
-          enemySpeedMul: this.spEnemySpeed,
-          incomeMul: this.spIncomeMul,
-          respawnMul: this.spRespawnMul,
-          startingBaseLevel: this.spStartingBase,
-          levelDraftSize: this.spLevelDraftSize,
-          relicDraftSize: this.spRelicDraftSize,
-          utilityDraftLevel: this.spUtilityDraftLevel,
-          disableArtifacts: this.spDisableArtifacts,
-          disableChests: this.spDisableChests,
-          disableElites: this.spDisableElites,
-          disableBosses: this.spDisableBosses,
-          disableShop: this.spDisableShop,
-          disableSends: this.spDisableSends,
-          disableRelics: this.spDisableRelics,
-          fogAlways: this.spFogAlways,
-          fogThicknessPct: this.spFogThicknessPct,
-          fogVisionRadius: this.spFogVisionRadius,
-          doubleElites: this.spDoubleElites,
-          suddenDeathBaseHp: this.spSuddenDeath > 0 ? this.spSuddenDeath : undefined,
-          glassCannon: this.spGlassCannon,
-          goldRush: this.spGoldRush,
-          wildChests: this.spWildChests,
-          crampedLane: this.spCrampedLane,
-          allyAiAggression: this.spAllyAi,
-          sharedFriendlyFire: this.spFriendlyFire && this.spAllies.length > 0,
-        });
+        {
+          const gt = getGameType(this.selectedGameTypeId).options;
+          if (!gt.endless) this.ensureSpAiRoster();
+          const fromGt = gameTypeToRunOptions(gt);
+          this.callbacks.onStartSingleplayer(this.selectedHero, {
+            ...fromGt,
+            mapId: this.spMapChoice,
+            ascension: this.spAscension,
+            teamSize: gt.endless
+              ? 1
+              : (Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3),
+            aiAllies: gt.endless
+              ? undefined
+              : this.spAllies.map(({ heroId, ai }) => ({ heroId, ai })),
+            aiEnemies: gt.endless
+              ? undefined
+              : this.spEnemies.map(({ heroId, ai }) => ({ heroId, ai })),
+            sharedFriendlyFire: !!fromGt.friendlyFire && this.spAllies.length > 0,
+          });
+        }
         break;
       case "sp-add-ally":
         if (!this.spEndless && this.spAllies.length < 2) {
@@ -583,19 +796,31 @@ export class MenuController {
         if (side === "ally") {
           this.spAllies = this.spAllies.filter((r) => r.id !== id);
           this.spTeamSize = Math.min(3, Math.max(1, 1 + this.spAllies.length)) as 1 | 2 | 3;
-        } else if (side === "enemy" && this.spEnemies.length > 1) {
+        } else if (side === "enemy") {
           this.spEnemies = this.spEnemies.filter((r) => r.id !== id);
         }
         this.render();
         break;
       }
       case "sp-run-reset":
-        this.resetSpRunOptions();
+        // Factory default game type for SP is Outlast
+        this.applyGameType("outlast");
+        this.spMapChoice = RUN_OPTION_DEFAULTS.mapChoice;
+        this.spAscension = RUN_OPTION_DEFAULTS.ascension;
+        // Default AI roster: 0 allies, 1 enemy
+        this.spTeamSize = 1;
+        this.spAllies = [];
+        this.spEnemies = [this.newSpAiRow(selectionToLobbyAi(loadAiStore().selected))];
         this.render();
         break;
       case "sp-run-randomize":
         this.randomizeSpRunOptions();
         this.render();
+        break;
+      case "edit-gametypes":
+        this.gtReturnToMp = false;
+        this.gtReturnScreen = (t.dataset.from as MenuScreen) || this.screen;
+        this.openGameTypeEditor(this.selectedGameTypeId);
         break;
       case "comp-tab":
         this.compendiumTab = t.dataset.tab as CompTab;
@@ -613,6 +838,8 @@ export class MenuController {
           damageScreenFx: "full",
           autoOpenShop: false,
           rejectPeerCustoms: false,
+          artifactPlaceDebounce: true,
+          campaignRunStartBonuses: true,
           keybinds: { ...DEFAULT_KEYBINDS },
           gamepadEnabled: true,
           gamepadBinds: { ...DEFAULT_GAMEPAD },
@@ -799,11 +1026,6 @@ export class MenuController {
       const label = this.root.querySelector("#sfx-volume-label");
       if (label) label.textContent = `${Math.round(this.settings.sfxVolume * 100)}%`;
     }
-    if (el.dataset.field === "sp-turrets") {
-      this.spMaxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
-      const label = this.root.querySelector("#sp-turret-label");
-      if (label) label.textContent = String(this.spMaxTurrets);
-    }
     if (el.dataset.field === "comp-search") {
       this.compSearch = el.value;
       this.renderCompendiumListOnly();
@@ -825,8 +1047,14 @@ export class MenuController {
     } else if ((el as HTMLInputElement).dataset.setting === "autoOpenShop") {
       this.settings.autoOpenShop = (el as HTMLInputElement).checked;
       this.persist();
+    } else if ((el as HTMLInputElement).dataset.setting === "artifactPlaceDebounce") {
+      this.settings.artifactPlaceDebounce = (el as HTMLInputElement).checked;
+      this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "rejectPeerCustoms") {
       this.settings.rejectPeerCustoms = (el as HTMLInputElement).checked;
+      this.persist();
+    } else if ((el as HTMLInputElement).dataset.setting === "campaignRunStartBonuses") {
+      this.settings.campaignRunStartBonuses = (el as HTMLInputElement).checked;
       this.persist();
     } else if ((el as HTMLInputElement).dataset.setting === "screenShake") {
       this.settings.screenShake = (el as HTMLInputElement).checked;
@@ -844,34 +1072,17 @@ export class MenuController {
     } else if (el.dataset.field === "comp-sort") {
       this.compSort = el.value as "name" | "rarity";
       this.renderCompendiumListOnly();
-    } else if (el.dataset.field === "sp-starting-gold") {
-      this.spStartingGold = Number(el.value) || STARTING_GOLD;
-    } else if (el.dataset.field === "sp-waves-to-win") {
-      this.spWavesToWin = Number(el.value);
-    } else if (el.dataset.field === "sp-lives-wave") {
-      this.spLivesPerWave = Number(el.value);
-    } else if (el.dataset.field === "sp-lives-run") {
-      this.spLivesPerRun = Number(el.value);
-    } else if (el.dataset.field === "sp-friendly-fire") {
-      this.spFriendlyFire = el.value === "1";
-    } else if (el.dataset.field === "sp-turrets") {
-      this.spMaxTurrets = Math.max(1, Math.min(10, Number(el.value) || DEFAULT_MAX_TURRETS));
+    } else if (el.dataset.field === "sp-game-type") {
+      const id = el.value;
+      if (this.screen === "campaign") this.campaignLobbyGameTypeId = normalizeGameTypeId(id);
+      else this.applyGameType(id);
+      this.render();
     } else if (el.dataset.field === "sp-ascension") {
       this.spAscension = Number(el.value) || 0;
       this.paintSpRunMeta();
     } else if (el.dataset.field === "sp-map") {
       this.spMapChoice = el.value as MapId | string | "random";
       this.paintSpMapPreview();
-    } else if (el.dataset.field === "sp-team-size") {
-      if (el.value === "endless") {
-        this.spEndless = true;
-        this.spTeamSize = 1;
-      } else {
-        this.spEndless = false;
-        this.spTeamSize = (Number(el.value) || 1) as 1 | 2 | 3;
-        this.ensureSpAiRoster(true);
-      }
-      this.render();
     } else if (el.dataset.field === "sp-ai-kind") {
       const side = el.dataset.side;
       const id = el.dataset.id;
@@ -898,64 +1109,6 @@ export class MenuController {
           ? this.spAllies.find((r) => r.id === id)
           : this.spEnemies.find((r) => r.id === id);
       if (row) row.heroId = (el.value || "random") as LobbyAiHeroPick;
-    } else if (el.dataset.field === "sp-chest-open") {
-      this.spChestOpenMul = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-chest-despawn") {
-      this.spChestDespawnSec = Number(el.value) || 28;
-    } else if (el.dataset.field === "sp-chest-chance") {
-      this.spChestSpawnChance = Number(el.value) || 0.08;
-    } else if (el.dataset.field === "sp-enemy-density") {
-      this.spEnemyDensity = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-enemy-hp") {
-      this.spEnemyHp = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-enemy-speed") {
-      this.spEnemySpeed = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-income") {
-      this.spIncomeMul = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-respawn") {
-      this.spRespawnMul = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-start-base") {
-      this.spStartingBase = Number(el.value) || 0;
-    } else if (el.dataset.field === "sp-level-draft") {
-      this.spLevelDraftSize = Number(el.value) || 3;
-    } else if (el.dataset.field === "sp-relic-draft") {
-      this.spRelicDraftSize = Number(el.value) || 3;
-    } else if (el.dataset.field === "sp-utility-level") {
-      this.spUtilityDraftLevel = Number(el.value);
-    } else if (el.dataset.field === "sp-ally-ai") {
-      this.spAllyAi = Number(el.value) || 1;
-    } else if (el.dataset.field === "sp-sudden") {
-      this.spSuddenDeath = Number(el.value) || 0;
-    } else if (el.dataset.field === "sp-no-art") {
-      this.spDisableArtifacts = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-chest") {
-      this.spDisableChests = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-elite") {
-      this.spDisableElites = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-boss") {
-      this.spDisableBosses = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-shop") {
-      this.spDisableShop = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-send") {
-      this.spDisableSends = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-no-relic") {
-      this.spDisableRelics = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-fog") {
-      this.spFogAlways = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-fog-thickness") {
-      this.spFogThicknessPct = Number(el.value) || 55;
-    } else if (el.dataset.field === "sp-fog-vision") {
-      this.spFogVisionRadius = Number(el.value) || 120;
-    } else if (el.dataset.field === "sp-dbl-elite") {
-      this.spDoubleElites = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-glass") {
-      this.spGlassCannon = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-gold-rush") {
-      this.spGoldRush = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-wild-chests") {
-      this.spWildChests = (el as HTMLInputElement).checked;
-    } else if (el.dataset.field === "sp-cramped") {
-      this.spCrampedLane = (el as HTMLInputElement).checked;
     } else if ((el as HTMLInputElement).dataset.setting === "gamepadEnabled") {
       this.settings.gamepadEnabled = (el as HTMLInputElement).checked;
       this.persist();
@@ -1053,7 +1206,7 @@ export class MenuController {
   }
 
   private aiTrainRunOptionsHtml(): string {
-    const tip = (key: RunOptionTipKey) => ` title="${escapeHtml(runTip(key))}"`;
+    const tip = (key: RunOptionTipKey) => ` data-tip="${escapeHtml(runTip(key))}"`;
     const meta = loadMetaStore();
     const ascOpts = Array.from({ length: meta.ascensionUnlocked + 1 }, (_, i) => {
       const def = ASCENSIONS[i]!;
@@ -1164,6 +1317,12 @@ export class MenuController {
       case "patch-notes":
         body = this.renderPatchNotes();
         break;
+      case "campaign":
+        body = this.renderCampaign();
+        break;
+      case "game-types":
+        body = this.renderGameTypes();
+        break;
       case "settings":
         body = this.renderSettings();
         break;
@@ -1205,7 +1364,9 @@ export class MenuController {
       this.screen === "cheats" ||
       this.screen === "ai-lab" ||
       this.screen === "compendium" ||
-      this.screen === "patch-notes";
+      this.screen === "game-types" ||
+      this.screen === "patch-notes" ||
+      this.screen === "campaign";
     const shellClass = `menu-shell${isMain ? " main-shell" : ""}${this.screen === "singleplayer" || this.screen === "map-editor" || this.screen === "hero-editor" ? " tight" : ""}${this.screen === "map-editor" || this.screen === "hero-editor" ? " workshop-shell" : ""}${this.screen === "stats" ? " stats-shell" : ""}${this.screen === "game-info" ? " info-shell" : ""}${this.screen === "barracks" || this.screen === "challenges" ? " meta-shell" : ""}${prefsScreen ? " prefs-shell" : ""}`;
 
     const backdrop = this.root.querySelector<HTMLElement>(".menu-backdrop.menu-fx");
@@ -1554,6 +1715,10 @@ export class MenuController {
               <span class="btn-label">Singleplayer</span>
               <span class="btn-hint">Solo runs, endless, Ascension</span>
             </button>
+            <button type="button" class="menu-btn shine-btn play-card" data-action="goto" data-screen="campaign">
+              <span class="btn-label">Campaign</span>
+              <span class="btn-hint">Branching acts · roguelike map</span>
+            </button>
             <button type="button" class="menu-btn shine-btn play-card" data-action="goto" data-screen="multiplayer">
               <span class="btn-label">Multiplayer</span>
               <span class="btn-hint">Lobby codes &amp; online lanes</span>
@@ -1572,8 +1737,9 @@ export class MenuController {
 
         <section class="main-group workshop">
           <h2 class="main-group-label">Workshop</h2>
-          <div class="main-group-btns cols-3">
+          <div class="main-group-btns cols-4">
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="map-editor"><span class="btn-label">Map Editor</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="edit-gametypes" data-from="main"><span class="btn-label">Game Type Editor</span></button>
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="hero-editor"><span class="btn-label">Hero Editor</span></button>
             <button type="button" class="menu-btn shine-btn" data-action="goto" data-screen="ai-lab"><span class="btn-label">AI Lab</span></button>
           </div>
@@ -1599,53 +1765,140 @@ export class MenuController {
     `;
   }
 
-  private applySpRunDefaults(): void {
-    const d = RUN_OPTION_DEFAULTS;
-    this.spMapChoice = d.mapChoice;
-    this.spMaxTurrets = d.maxTurrets;
-    this.spStartingGold = d.startingGold;
-    this.spWavesToWin = d.wavesToWin;
-    this.spLivesPerWave = d.livesPerWave;
-    this.spLivesPerRun = d.livesPerRun;
-    this.spUtilityDraftLevel = d.utilityDraftLevel;
-    this.spFriendlyFire = d.friendlyFire;
-    this.spAscension = d.ascension;
-    this.spTeamSize = d.teamSize;
-    this.spEndless = d.endless;
-    this.ensureSpAiRoster(true);
-    this.spChestOpenMul = d.chestOpenMul;
-    this.spChestDespawnSec = d.chestDespawnSec;
-    this.spChestSpawnChance = d.chestSpawnChance;
-    this.spEnemyDensity = d.enemyDensityMul;
-    this.spEnemyHp = d.enemyHpMul;
-    this.spEnemySpeed = d.enemySpeedMul;
-    this.spIncomeMul = d.incomeMul;
-    this.spRespawnMul = d.respawnMul;
-    this.spStartingBase = d.startingBaseLevel;
-    this.spLevelDraftSize = d.levelDraftSize;
-    this.spRelicDraftSize = d.relicDraftSize;
-    this.spAllyAi = d.allyAi;
-    this.spSuddenDeath = d.suddenDeathBaseHp;
-    this.spDisableArtifacts = d.disableArtifacts;
-    this.spDisableChests = d.disableChests;
-    this.spDisableElites = d.disableElites;
-    this.spDisableBosses = d.disableBosses;
-    this.spDisableShop = d.disableShop;
-    this.spDisableSends = d.disableSends;
-    this.spDisableRelics = d.disableRelics;
-    this.spFogAlways = d.fogAlways;
-    this.spFogThicknessPct = d.fogThicknessPct;
-    this.spFogVisionRadius = d.fogVisionRadius;
-    this.spDoubleElites = d.doubleElites;
-    this.spGlassCannon = d.glassCannon;
-    this.spGoldRush = d.goldRush;
-    this.spWildChests = d.wildChests;
-    this.spCrampedLane = d.crampedLane;
-    setSelectedOpponent({ kind: "classic" });
+  /** Apply a named game type onto SP runtime flags (AI roster / endless). */
+  private applyGameType(id: string): void {
+    this.selectedGameTypeId = id;
+    saveSelectedGameTypeId(id);
+    const o = getGameType(id).options;
+    this.spEndless = o.endless;
+    if (o.endless) {
+      this.spAllies = [];
+      this.spEnemies = [];
+      this.spTeamSize = 1;
+    }
   }
 
-  private resetSpRunOptions(): void {
-    this.applySpRunDefaults();
+  /** Open game type editor leaving the multiplayer lobby UI mounted off-screen. */
+  gtReturnFromMultiplayer(): void {
+    this.gtReturnToMp = true;
+    this.gtReturnScreen = "main";
+    this.openGameTypeEditor(this.selectedGameTypeId);
+  }
+
+  private leaveGameTypeEditor(): void {
+    if (this.gtReturnToMp) {
+      this.gtReturnToMp = false;
+      this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
+      return;
+    }
+    this.go(this.gtReturnScreen);
+  }
+
+  private openGameTypeEditor(id: string): void {
+    const t = getGameType(id);
+    this.gtEditId = t.id;
+    this.gtEditName = t.name;
+    this.gtEditDescription = t.description || defaultGameTypeDescription(t.name);
+    this.gtEditOptions = { ...t.options };
+    this.screen = "game-types";
+    this.render();
+  }
+
+  private commitGameTypeEditor(): void {
+    this.gtEditOptions = readGameTypeOptionsFromDom(this.root, "gt");
+    const nameEl = this.root.querySelector<HTMLInputElement>("#gt-name");
+    const descEl = this.root.querySelector<HTMLTextAreaElement>("#gt-desc");
+    if (nameEl?.value.trim()) this.gtEditName = nameEl.value.trim().slice(0, 40);
+    if (descEl) this.gtEditDescription = descEl.value.trim().slice(0, 160);
+    const filterErr = validateContentFilters(this.gtEditOptions.contentFilters);
+    if (filterErr) {
+      this.setToast(filterErr);
+      return;
+    }
+    const all = listGameTypes();
+    const existing = all.find((t) => t.id === this.gtEditId);
+    if (existing?.builtin) {
+      this.gtEditId = newGameTypeId();
+    }
+    // Built-ins must never carry filters when used as templates without copy —
+    // saved customs may filter; force empty if somehow still builtin id.
+    if (BUILTIN_GAME_TYPES.some((b) => b.id === this.gtEditId)) {
+      this.gtEditOptions = {
+        ...this.gtEditOptions,
+        contentFilters: emptyContentFilters(),
+      };
+    }
+    const next: GameTypeDef = {
+      id: this.gtEditId,
+      name: this.gtEditName || "Custom type",
+      description:
+        this.gtEditDescription || defaultGameTypeDescription(this.gtEditName || "Custom type"),
+      builtin: false,
+      options: this.gtEditOptions,
+    };
+    const customs = loadCustomListSans(this.gtEditId);
+    customs.push(next);
+    saveCustomGameTypes(customs);
+    this.applyGameType(next.id);
+    this.setToast(`Saved “${next.name}”`);
+    this.render();
+  }
+
+  private deleteEditingGameType(): void {
+    const t = getGameType(this.gtEditId);
+    if (t.builtin) {
+      this.setToast("Built-in game types can’t be deleted.");
+      return;
+    }
+    saveCustomGameTypes(loadCustomListSans(this.gtEditId));
+    this.applyGameType("outlast");
+    this.openGameTypeEditor("outlast");
+  }
+
+  /** True while Campaign combat is running (checkpointed). */
+  isCampaignCombatActive(): boolean {
+    return !!(this.campaign?.alive && this.campaign.activeCombatNodeId);
+  }
+
+  /** Persist sudden-death base HP after a campaign combat ends. */
+  applyCampaignBaseHp(hp: number): void {
+    if (!this.campaign) return;
+    this.campaign.baseHp = Math.max(1, Math.min(this.campaign.baseMaxHp, Math.ceil(hp)));
+    saveCampaignRun(this.campaign);
+  }
+
+  /** Public: finish campaign battle (win / lose / quit). */
+  handleCampaignCombatEnd(result: "won" | "lost" | "abandon"): void {
+    if (!this.campaign) {
+      this.show("campaign", { allowMenuMusic: true });
+      return;
+    }
+    const nodeId = this.campaign.activeCombatNodeId;
+    const node = campaignNode(this.campaign, nodeId);
+    if (result === "won" && node && (node.kind === "combat" || node.kind === "elite" || node.kind === "boss")) {
+      const reward = rollCombatRewards(this.campaign, node.kind);
+      applyCombatRewards(this.campaign, reward);
+      completeCombatNode(this.campaign, node.id);
+      // Persist surviving base HP from sudden-death value is not auto-synced; keep coins reward.
+      if (node.kind === "boss" && node.act === 3) {
+        this.campaign.won = true;
+        this.campaignToast = "Act III boss cleared — campaign victory!";
+      } else {
+        this.campaignToast = `Victory · +${reward.coins} coins`;
+      }
+    } else if (result === "lost") {
+      // Base fell — campaign ends
+      this.campaign.alive = false;
+      this.campaign.activeCombatNodeId = null;
+      saveCampaignRun(this.campaign);
+      this.campaignToast = "Base fallen — campaign over.";
+    } else {
+      // Abandon mid-fight: checkpoint stays; do not advance
+      saveCampaignRun(this.campaign);
+      this.campaignToast = "Battle aborted — resume from checkpoint.";
+    }
+    this.campaignLobby = false;
+    this.show("campaign", { allowMenuMusic: true });
   }
 
   private randomizeSpRunOptions(): void {
@@ -1658,48 +1911,11 @@ export class MenuController {
     this.spMapChoice = pickOne(mapPool);
     this.spAscension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
     setSelectedOpponent(randomAiSelection(loadAiStore()));
-    if (Math.random() < 0.2) {
-      this.spEndless = true;
-    } else {
-      this.spEndless = false;
+    this.applyGameType(pickOne(listGameTypes()).id);
+    if (!this.spEndless) {
       this.spTeamSize = pickOne(RUN_OPTION_POOLS.teamSize);
+      this.ensureSpAiRoster(true);
     }
-    this.spMaxTurrets = pickOne(RUN_OPTION_POOLS.maxTurrets);
-    this.spStartingGold = pickOne(RUN_OPTION_POOLS.startingGold);
-    this.spWavesToWin = pickOne(RUN_OPTION_POOLS.wavesToWin);
-    this.spLivesPerWave = pickOne(RUN_OPTION_POOLS.livesPerWave);
-    this.spLivesPerRun = pickOne(RUN_OPTION_POOLS.livesPerRun);
-    this.spUtilityDraftLevel = pickOne(RUN_OPTION_POOLS.utilityDraftLevel);
-    this.spFriendlyFire = Math.random() < 0.5;
-    this.spChestOpenMul = pickOne(RUN_OPTION_POOLS.chestOpenMul);
-    this.spChestDespawnSec = pickOne(RUN_OPTION_POOLS.chestDespawnSec);
-    this.spChestSpawnChance = pickOne(RUN_OPTION_POOLS.chestSpawnChance);
-    this.spEnemyDensity = pickOne(RUN_OPTION_POOLS.enemyDensityMul);
-    this.spEnemyHp = pickOne(RUN_OPTION_POOLS.enemyHpMul);
-    this.spEnemySpeed = pickOne(RUN_OPTION_POOLS.enemySpeedMul);
-    this.spIncomeMul = pickOne(RUN_OPTION_POOLS.incomeMul);
-    this.spRespawnMul = pickOne(RUN_OPTION_POOLS.respawnMul);
-    this.spStartingBase = pickOne(RUN_OPTION_POOLS.startingBaseLevel);
-    this.spLevelDraftSize = pickOne(RUN_OPTION_POOLS.levelDraftSize);
-    this.spRelicDraftSize = pickOne(RUN_OPTION_POOLS.relicDraftSize);
-    this.spAllyAi = pickOne(RUN_OPTION_POOLS.allyAi);
-    this.spSuddenDeath = pickOne(RUN_OPTION_POOLS.suddenDeathBaseHp);
-    this.spDisableArtifacts = Math.random() < 0.5;
-    this.spDisableChests = Math.random() < 0.5;
-    this.spDisableElites = Math.random() < 0.5;
-    this.spDisableBosses = Math.random() < 0.5;
-    this.spDisableShop = Math.random() < 0.5;
-    this.spDisableSends = Math.random() < 0.5;
-    this.spDisableRelics = Math.random() < 0.5;
-    this.spFogAlways = Math.random() < 0.5;
-    this.spFogThicknessPct = pickOne(RUN_OPTION_POOLS.fogThicknessPct);
-    this.spFogVisionRadius = pickOne(RUN_OPTION_POOLS.fogVisionRadius);
-    this.spDoubleElites = Math.random() < 0.5;
-    this.spGlassCannon = Math.random() < 0.35;
-    this.spGoldRush = Math.random() < 0.35;
-    this.spWildChests = Math.random() < 0.35;
-    this.spCrampedLane = Math.random() < 0.35;
-    if (!this.spEndless) this.ensureSpAiRoster(true);
   }
 
   private newSpAiRow(ai: LobbyAiKind): { id: string; heroId: LobbyAiHeroPick; ai: LobbyAiKind } {
@@ -1710,7 +1926,7 @@ export class MenuController {
   private ensureSpAiRoster(resizeToMode = false): void {
     if (this.spEndless) return;
     const wantAllies = Math.max(0, this.spTeamSize - 1);
-    const wantEnemies = Math.max(1, this.spTeamSize);
+    const wantEnemies = Math.max(0, this.spTeamSize);
     const defAi = selectionToLobbyAi(loadAiStore().selected);
     if (resizeToMode || (this.spAllies.length === 0 && this.spEnemies.length === 0)) {
       this.spAllies = Array.from({ length: wantAllies }, () =>
@@ -1722,9 +1938,7 @@ export class MenuController {
       return;
     }
     this.spAllies = this.spAllies.slice(0, 2);
-    if (this.spEnemies.length === 0) {
-      this.spEnemies = [this.newSpAiRow(defAi)];
-    }
+    // Allow zero AI enemies (abstract rival)
     this.spEnemies = this.spEnemies.slice(0, 3);
   }
 
@@ -1752,7 +1966,7 @@ export class MenuController {
         ${
           canRemove
             ? `<button type="button" class="menu-btn small ghost" data-action="sp-rm-ai" data-side="${side}" data-id="${row.id}">✕</button>`
-            : `<span class="sp-ai-lock" title="Need at least one foe">—</span>`
+            : `<span class="sp-ai-lock" data-tip="Need at least one foe">—</span>`
         }
       </div>`;
     const you = resolveHero(this.selectedHero).name;
@@ -1761,7 +1975,7 @@ export class MenuController {
         <div class="panel-head">
           <h3 class="sp-setup-title">AI roster</h3>
         </div>
-        <p class="menu-note">Mode sets a starting ${this.spTeamSize}v${this.spTeamSize}. Add or remove AI (max 3 per lane) and pick Classic or a trained school per seat — e.g. 1v2 with Brutal + Classic.</p>
+        <p class="menu-note">Add or remove AI per lane (0–3 foes). Empty enemy lane uses the abstract rival.</p>
         <div class="sp-ai-cols">
           <div class="sp-ai-col">
             <h4>Your lane · ${1 + this.spAllies.length}/3</h4>
@@ -1775,8 +1989,7 @@ export class MenuController {
           </div>
           <div class="sp-ai-col">
             <h4>Enemy lane · ${this.spEnemies.length}/3</h4>
-            ${this.spEnemies
-              .map((r) => rowHtml("enemy", r, this.spEnemies.length > 1))
+            ${this.spEnemies.map((r) => rowHtml("enemy", r, true))
               .join("")}
             <button type="button" class="menu-btn small ghost sp-ai-add" data-action="sp-add-enemy" ${this.spEnemies.length >= 3 ? "disabled" : ""}>+ AI enemy</button>
           </div>
@@ -1784,192 +1997,32 @@ export class MenuController {
       </div>`;
   }
 
-  /** Singleplayer run-option fields — the MP equivalents live in MultiplayerUi. */
+  /** Game type dropdown + edit — dense options live in the Game Type Editor. */
   private runOptionsFields(): string {
-    const tip = (key: RunOptionTipKey) => ` title="${escapeHtml(runTip(key))}"`;
-    const turrets = this.spMaxTurrets;
-    const gold = this.spStartingGold;
-    const waves = this.spWavesToWin;
-    const livesWave = this.spLivesPerWave;
-    const livesRun = this.spLivesPerRun;
-    const utilityLevel = this.spUtilityDraftLevel;
-    const ff = this.spFriendlyFire;
-    const goldOpts = RUN_OPTION_POOLS.startingGold
-      .map(
-        (g) =>
-          `<option value="${g}" ${gold === g ? "selected" : ""}>${g}${g === STARTING_GOLD ? " (default)" : ""}</option>`,
-      )
-      .join("");
-    const waveOpts = RUN_OPTION_POOLS.wavesToWin
-      .map((w) => {
-        const label = w === 0 ? "Unlimited" : String(w);
-        const def = w === WIN_WAVES ? " (default)" : "";
-        return `<option value="${w}" ${waves === w ? "selected" : ""}>${label}${def}</option>`;
-      })
-      .join("");
-    const livesWaveOpts = RUN_OPTION_POOLS.livesPerWave
-      .map((n) => {
-        const label = n === 0 ? "Unlimited" : String(n);
-        return `<option value="${n}" ${livesWave === n ? "selected" : ""}>${label}</option>`;
-      })
-      .join("");
-    const livesRunOpts = RUN_OPTION_POOLS.livesPerRun
-      .map((n) => {
-        const label = n === 0 ? "Unlimited" : String(n);
-        return `<option value="${n}" ${livesRun === n ? "selected" : ""}>${label}</option>`;
-      })
-      .join("");
-    const turretOpts = RUN_OPTION_POOLS.maxTurrets
-      .map(
-        (n) =>
-          `<option value="${n}" ${turrets === n ? "selected" : ""}>${n}${n === DEFAULT_MAX_TURRETS ? " (default)" : ""}</option>`,
-      )
-      .join("");
-    const showFf = !this.spEndless && this.spAllies.length > 0;
-    const ffField = showFf
-      ? `<label class="run-field">
-            <span>Friendly fire</span>
-            <select data-field="sp-friendly-fire"${tip("friendlyFire")}>
-              <option value="0" ${!ff ? "selected" : ""}>Off</option>
-              <option value="1" ${ff ? "selected" : ""}>On</option>
-            </select>
-          </label>`
-      : "";
-    const creativeFlags: Array<[string, string, boolean, RunOptionTipKey]> = [
-      ["sp-no-art", "No artifacts", this.spDisableArtifacts, "noArtifacts"],
-      ["sp-no-chest", "No chests", this.spDisableChests, "noChests"],
-      ["sp-no-elite", "No elites", this.spDisableElites, "noElites"],
-      ["sp-no-boss", "No bosses", this.spDisableBosses, "noBosses"],
-      ["sp-no-shop", "No shop", this.spDisableShop, "noShop"],
-      ["sp-no-send", "No sends", this.spDisableSends, "noSends"],
-      ["sp-no-relic", "No relics", this.spDisableRelics, "noRelics"],
-      ["sp-fog", "Fog always", this.spFogAlways, "fogAlways"],
-      ["sp-dbl-elite", "Double elites", this.spDoubleElites, "doubleElites"],
-      ["sp-glass", "Glass cannon", this.spGlassCannon, "glassCannon"],
-      ["sp-gold-rush", "Gold rush", this.spGoldRush, "goldRush"],
-      ["sp-wild-chests", "Wild chests", this.spWildChests, "wildChests"],
-      ["sp-cramped", "Cramped lane", this.spCrampedLane, "crampedLane"],
-    ];
-    const creativeCheckboxes = creativeFlags
-      .map(
-        ([field, label, on, tipKey]) =>
-          `<label class="setting-row"${tip(tipKey)}><span>${label}</span><input type="checkbox" data-field="${field}" ${on ? "checked" : ""} /></label>`,
-      )
-      .join("");
-    const d = RUN_OPTION_DEFAULTS;
-    const creativeActive =
-      creativeFlags.filter(([, , on]) => on).length +
-      [
-        this.spEnemyDensity !== d.enemyDensityMul,
-        this.spEnemyHp !== d.enemyHpMul,
-        this.spEnemySpeed !== d.enemySpeedMul,
-        this.spIncomeMul !== d.incomeMul,
-        this.spRespawnMul !== d.respawnMul,
-        this.spStartingBase !== d.startingBaseLevel,
-        this.spLevelDraftSize !== d.levelDraftSize,
-        this.spRelicDraftSize !== d.relicDraftSize,
-        this.spSuddenDeath !== d.suddenDeathBaseHp,
-        this.spFogThicknessPct !== d.fogThicknessPct,
-        this.spFogVisionRadius !== d.fogVisionRadius,
-      ].filter(Boolean).length;
-    const teamOpts = [
-      ...RUN_OPTION_POOLS.teamSize.map(
-        (n) =>
-          `<option value="${n}" ${!this.spEndless && this.spTeamSize === n ? "selected" : ""}>${n}v${n} preset</option>`,
-      ),
-      `<option value="endless" ${this.spEndless ? "selected" : ""}>Endless (solo survival)</option>`,
-    ].join("");
-    const wavesField = this.spEndless
-      ? `<label class="run-field">
-            <span>Waves to win</span>
-            <select disabled${tip("wavesToWin")}>
-              <option selected>Until you fall</option>
-            </select>
-          </label>`
-      : `<label class="run-field">
-            <span>Waves to win</span>
-            <select data-field="sp-waves-to-win"${tip("wavesToWin")}>${waveOpts}</select>
-          </label>`;
-    const creativeSelect = (
-      field: string,
-      label: string,
-      tipKey: RunOptionTipKey,
-      pool: readonly number[],
-      current: number,
-      fmt: (n: number) => string,
-    ) => `
-            <label class="run-field"><span>${label}</span>
-              <select data-field="${field}"${tip(tipKey)}>${pool.map((n) => `<option value="${n}" ${current === n ? "selected" : ""}>${fmt(n)}</option>`).join("")}</select>
-            </label>`;
+    const gt = getGameType(this.selectedGameTypeId);
+    const o = gt.options;
+    const blurb = [
+      o.endless ? "No rival" : null,
+      o.livesPerRun > 0 ? `${o.livesPerRun} lives` : null,
+      o.wavesToWin === 0 ? "∞ waves" : `${o.wavesToWin} waves`,
+      o.sendLocation === "own" ? "sends→own" : "sends→enemy",
+      o.playerBaseInvincible || o.enemyBaseInvincible ? "base invuln" : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return `
-        <div class="run-grid cols-4">
-          <label class="run-field">
-            <span>Mode</span>
-            <select data-field="sp-team-size"${tip("mode")}>${teamOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Artifacts</span>
-            <select data-field="sp-turrets"${tip("artifacts")}>${turretOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Starting gold</span>
-            <select data-field="sp-starting-gold"${tip("startingGold")}>${goldOpts}</select>
-          </label>
-          ${wavesField}
-          ${ffField}
-          <label class="run-field">
-            <span>Lives / wave</span>
-            <select data-field="sp-lives-wave"${tip("livesWave")}>${livesWaveOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Lives / run</span>
-            <select data-field="sp-lives-run"${tip("livesRun")}>${livesRunOpts}</select>
-          </label>
-          <label class="run-field">
-            <span>Utility draft Lv</span>
-            <select data-field="sp-utility-level"${tip("utilityDraft")}>${utilityDraftLevelOptionsHtml(utilityLevel)}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest open</span>
-            <select data-field="sp-chest-open"${tip("chestOpen")}>${RUN_OPTION_POOLS.chestOpenMul.map((n) => `<option value="${n}" ${this.spChestOpenMul === n ? "selected" : ""}>${n}× open time</option>`).join("")}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest despawn</span>
-            <select data-field="sp-chest-despawn"${tip("chestDespawn")}>${RUN_OPTION_POOLS.chestDespawnSec.map((n) => `<option value="${n}" ${this.spChestDespawnSec === n ? "selected" : ""}>${n}s despawn</option>`).join("")}</select>
-          </label>
-          <label class="run-field">
-            <span>Chest spawn</span>
-            <select data-field="sp-chest-chance"${tip("chestSpawn")}>${RUN_OPTION_POOLS.chestSpawnChance.map((n) => `<option value="${n}" ${this.spChestSpawnChance === n ? "selected" : ""}>${Math.round(n * 100)}% chance</option>`).join("")}</select>
-          </label>
+      <div class="run-grid cols-3">
+        ${gameTypeSelectHtml(this.selectedGameTypeId, "sp-game-type")}
+        <label class="run-field">
+          <span>Edit</span>
+          <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="singleplayer" style="width:100%"><span class="btn-label">Edit Gametypes</span></button>
+        </label>
+        <div class="run-field">
+          <span>Summary</span>
+          <p class="menu-note compact" style="margin:0">${escapeHtml(gt.name)}${blurb ? ` — ${escapeHtml(blurb)}` : ""}</p>
         </div>
-        ${
-          this.spEndless
-            ? `<p class="panel-note" style="margin:8px 0 0">Endless: no enemy lane. Sends queue into <em>your</em> next wave for income — fight what you buy.</p>`
-            : ""
-        }
-        <details class="opt-fold"${creativeActive > 0 ? " open" : ""}>
-          <summary>Creative options${creativeActive > 0 ? ` <span class="opt-count">${creativeActive} active</span>` : ""}</summary>
-          <div class="opt-fold-body">
-          <div class="run-grid cols-4">
-            ${creativeSelect("sp-enemy-density", "Enemy density", "enemyDensity", RUN_OPTION_POOLS.enemyDensityMul, this.spEnemyDensity, (n) => `${n}×`)}
-            ${creativeSelect("sp-enemy-hp", "Enemy HP", "enemyHp", RUN_OPTION_POOLS.enemyHpMul, this.spEnemyHp, (n) => `${n}×`)}
-            ${creativeSelect("sp-enemy-speed", "Enemy speed", "enemySpeed", RUN_OPTION_POOLS.enemySpeedMul, this.spEnemySpeed, (n) => `${n}×`)}
-            ${creativeSelect("sp-income", "Income", "income", RUN_OPTION_POOLS.incomeMul, this.spIncomeMul, (n) => `${n}×`)}
-            ${creativeSelect("sp-respawn", "Respawn", "respawn", RUN_OPTION_POOLS.respawnMul, this.spRespawnMul, (n) => `${n}×`)}
-            ${creativeSelect("sp-start-base", "Start base Lv", "startBase", RUN_OPTION_POOLS.startingBaseLevel, this.spStartingBase, (n) => `${n}`)}
-            ${creativeSelect("sp-level-draft", "Level draft size", "levelDraft", RUN_OPTION_POOLS.levelDraftSize, this.spLevelDraftSize, (n) => `${n}`)}
-            ${creativeSelect("sp-relic-draft", "Relic draft size", "relicDraft", RUN_OPTION_POOLS.relicDraftSize, this.spRelicDraftSize, (n) => `${n}`)}
-            ${creativeSelect("sp-ally-ai", "Ally AI", "allyAi", RUN_OPTION_POOLS.allyAi, this.spAllyAi, (n) => `${n}×`)}
-            ${creativeSelect("sp-sudden", "Sudden death HP", "suddenDeath", RUN_OPTION_POOLS.suddenDeathBaseHp, this.spSuddenDeath, (n) => (n === 0 ? "Off" : `${n}`))}
-            ${creativeSelect("sp-fog-thickness", "Fog thickness", "fogThickness", RUN_OPTION_POOLS.fogThicknessPct, this.spFogThicknessPct, (n) => `${n}%`)}
-            ${creativeSelect("sp-fog-vision", "Fog vision", "fogVision", RUN_OPTION_POOLS.fogVisionRadius, this.spFogVisionRadius, (n) => `${n}px`)}
-          </div>
-          <div class="creative-check-grid">
-            ${creativeCheckboxes}
-          </div>
-          </div>
-        </details>
-      `;
+      </div>
+    `;
   }
 
   private spHeroDetailHtml(): string {
@@ -2041,7 +2094,7 @@ export class MenuController {
         const selected = h.id === this.selectedHero;
         const unlocked = isHeroUnlocked(h.id, meta);
         return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "title=\"Unlock in Barracks\""}>
+        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "data-tip=\"Unlock in Barracks\""}>
           <span class="hero-swatch" style="--hero:${h.color}"></span>
           <strong class="btn-label">${escapeHtml(h.name)}</strong>
           <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
@@ -2111,22 +2164,22 @@ export class MenuController {
           <div class="panel-head">
             <h2 class="sp-setup-title">Run setup</h2>
             <div class="panel-head-actions">
-              <button type="button" class="menu-btn small ghost" data-action="sp-run-reset" title="Restore default run options"><span class="btn-label">Reset</span></button>
-              <button type="button" class="menu-btn small ghost shine-btn" data-action="sp-run-randomize" title="Roll random run options"><span class="btn-label">Randomize</span></button>
+              <button type="button" class="menu-btn small ghost" data-action="sp-run-reset" data-tip="Restore default run options"><span class="btn-label">Reset</span></button>
+              <button type="button" class="menu-btn small ghost shine-btn" data-action="sp-run-randomize" data-tip="Roll random run options"><span class="btn-label">Randomize</span></button>
             </div>
           </div>
           <div class="run-grid cols-3">
             <label class="run-field">
               <span>Map</span>
-              <select data-field="sp-map" title="${escapeHtml(runTip("map"))}">${mapOpts}</select>
+              <select data-field="sp-map" data-tip="${escapeHtml(runTip("map"))}">${mapOpts}</select>
             </label>
             <label class="run-field">
               <span>Ascension</span>
-              <select data-field="sp-ascension" title="${escapeHtml(runTip("ascension"))}">${ascOpts}</select>
+              <select data-field="sp-ascension" data-tip="${escapeHtml(runTip("ascension"))}">${ascOpts}</select>
             </label>
             <label class="run-field">
               <span>Match AI</span>
-              <select disabled title="Per-seat difficulty is set in the AI roster below">
+              <select disabled data-tip="Per-seat difficulty is set in the AI roster below">
                 <option selected>${this.spEndless ? "None (Endless)" : "See AI roster"}</option>
               </select>
             </label>
@@ -2203,7 +2256,7 @@ export class MenuController {
       );
       if (this.compSort === "rarity") {
         list = [...list].sort(
-          (a, b) => RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity) || a.name.localeCompare(b.name),
+          (a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity) || a.name.localeCompare(b.name),
         );
       } else {
         list = [...list].sort((a, b) => a.name.localeCompare(b.name));
@@ -2329,20 +2382,13 @@ export class MenuController {
     }
     if (this.compendiumTab === "ascensions") {
       const cards = ASCENSIONS.filter((a) => this.matchesFilter(a.name, a.blurb))
-        .map((a) => {
-          const stack =
-            a.level <= 0
-              ? "Baseline difficulty."
-              : ASCENSIONS.filter((x) => x.level >= 1 && x.level <= a.level)
-                  .map((x) => `A${x.level}: ${x.blurb}`)
-                  .join(" · ");
-          return `
+        .map(
+          (a) => `
           <article class="comp-card compact">
             <h3>A${a.level} · ${escapeHtml(a.name)}</h3>
-            <p>${escapeHtml(a.blurb)}</p>
-            <p class="comp-meta">${escapeHtml(stack)}</p>
-          </article>`;
-        })
+            <p>${escapeHtml(a.blurb || (a.level <= 0 ? "Baseline difficulty." : ""))}</p>
+          </article>`,
+        )
         .join("");
       return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
@@ -2356,6 +2402,31 @@ export class MenuController {
             <p class="comp-meta">${p.cost}g · key ${p.digit} · Base Lv ${p.minBaseLevel}+ · ${p.enemies} creeps · +${p.incomeBonus}/s</p>
           </article>`,
         )
+        .join("");
+      return `<div class="comp-grid">${cards || emptyComp()}</div>`;
+    }
+    if (this.compendiumTab === "branches") {
+      let list = (Object.keys(BASE_BRANCHES) as BaseBranchId[]).filter((id) => {
+        const b = BASE_BRANCHES[id];
+        return this.matchesFilter(b.name, `${b.tag} ${b.blurb}`, b.rarity);
+      });
+      list = sortByRarityOrName(
+        list.map((id) => BASE_BRANCHES[id]),
+        this.compSort,
+        (b) => b.rarity,
+        (b) => b.name,
+      ).map((b) => b.id);
+      const cards = list
+        .map((id) => {
+          const b = BASE_BRANCHES[id]!;
+          return `
+          <article class="comp-card compact">
+            ${this.rarityBadge(b.rarity)}
+            <h3>${escapeHtml(b.name)}</h3>
+            <p>${escapeHtml(b.blurb)}</p>
+            <p class="comp-meta">${escapeHtml(b.tag)} · base branch</p>
+          </article>`;
+        })
         .join("");
       return `<div class="comp-grid">${cards || emptyComp()}</div>`;
     }
@@ -2394,12 +2465,12 @@ export class MenuController {
 
   private renderCompendium(): string {
     const tabs = (
-      ["heroes", "bonuses", "items", "artifacts", "relics", "enemies", "sends", "maps", "ascensions"] as const
+      ["heroes", "bonuses", "items", "artifacts", "relics", "enemies", "sends", "maps", "ascensions", "branches"] as const
     )
       .map(
         (tab) => `
         <button type="button" class="chip ${this.compendiumTab === tab ? "selected" : ""}" data-action="comp-tab" data-tab="${tab}">
-          ${capitalize(tab)}
+          ${COMP_TAB_LABELS[tab] ?? capitalize(tab)}
         </button>`,
       )
       .join("");
@@ -2408,7 +2479,8 @@ export class MenuController {
       this.compendiumTab === "bonuses" ||
       this.compendiumTab === "items" ||
       this.compendiumTab === "artifacts" ||
-      this.compendiumTab === "relics";
+      this.compendiumTab === "relics" ||
+      this.compendiumTab === "branches";
     const rarityOpts = [
       `<option value="all"${this.compRarity === "all" ? " selected" : ""}>All rarities</option>`,
       ...RARITY_ORDER.map(
@@ -2444,7 +2516,7 @@ export class MenuController {
 
   private renderGameInfo(): string {
     return `
-      <div class="info-layout">
+      <div class="info-layout expanded">
         <header class="menu-header compact info-header">
           ${this.backButton("main")}
           <h1 class="menu-title">Game Info</h1>
@@ -2455,36 +2527,36 @@ export class MenuController {
           <p class="info-kicker">Core loop</p>
           <h2>Send to grow</h2>
           <p>Passive gold → buy <strong>send packs</strong> (1–6). Sending raises your income, then queues those creeps into the rival's next wave. Same gold snowballs economy and pressure.</p>
-          <details class="help-fold">
-            <summary>Endless &amp; lives</summary>
-            <p><strong>Endless</strong> has no rival lane — sends feed <em>your</em> next wave. Optional <strong>Lives / wave</strong> and <strong>Lives / run</strong> change respawn rules; out of run lives loses the side.</p>
-          </details>
+          <div class="info-open-block">
+            <h3>Endless &amp; lives</h3>
+            <p><strong>No rival lane</strong> (game type) has no enemy lane — sends feed <em>your</em> next wave. Optional <strong>Lives / wave</strong> and <strong>Lives / run</strong> change respawn rules; out of run lives loses the side.</p>
+          </div>
         </section>
 
-        <div class="info-grid">
-          <section class="info-block">
+        <div class="info-grid roomy">
+          <section class="info-block flat">
             <h2>The line</h2>
             <p>Base left, spawns right. Base death (or wave goal) ends the run. High ground = bonus damage. Win wave count is configurable; Unlimited fights until a base falls.</p>
           </section>
-          <section class="info-block">
+          <section class="info-block flat">
             <h2>Shop &amp; Artifacts</h2>
-            <p><strong>F</strong> on the SHOP pad. <strong>Artifacts</strong> auto-place near base. <strong>U</strong> upgrades send packs; some levels draft a base branch.</p>
+            <p><strong>F</strong> on the SHOP pad (click to buy — no digit hotkeys). Free placement: attack-click to plant Artifacts. <strong>U</strong> upgrades send packs; some levels draft a base branch.</p>
           </section>
-          <section class="info-block">
+          <section class="info-block flat">
             <h2>Heroes &amp; drafts</h2>
             <p>Starter six free; others via Barracks / challenges. Level &amp; relic drafts support Skip + rerolls. Utility drafts into Space at a chosen level.</p>
           </section>
-          <section class="info-block">
+          <section class="info-block flat">
             <h2>Controls</h2>
             <p>WASD move · LMB attack · RMB mobility · MMB ult · Space utility · 1–6 sends. Remap in Settings → Controls.</p>
           </section>
-          <section class="info-block">
+          <section class="info-block flat">
             <h2>Maps &amp; Ascension</h2>
             <p>Special layouts + A0–A15 modifiers. Custom maps/heroes in Workshop. Full kits in the Compendium.</p>
           </section>
-          <section class="info-block">
+          <section class="info-block flat">
             <h2>Meta</h2>
-            <p><strong>War Crests</strong> → Barracks. Challenges unlock purchases (not free). Export/import saves in Settings.</p>
+            <p><strong>War Crests</strong> → Barracks. Gameplay Barracks upgrades stay off in multiplayer / campaign unless you opt in. Challenges unlock purchases (not free). Export/import saves in Settings.</p>
           </section>
         </div>
 
@@ -2493,23 +2565,417 @@ export class MenuController {
           <div class="info-band-cols">
             <div>
               <h3>Singleplayer</h3>
-              <p>Classic or neural AI · 1v1–3v3 · Endless. Map, Ascension, creative toggles.</p>
+              <p>Named Game Types (Outlast / Race / Survival + custom) · Classic or neural AI · 1v1–3v3.</p>
             </div>
             <div>
               <h3>Multiplayer</h3>
-              <p>PeerJS lobbies · 1v1 / 2v2 / 3v3 · 2p/3p PvE. Host sets run options; allies share a lane.</p>
+              <p>PeerJS lobbies · 1v1 / 2v2 / 3v3 · 2p/3p PvE. Host sets Game Type; allies share a lane.</p>
             </div>
           </div>
         </section>
 
-        <details class="help-fold">
-          <summary>More detail</summary>
+        <section class="info-open-block">
+          <h3>More detail</h3>
           <ul>
             <li><strong>Enemy panel</strong> — top-right HP / income / send status; View lane flips camera.</li>
             <li><strong>AI Lab</strong> — train schools for Rookie→Brutal solo / PvE opponents.</li>
             <li><strong>Online</strong> — host-authoritative PeerJS; expect ongoing sync polish.</li>
           </ul>
-        </details>
+        </section>
+      </div>
+    `;
+  }
+
+  private resolveCampaignNode(nodeId: string): void {
+    if (!this.campaign) return;
+    const node = campaignNode(this.campaign, nodeId);
+    if (!node) return;
+
+    if (node.kind === "combat" || node.kind === "elite" || node.kind === "boss") {
+      beginCombatCheckpoint(this.campaign, nodeId);
+      const asc =
+        node.kind === "boss" ? 4 + (node.act - 1) * 3 : node.kind === "elite" ? 2 + node.act : node.act - 1;
+      const fromGt = gameTypeToRunOptions(this.campaign.gameTypeOptions);
+      const startGold =
+        50 +
+        (this.campaign.perks.includes("start_gold_30") ? 30 : 0) +
+        this.campaign.abilityUpgrades.passive * 5;
+      let gStart = (fromGt.startingGold ?? 50) + (startGold - 50);
+      if (this.campaign.perks.includes("rsb_gold_debt")) gStart = Math.max(0, gStart - 10);
+      const allowMeta =
+        areCheatsEnabled() && loadCheatOptions().barracksInCampaign === true;
+      // Persist map id across quit/resume so random does not re-roll.
+      let mapId = this.campaign.combatMapId;
+      if (!mapId) {
+        mapId = resolveMapChoice("random");
+        this.campaign.combatMapId = mapId;
+        saveCampaignRun(this.campaign);
+      }
+      this.callbacks.onStartSingleplayer(this.campaign.heroId, {
+        ...fromGt,
+        mapId,
+        startingGold: gStart,
+        wavesToWin: 10,
+        ascension: Math.min(12, asc),
+        teamSize: 1,
+        endless: false,
+        suddenDeathBaseHp: this.campaign.baseHp,
+        humanPlayers: 1,
+        allowBarracks: allowMeta,
+        campaignCombat: true,
+      });
+      return;
+    }
+
+    advanceTo(this.campaign, nodeId);
+    if (node.kind === "event") {
+      this.campaignEventId =
+        CAMPAIGN_EVENTS[Math.floor(Math.random() * CAMPAIGN_EVENTS.length)]!.id;
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (node.kind === "chest") {
+      rollPendingChestRelic(this.campaign);
+      this.campaignToast = "Chest opened — preview relic.";
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    if (node.kind === "shop" || node.kind === "rest") {
+      this.campaignToast = node.kind + " — choose below.";
+      saveCampaignRun(this.campaign);
+      this.render();
+      return;
+    }
+    saveCampaignRun(this.campaign);
+    this.render();
+  }
+
+  private renderCampaign(): string {
+    const confirm = this.campaignConfirmAbandon
+      ? `<div class="menu-confirm-overlay" role="alertdialog" aria-modal="true">
+          <div class="menu-confirm-card">
+            <h1>Abandon campaign?</h1>
+            <p>This discards the whole run. Mid-combat quits already keep a battle checkpoint.</p>
+            <div class="menu-confirm-actions">
+              <button type="button" data-action="campaign-abandon-yes">Abandon</button>
+              <button type="button" data-action="campaign-abandon-no">Cancel</button>
+            </div>
+          </div>
+        </div>`
+      : "";
+
+    if (!this.campaign || !this.campaign.alive || this.campaignLobby) {
+      if (!(this.campaign && this.campaign.alive && !this.campaignLobby)) {
+        const meta = loadMetaStore();
+        const cards = HERO_LIST.map((h) => {
+          const selected = h.id === this.selectedHero;
+          const unlocked = isHeroUnlocked(h.id, meta);
+          return `
+          <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : 'data-tip="Unlock in Barracks"'}>
+            <span class="hero-swatch" style="--hero:${h.color}"></span>
+            <strong class="btn-label">${escapeHtml(h.name)}</strong>
+            <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
+          </button>`;
+        }).join("");
+        const resume =
+          this.campaign && this.campaign.alive
+            ? `<button type="button" class="menu-btn primary shine-btn" data-action="campaign-resume"><span class="btn-label">Resume run</span></button>`
+            : "";
+        return `
+          <div class="sp-run-layout campaign-lobby">
+            ${confirm}
+            <section class="sp-setup">
+              <header class="menu-header compact">
+                ${this.backButton("main")}
+                <h1 class="menu-title">Campaign</h1>
+                <p class="menu-lead">Lobby: pick hero + game type, then start a branching run.</p>
+              </header>
+              <div class="run-grid cols-2">
+                ${gameTypeSelectHtml(this.campaignLobbyGameTypeId, "sp-game-type")}
+                <label class="run-field">
+                  <span>Edit</span>
+                  <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="campaign" style="width:100%"><span class="btn-label">Edit Gametypes</span></button>
+                </label>
+              </div>
+              ${(() => {
+                const gt = getGameType(this.campaignLobbyGameTypeId);
+                return gt.description
+                  ? `<p class="menu-note">${escapeHtml(gt.description)}</p>`
+                  : "";
+              })()}
+              <div class="hero-detail-panel">
+                ${(() => {
+                  const h = HEROES[this.selectedHero] ?? HERO_LIST[0]!;
+                  return `<h3>${escapeHtml(h.name)}</h3>
+                    <p>${escapeHtml(h.blurb)}</p>
+                    <p class="comp-meta">Passive · ${escapeHtml(h.passive.name)}</p>
+                    <p class="menu-note">${escapeHtml(h.passive.blurb)}</p>
+                    <ul class="hero-ability-list">
+                      ${h.abilities
+                        .map(
+                          (a) =>
+                            `<li><strong>${escapeHtml(a.name)}</strong> — ${escapeHtml(a.hint)}</li>`,
+                        )
+                        .join("")}
+                    </ul>`;
+                })()}
+              </div>
+              <div class="campaign-lobby-actions">
+                <button type="button" class="menu-btn primary shine-btn wide" data-action="campaign-new"><span class="btn-label">New run</span></button>
+                ${resume}
+              </div>
+            </section>
+            <section class="sp-heroes">
+              <h2 class="sp-heroes-title">Hero</h2>
+              <div class="hero-grid compact">${cards}</div>
+            </section>
+          </div>
+        `;
+      }
+    }
+
+    const run = this.campaign!;
+    if (this.campaignStartBonusChoices?.length) {
+      const cards = this.campaignStartBonusChoices
+        .map(
+          (b) =>
+            `<button type="button" class="menu-btn shine-btn campaign-start-bonus" data-action="campaign-start-bonus" data-id="${b.id}">
+              <span class="btn-label">${escapeHtml(b.name)}</span>
+              <span class="btn-hint">${escapeHtml(b.blurb)}</span>
+            </button>`,
+        )
+        .join("");
+      return `
+        <div class="prefs-layout">
+          <header class="menu-header compact">
+            ${this.backButton("main")}
+            <h1 class="menu-title">Run start bonus</h1>
+            <p class="menu-lead">Pick one — often power with a tradeoff.</p>
+          </header>
+          <div class="creative-check-grid campaign-start-bonus-grid">${cards}</div>
+        </div>`;
+    }
+
+    const curId = run.activeCombatNodeId ?? run.currentNodeId;
+    const cur = campaignNode(run, curId);
+    const next = availableNext(run);
+    const toast = this.campaignToast
+      ? `<p class="menu-toast">${escapeHtml(this.campaignToast)}</p>`
+      : "";
+    this.campaignToast = "";
+    const hero = resolveHero(run.heroId);
+
+    let panel = "";
+    if (this.campaignEventId) {
+      const ev = CAMPAIGN_EVENTS.find((e) => e.id === this.campaignEventId)!;
+      panel = `
+        <section class="info-block">
+          <h2>${escapeHtml(ev.title)}</h2>
+          <p>${escapeHtml(ev.body)}</p>
+          <div class="creative-check-grid">
+            ${ev.choices
+              .map(
+                (c) =>
+                  `<button type="button" class="menu-btn shine-btn" data-action="campaign-event" data-choice="${c.id}" data-tip="${escapeHtml(c.blurb)}"><span class="btn-label">${escapeHtml(c.label)}</span></button>`,
+              )
+              .join("")}
+          </div>
+        </section>`;
+    } else if (cur?.kind === "shop") {
+      panel = `
+        <section class="info-block campaign-shop">
+          <h2>Campaign shop</h2>
+          <p>Permanent upgrades · ${run.coins} coins</p>
+          <div class="comp-grid">
+            ${CAMPAIGN_SHOP.map(
+              (shop) =>
+                `<button type="button" class="comp-card campaign-shop-card" data-action="campaign-shop" data-shop="${shop.id}" ${run.coins < shop.cost ? "disabled" : ""}>
+                  <h3>${escapeHtml(shop.name)}</h3>
+                  <p class="comp-meta">${shop.cost} coins</p>
+                  <p>${escapeHtml(shop.blurb)}</p>
+                </button>`,
+            ).join("")}
+          </div>
+        </section>`;
+    } else if (cur?.kind === "rest") {
+      panel = `
+        <section class="info-block">
+          <h2>Rest site</h2>
+          <div class="creative-check-grid">
+            <button type="button" class="menu-btn shine-btn" data-action="campaign-rest" data-rest="heal"><span class="btn-label">Heal base</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="campaign-rest" data-rest="mobility"><span class="btn-label">Upgrade mobility</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="campaign-rest" data-rest="ultimate"><span class="btn-label">Upgrade ultimate</span></button>
+            <button type="button" class="menu-btn shine-btn" data-action="campaign-rest" data-rest="passive"><span class="btn-label">Upgrade passive</span></button>
+          </div>
+        </section>`;
+    } else if (cur?.kind === "chest") {
+      const rid = run.pendingChestRelicId;
+      const relic = rid ? RELICS[rid] : null;
+      panel = relic
+        ? `
+        <section class="info-block">
+          <h2>Relic chest</h2>
+          <article class="comp-card compact campaign-chest-preview">
+            ${relicArtImg(relic.id, "relic-art comp-item-art")}
+            <h3>${escapeHtml(relic.name)}</h3>
+            <p>${escapeHtml(relic.blurb)}</p>
+            <p class="comp-meta">${escapeHtml(relic.tag)}</p>
+          </article>
+          <div class="creative-check-grid" style="margin-top:10px">
+            <button type="button" class="menu-btn primary shine-btn" data-action="campaign-chest" data-take="1"><span class="btn-label">Take relic</span></button>
+            <button type="button" class="menu-btn ghost" data-action="campaign-chest" data-take="0"><span class="btn-label">Skip</span></button>
+          </div>
+        </section>`
+        : `
+        <section class="info-block">
+          <h2>Relic chest</h2>
+          <p>No relics left to claim.</p>
+          <button type="button" class="menu-btn ghost" data-action="campaign-chest" data-take="0"><span class="btn-label">Continue</span></button>
+        </section>`;
+    }
+
+    const pathBtns = next
+      .map((n) => {
+        const resume = run.activeCombatNodeId === n.id ? "RESUME · " : "";
+        const label = `${resume}${n.kind.toUpperCase()} · A${n.act} R${n.row}`;
+        return `<button type="button" class="menu-btn shine-btn" data-action="campaign-go" data-node="${n.id}"><span class="btn-label">${label}</span></button>`;
+      })
+      .join("");
+
+    const bagHtml = this.campaignBagOpen
+      ? `<aside class="campaign-bag-panel" role="dialog" aria-label="Run bag">
+          <header class="campaign-bag-head">
+            <h2>Bag</h2>
+            <button type="button" class="menu-btn small ghost" data-action="campaign-bag-close">Close</button>
+          </header>
+          <div class="campaign-bag-body">
+            <h3>Hero</h3>
+            <p>${escapeHtml(hero.name)}</p>
+            <h3>Relics (${run.relics.length})</h3>
+            <ul class="campaign-bag-list">
+              ${
+                run.relics.length
+                  ? run.relics
+                      .map((id) => {
+                        const r = RELICS[id];
+                        return `<li>${r ? escapeHtml(r.name) : id}</li>`;
+                      })
+                      .join("")
+                  : "<li class='muted'>None</li>"
+              }
+            </ul>
+            <h3>Temp gear (${run.tempItems.length})</h3>
+            <ul class="campaign-bag-list">
+              ${
+                run.tempItems.length
+                  ? run.tempItems
+                      .map((id) => {
+                        const it = SHOP_ITEMS.find((s) => s.id === id);
+                        return `<li>${it ? escapeHtml(it.name) : id}</li>`;
+                      })
+                      .join("")
+                  : "<li class='muted'>None</li>"
+              }
+            </ul>
+            <h3>Perks</h3>
+            <ul class="campaign-bag-list">
+              ${
+                run.perks.length
+                  ? run.perks.map((p) => `<li>${escapeHtml(p.replace(/^rsb_/, "").replace(/_/g, " "))}</li>`).join("")
+                  : "<li class='muted'>None</li>"
+              }
+            </ul>
+            <h3>Rerolls</h3>
+            <p>${run.rerollTokens}</p>
+          </div>
+        </aside>`
+      : "";
+
+    return `
+      <div class="prefs-layout campaign-map-layout">
+        ${confirm}
+        ${bagHtml}
+        <header class="menu-header compact campaign-map-header">
+          <div class="campaign-map-title-row">
+            ${this.backButton("main")}
+            <h1 class="menu-title">Campaign</h1>
+            <button type="button" class="menu-btn small shine-btn" data-action="campaign-bag"><span class="btn-label">Bag</span></button>
+          </div>
+        </header>
+        <div class="campaign-stat-panel" aria-label="Run status">
+          <div class="campaign-stat-hero">
+            <span class="campaign-stat-label">Hero</span>
+            <strong>${escapeHtml(hero.name)}</strong>
+          </div>
+          <div class="campaign-stat-base">
+            <span class="campaign-stat-label">Base</span>
+            <strong>${Math.ceil(run.baseHp)}/${run.baseMaxHp}</strong>
+          </div>
+          <div class="campaign-stat-credits">
+            <span class="credit-icon" aria-hidden="true"></span>
+            <strong>${run.coins}</strong>
+            <span class="campaign-stat-label">Credits</span>
+          </div>
+          <div class="campaign-stat-meta">
+            <span>Act ${run.act}</span>
+            <span>${cur ? cur.kind : "—"}${run.activeCombatNodeId ? " · fight" : ""}</span>
+            <span>Relics ${run.relics.length}</span>
+          </div>
+        </div>
+        ${toast}
+        ${panel}
+        <section class="info-block">
+          <h2>Path</h2>
+          <div class="creative-check-grid">${pathBtns || "<p class='comp-empty'>No further paths — run complete or restart.</p>"}</div>
+        </section>
+        <button type="button" class="menu-btn ghost danger" data-action="campaign-abandon"><span class="btn-label">Abandon run</span></button>
+      </div>
+    `;
+  }
+
+  private renderGameTypes(): string {
+    const list = listGameTypes();
+    const picks = list
+      .map((t) => {
+        const tip = escapeHtml(t.description || t.name);
+        return `<button type="button" class="chip ${t.id === this.gtEditId ? "selected" : ""}" data-action="gt-pick" data-id="${t.id}" data-tip="${tip}">${escapeHtml(t.name)}${t.builtin ? "" : " ★"}</button>`;
+      })
+      .join("");
+    const editing = list.find((t) => t.id === this.gtEditId) ?? list[0]!;
+    const canDelete = !editing.builtin;
+    const back = this.gtReturnToMp
+      ? `<button type="button" class="menu-back" data-action="gt-back-mp">← Multiplayer</button>`
+      : this.backButton(this.gtReturnScreen);
+    const summary = escapeHtml(this.gtEditDescription || editing.description || "");
+    return `
+      <div class="prefs-layout">
+        <header class="menu-header compact">
+          ${back}
+          <h1 class="menu-title">Game Type Editor</h1>
+          <p class="menu-lead">Save named run rules for SP, MP, and Campaign.</p>
+        </header>
+        <div class="gt-type-picks">${picks}</div>
+        ${summary ? `<p class="menu-note gt-summary">${summary}</p>` : ""}
+        <div class="gt-editor-head">
+          <label class="run-field"><span>Name</span>
+            <input id="gt-name" type="text" maxlength="40" value="${escapeHtml(this.gtEditName)}" ${editing.builtin ? "readonly" : ""} />
+          </label>
+          <label class="run-field gt-desc-field"><span>Description</span>
+            <textarea id="gt-desc" maxlength="160" rows="2" ${editing.builtin ? "readonly" : ""}>${escapeHtml(this.gtEditDescription)}</textarea>
+          </label>
+        </div>
+        <div class="gt-action-bar">
+          <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-new"><span class="btn-label">New copy</span></button>
+          <button type="button" class="menu-btn small primary shine-btn" data-action="gt-save"><span class="btn-label">Save</span></button>
+          <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-use"><span class="btn-label">Use</span></button>
+          <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-export"><span class="btn-label">Export</span></button>
+          <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-import"><span class="btn-label">Import</span></button>
+          ${canDelete ? `<button type="button" class="menu-btn small ghost danger" data-action="gt-delete"><span class="btn-label">Delete</span></button>` : ""}
+        </div>
+        ${gameTypeOptionsFieldsHtml(this.gtEditOptions, "gt", true)}
+        ${editing.builtin ? `<p class="menu-note">Built-in types save as a custom copy when you hit Save.</p>` : ""}
       </div>
     `;
   }
@@ -2526,13 +2992,13 @@ export class MenuController {
           ? `<p class="patch-page-meta">${escapeHtml(page.heading)}</p>`
           : `<p class="patch-empty">No patch notes found.</p>`
         : `<div class="patch-pager" role="navigation" aria-label="Patch note versions">
-            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-prev" title="Newer" aria-label="Newer version">←</button>
+            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-prev" data-tip="Newer" aria-label="Newer version">←</button>
             <div class="patch-page-meta">
               <strong>${escapeHtml(page!.version)}</strong>
               <span>${escapeHtml(page!.date)}</span>
               <span class="patch-page-count">${idx + 1} / ${n}</span>
             </div>
-            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-next" title="Older" aria-label="Older version">→</button>
+            <button type="button" class="menu-btn small ghost patch-arrow" data-action="patch-next" data-tip="Older" aria-label="Older version">→</button>
           </div>`;
 
     const body = page
@@ -2598,8 +3064,16 @@ export class MenuController {
               <input type="checkbox" data-setting="autoOpenShop" ${s.autoOpenShop ? "checked" : ""} />
             </label>
             <label class="setting-row check">
+              <span>Artifact place delay<em>Debounce free placement after buy</em></span>
+              <input type="checkbox" data-setting="artifactPlaceDebounce" ${s.artifactPlaceDebounce !== false ? "checked" : ""} />
+            </label>
+            <label class="setting-row check">
               <span>Reject peer customs<em>Block MP custom maps/heroes</em></span>
               <input type="checkbox" data-setting="rejectPeerCustoms" ${s.rejectPeerCustoms ? "checked" : ""} />
+            </label>
+            <label class="setting-row check">
+              <span>Run start bonuses<em>Campaign 1-of-3 pick after hero</em></span>
+              <input type="checkbox" data-setting="campaignRunStartBonuses" ${s.campaignRunStartBonuses !== false ? "checked" : ""} />
             </label>
           </div>
           <div class="settings-group">
@@ -2700,7 +3174,9 @@ export class MenuController {
             <span class="chip ${done ? "selected" : ""}">${done ? "Done" : "Locked"}</span>
           </div>
           <span class="stat-hint">${escapeHtml(c.blurb)}</span>
-          <em>${escapeHtml(challengeProgressHint(c, store))} · Reward: ${escapeHtml(unlock?.name ?? c.unlocks)}${owned ? " (purchased)" : done ? " (buy in Barracks)" : ""}</em>
+          <em>${escapeHtml(challengeProgressHint(c, store))} · Reward: ${
+            c.crestReward ? `${c.crestReward} Crests + ` : ""
+          }${escapeHtml(unlock?.name ?? c.unlocks)}${owned ? " (purchased)" : done ? " (buy in Barracks)" : ""}</em>
         </article>`;
     }).join("");
     return `
@@ -2731,6 +3207,7 @@ export class MenuController {
       { key: "oneShot", label: "One-shot" },
       { key: "freeShop", label: "Free shop" },
       { key: "revealFog", label: "Reveal fog" },
+      { key: "barracksInCampaign", label: "Barracks in Campaign" },
     ];
     return `
       <div class="prefs-layout">

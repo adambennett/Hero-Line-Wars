@@ -1,4 +1,4 @@
-import { MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
+import { MAP_H, MAP_W, STARTING_GOLD, WIN_WAVES } from "../data/constants";
 import { waveTierLabel } from "../data/enemies";
 import { HEROES, type HeroId } from "../data/heroes";
 import { registerSessionCustoms, resolveHero } from "../custom/registry";
@@ -26,14 +26,16 @@ import {
 import { UTILITIES } from "../data/utilities";
 import { nearAnyShop } from "../data/maps";
 import { CURSES } from "../data/curses";
-import { buyShopItem, toggleShopFreeze, shopItemCost } from "../systems/shop";
+import { buyShopItem, buyShopRerollToken, toggleShopFreeze, shopItemCost, buyShopStockReroll } from "../systems/shop";
+import { shopStockRerollCost } from "../data/shopReroll";
 import { chooseChestReward } from "../systems/chests";
 import { availableSendPacks, buySendPack, sendPackCost } from "../systems/send";
 import { tryUpgradeBase, upgradeBaseCost } from "../systems/baseUpgrade";
 import { xpProgress, openRunStartUtilityDraft, rerollLevelDraft, rerollRelicDraft } from "../systems/xp";
 import { effectiveMaxTurrets, livingTurrets } from "../systems/turrets";
 import { Input } from "../systems/input";
-import { computeView, draw } from "../render/draw";
+import { computeView, draw, type ViewChrome, DEFAULT_VIEW_CHROME, type ViewWorldBand } from "../render/draw";
+import { playBounds } from "./playBounds";
 import { MenuController, type LobbyDraft } from "../ui/MenuController";
 import { formatBinding, loadSettings } from "../ui/settings";
 import { playSfx, unlockAudio } from "../systems/audio";
@@ -79,6 +81,8 @@ export class Game {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly input = new Input();
   private state: GameState | null = null;
+  /** When true, combat exit routes back into Campaign with win/lose/abandon. */
+  private campaignMatch = false;
   private last = 0;
   private running = false;
   private runDefaults: RunOptions = {
@@ -157,6 +161,7 @@ export class Game {
   /** Queued draft / shop UI choices for the next MP intent frame. */
   private mpUiIntent: CombatIntent = emptyIntent();
   private lastShopKey = "";
+  private lastTokenShopKey = "";
   private lastSendUnlockKey = "";
   private lastDraftKey = "";
   private lastAbilityKey = "";
@@ -164,6 +169,8 @@ export class Game {
   /** Edge tracker for auto-open shop in MP / dual-lane. */
   private wasNearShopAuto = false;
   private mpDisconnectHandled = false;
+  /** Live HUD chrome (CSS px) fed into computeView — top/bottom reserved for panels. */
+  private viewChrome: ViewChrome = { ...DEFAULT_VIEW_CHROME };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -228,7 +235,11 @@ export class Game {
     const menusRoot = document.querySelector<HTMLElement>("#menus");
     if (!menusRoot) throw new Error("#menus missing");
     this.menus = new MenuController(menusRoot, {
-      onStartSingleplayer: (heroId, opts) => this.beginRun(heroId, opts),
+      onStartSingleplayer: (heroId, opts) => {
+        // Only real campaign fights — not SP while a campaign checkpoint exists.
+        this.campaignMatch = !!opts?.campaignCombat;
+        this.beginRun(heroId, opts);
+      },
       onOpenMultiplayer: (draft, heroId) => this.openMultiplayer(draft, heroId),
       onSettingsChanged: () => {
         this.input.reloadBinds();
@@ -417,7 +428,25 @@ export class Game {
     this.menus.show("main", { allowMenuMusic: true });
   }
 
+  private exitCampaignCombat(result: "won" | "lost" | "abandon", baseHp?: number): void {
+    if ((result === "won" || result === "lost") && baseHp != null) {
+      this.menus.applyCampaignBaseHp(baseHp);
+    }
+    this.endMultiplayer();
+    this.state = null;
+    this.campaignMatch = false;
+    this.pauseMode = "none";
+    this.hideCombatChrome();
+    this.input.reloadBinds();
+    this.refreshHint();
+    this.menus.handleCampaignCombatEnd(result);
+  }
+
   private returnToMainMenu(): void {
+    if (this.campaignMatch) {
+      this.exitCampaignCombat("abandon");
+      return;
+    }
     this.endMultiplayer();
     this.state = null;
     this.pauseMode = "none";
@@ -437,7 +466,8 @@ export class Game {
     this.refreshHint();
     const ascension = opts?.ascension ?? this.runDefaults.ascension ?? 0;
     const meta = loadMetaStore();
-    const playerMods = composeRunModifiers(ascension, meta.ranks, true);
+    const allowMeta = !!opts?.allowBarracks;
+    const playerMods = composeRunModifiers(ascension, allowMeta ? meta.ranks : {}, allowMeta);
     const merged: RunOptions = {
       ...opts,
       mapId: opts?.mapId ?? this.runDefaults.mapId ?? "random",
@@ -523,8 +553,10 @@ export class Game {
     this.mpHost = true;
     this.remoteIntents.clear();
     const meta = loadMetaStore();
-    const playerMods = opts.modifiers ?? composeRunModifiers(opts.ascension, meta.ranks, true);
-    const enemyMods = composeRunModifiers(opts.ascension, meta.ranks, false);
+    const allowMeta = !!opts.allowBarracks;
+    const playerMods =
+      opts.modifiers ?? composeRunModifiers(opts.ascension, allowMeta ? meta.ranks : {}, allowMeta);
+    const enemyMods = composeRunModifiers(opts.ascension, {}, false);
     const agg = playerMods.opponentAggressionMul;
     const neural = opp
       ? createNeuralLaneAi(opp.genome, Math.max(0, opp.hesitation / agg), opp.label)
@@ -568,6 +600,9 @@ export class Game {
       disableShop: opts.disableShop,
       disableSends: opts.disableSends,
       disableRelics: opts.disableRelics,
+      disableBonuses: opts.disableBonuses,
+      disableBaseUpgrades: opts.disableBaseUpgrades,
+      contentFilters: opts.contentFilters,
       fogAlways: opts.fogAlways,
       fogThicknessPct: opts.fogThicknessPct,
       fogVisionRadius: opts.fogVisionRadius,
@@ -577,6 +612,14 @@ export class Game {
       goldRush: opts.goldRush,
       wildChests: opts.wildChests,
       crampedLane: opts.crampedLane,
+      playerBaseInvincible: opts.playerBaseInvincible,
+      enemyBaseInvincible: opts.enemyBaseInvincible,
+      waveBreakSec: opts.waveBreakSec,
+      laneClearSpeedPct: opts.laneClearSpeedPct,
+      respawnMinigame: opts.respawnMinigame,
+      sendLocation: opts.sendLocation,
+      artifactPlacement: opts.artifactPlacement,
+      allowBarracks: opts.allowBarracks,
     });
     applyRunStartExtras(this.mpMatch.lanes[0], playerMods);
     this.state = this.mpMatch.lanes[0];
@@ -606,63 +649,77 @@ export class Game {
 
   private layoutLaneChrome(): void {
     if (!this.state) return;
-    const view = computeView(this.canvas);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const s = view.scale / dpr;
-    const mapLeft = view.offsetX / dpr;
-    const mapTop = view.offsetY / dpr;
+    const cssH = Math.max(1, this.canvas.clientHeight || window.innerHeight);
+    const dprY = this.canvas.height / cssH;
+    const dprX = this.canvas.width / Math.max(1, this.canvas.clientWidth || window.innerWidth);
+    const topPad = 6;
+    const xpPad = 3;
+    const xpH = 20;
+    // Breathing room: XP above lane, HP below lane (not flush/overlapping).
+    const gapToMap = 11;
+    const pad = 10;
+    const barStack = 34;
+    const band = this.viewBand();
+
+    // Iterate so measured panel height → chrome with bar margins → max map scale.
+    let view = computeView(this.canvas, this.viewChrome, band);
+    for (let pass = 0; pass < 2; pass++) {
+      this.applyTopHudLayout(view, dprX, dprY, topPad);
+
+      const hudTop = this.hudPanel.parentElement;
+      const hudH = hudTop instanceof HTMLElement ? Math.max(1, hudTop.offsetHeight) : 120;
+      // Reserve panels + XP + margin under XP before the playable lane top.
+      const measuredTop = topPad + hudH + xpPad + xpH + gapToMap;
+
+      this.viewChrome = {
+        topCss: Math.min(240, measuredTop),
+        bottomCss: this.viewChrome.bottomCss,
+        sideFrac: 0.006,
+      };
+      view = computeView(this.canvas, this.viewChrome, band);
+    }
+
+    this.applyTopHudLayout(view, dprX, dprY, topPad);
+
+    let s = view.scale / dprY;
+    let mapLeft = view.offsetX / dprX;
+    let laneW = MAP_W * s;
+
+    const hudTop = this.hudPanel.parentElement;
+    const hudH2 = hudTop instanceof HTMLElement ? Math.max(1, hudTop.offsetHeight) : 120;
+    // XP sits under gold/sends; gapToMap keeps clear air above the blue floor.
+    const xpTop = topPad + hudH2 + xpPad;
+    this.xpBar.style.width = `${laneW}px`;
+    this.xpBar.style.left = `${mapLeft}px`;
+    this.xpBar.style.right = "auto";
+    this.xpBar.style.top = `${xpTop}px`;
+
+    // Refine top chrome from measured XP so margin under XP is stable.
+    const xpBottom = xpTop + Math.max(xpH, this.xpBar.offsetHeight || xpH);
+    const tightTop = xpBottom + gapToMap;
+    if (Math.abs(tightTop - this.viewChrome.topCss) > 0.5) {
+      this.viewChrome = { ...this.viewChrome, topCss: Math.min(240, tightTop) };
+      view = computeView(this.canvas, this.viewChrome, band);
+      this.applyTopHudLayout(view, dprX, dprY, topPad);
+      s = view.scale / dprY;
+      mapLeft = view.offsetX / dprX;
+      laneW = MAP_W * s;
+      this.xpBar.style.width = `${laneW}px`;
+      this.xpBar.style.left = `${mapLeft}px`;
+    }
+
+    // Playable lane edges in CSS (band-aware view keeps blue floor under XP).
     const map = this.state.map;
-    const laneTopCss = mapTop + map.laneTop * s;
-    const laneBottomCss = mapTop + map.laneBottom * s;
-    const laneW = MAP_W * s;
+    const laneTopCss = (view.offsetY + map.laneTop * view.scale) / dprY;
+    const laneBottomCss = (view.offsetY + map.laneBottom * view.scale) / dprY;
     const laneLeft = mapLeft;
     const laneRight = laneLeft + laneW;
-    const pad = 8;
-    const barStack = 34;
-    const topPad = 8;
-
-    // Gold / rival panels sit on the lane's left/right edges (not floating in
-    // the empty viewport gutter). Sends fill the band between them.
-    const sideW = Math.min(260, Math.max(200, laneW * 0.2));
-
-    this.hudPanel.style.left = `${laneLeft}px`;
-    this.hudPanel.style.top = `${topPad}px`;
-    this.hudPanel.style.width = `${sideW}px`;
-    this.hudPanel.style.maxWidth = `${sideW}px`;
-    this.hudPanel.style.right = "auto";
-
-    this.opponentPanel.style.top = `${topPad}px`;
-    this.opponentPanel.style.left = `${laneRight - sideW}px`;
-    this.opponentPanel.style.right = "auto";
-    this.opponentPanel.style.width = `${sideW}px`;
-    this.opponentPanel.style.maxWidth = `${sideW}px`;
-
-    this.waveBannerEl.style.left = `${laneLeft + laneW / 2}px`;
-    this.waveBannerEl.style.right = "auto";
-    this.waveBannerEl.style.width = "auto";
-    this.waveBannerEl.style.maxWidth = "none";
-    this.waveBannerEl.style.transform = "translateX(-50%)";
-    this.waveBannerEl.style.top = `${topPad}px`;
-
-    const sendLeft = laneLeft + sideW + 10;
-    const sendW = Math.max(240, laneRight - sideW - 10 - sendLeft);
-    this.sendBar.style.left = `${sendLeft}px`;
-    this.sendBar.style.width = `${sendW}px`;
-    this.sendBar.style.top = `${topPad + 40}px`;
-    this.sendBar.style.transform = "";
-
-    this.mapNameEl.textContent = "";
-    this.mapNameEl.style.display = "none";
-    this.hintEl.textContent = "";
-    this.hintEl.style.display = "none";
-
-    const sendBottom = topPad + 40 + 58;
-    this.xpBar.style.width = `${laneW}px`;
-    this.xpBar.style.left = `${laneLeft}px`;
-    this.xpBar.style.top = `${Math.max(sendBottom + 2, laneTopCss - barStack - 4)}px`;
 
     const railH = Math.max(60, laneBottomCss - laneTopCss);
-    this.baseHpRail.style.left = `${Math.max(4, laneLeft - 18)}px`;
+    const railW = 14;
+    const railGap = 8;
+    this.baseHpRail.style.width = `${railW}px`;
+    this.baseHpRail.style.left = `${Math.max(2, laneLeft - railW - railGap)}px`;
     this.baseHpRail.style.top = `${laneTopCss}px`;
     this.baseHpRail.style.height = `${railH}px`;
 
@@ -674,7 +731,6 @@ export class Game {
     this.pauseBtn.style.left = `${laneLeft}px`;
     this.pauseBtn.style.top = `${belowHp}px`;
 
-    // Abilities: one row, right-aligned to the lane edge (never past it).
     this.abilityEl.style.left = "auto";
     this.abilityEl.style.right = `${Math.max(0, window.innerWidth - laneRight)}px`;
     this.abilityEl.style.top = `${belowHp}px`;
@@ -686,15 +742,85 @@ export class Game {
     this.invBtn.style.right = "auto";
     this.invBtn.style.transform = "translateX(-50%)";
     this.invBtn.style.top = `${belowHp}px`;
+
+    // Bottom chrome: HP margin + control row under the playable bottom.
+    const controlsEnd = belowHp + 40;
+    const needBelowLane = Math.max(0, controlsEnd - laneBottomCss);
+    const idealBottom = Math.min(130, Math.max(70, needBelowLane + 6));
+    if (Math.abs(idealBottom - this.viewChrome.bottomCss) > 1.5) {
+      this.viewChrome = { ...this.viewChrome, bottomCss: idealBottom };
+    }
+  }
+
+  /** Playable Y band for view fit — gutters outside the blue floor are not scaled in. */
+  private viewBand(): ViewWorldBand {
+    if (!this.state) return { top: 0, bottom: MAP_H };
+    const b = playBounds(this.state.map);
+    // Tiny edge so stroke/labels aren't hard-clipped by chrome.
+    const edge = 2;
+    return {
+      top: Math.max(0, b.top - edge),
+      bottom: Math.min(MAP_H, b.bottom + edge),
+    };
+  }
+
+  /** Gold | sends | rival row + wave pill — absolute X alignment to lane band. */
+  private applyTopHudLayout(
+    view: { scale: number; offsetX: number; offsetY: number },
+    dprX: number,
+    dprY: number,
+    topPad: number,
+  ): void {
+    const s = view.scale / dprY;
+    const laneLeft = view.offsetX / dprX;
+    const laneW = MAP_W * s;
+
+    const hudTop = this.hudPanel.parentElement;
+    if (hudTop) {
+      hudTop.style.left = `${laneLeft}px`;
+      hudTop.style.width = `${laneW}px`;
+      hudTop.style.right = "auto";
+      hudTop.style.top = `${topPad}px`;
+      hudTop.style.maxHeight = "";
+    }
+
+    for (const el of [this.hudPanel, this.sendBar, this.opponentPanel]) {
+      el.style.left = "";
+      el.style.right = "";
+      el.style.top = "";
+      el.style.transform = "";
+      el.style.position = "";
+      el.style.width = "";
+      el.style.minWidth = "";
+      el.style.maxWidth = "";
+    }
+    this.sendBar.classList.toggle("hidden", !!this.state?.disableSends);
+
+    this.waveBannerEl.style.left = `${laneLeft + laneW / 2}px`;
+    this.waveBannerEl.style.right = "auto";
+    this.waveBannerEl.style.width = "auto";
+    this.waveBannerEl.style.maxWidth = "none";
+    this.waveBannerEl.style.transform = "translateX(-50%)";
+    this.waveBannerEl.style.top = `${topPad}px`;
+
+    this.mapNameEl.textContent = "";
+    this.mapNameEl.style.display = "none";
+    this.hintEl.textContent = "";
+    this.hintEl.style.display = "none";
+  }
+
+  private viewForCanvas(): ReturnType<typeof computeView> {
+    return computeView(this.canvas, this.viewChrome, this.viewBand());
   }
 
   private syncAimFromMouse(): void {
     if (!this.state) return;
-    const view = computeView(this.canvas);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const view = this.viewForCanvas();
     const rect = this.canvas.getBoundingClientRect();
-    const sx = (this.input.mouseClientX - rect.left) * dpr;
-    const sy = (this.input.mouseClientY - rect.top) * dpr;
+    const dprX = this.canvas.width / Math.max(1, rect.width);
+    const dprY = this.canvas.height / Math.max(1, rect.height);
+    const sx = (this.input.mouseClientX - rect.left) * dprX;
+    const sy = (this.input.mouseClientY - rect.top) * dprY;
     this.state.aimWorldX = (sx - view.offsetX) / view.scale;
     this.state.aimWorldY = (sy - view.offsetY) / view.scale;
   }
@@ -773,6 +899,11 @@ export class Game {
   }
 
   private confirmAbandon(): void {
+    // Campaign combat: leave via checkpoint without an "abandon run" scare.
+    if (this.campaignMatch) {
+      this.exitCampaignCombat("abandon");
+      return;
+    }
     this.pauseMode = "confirm";
     this.overlayTitle.textContent = "Abandon run?";
     this.overlayBody.textContent = "You'll lose this run and return to the main menu.";
@@ -781,7 +912,9 @@ export class Game {
     const yes = document.createElement("button");
     yes.type = "button";
     yes.textContent = "Abandon";
-    yes.addEventListener("click", () => this.returnToMainMenu());
+    yes.addEventListener("click", () => {
+      this.returnToMainMenu();
+    });
     this.overlayActions.appendChild(yes);
 
     const no = document.createElement("button");
@@ -854,6 +987,12 @@ export class Game {
   private showEndOverlay(): void {
     if (!this.state || !this.overlay.classList.contains("hidden")) return;
     if (this.pauseMode !== "none") return;
+    if (this.campaignMatch) {
+      const won = this.state.status === "won";
+      const baseHp = Math.max(1, Math.ceil(this.state.baseHp));
+      this.exitCampaignCombat(won ? "won" : "lost", baseHp);
+      return;
+    }
     const won = this.state.status === "won";
     const heroName = resolveHero(this.state.hero.heroId).name;
     const relicNames = this.state.relics.map((id) => RELICS[id].name).join(", ") || "none";
@@ -947,19 +1086,40 @@ export class Game {
   }
 
   private buildSendBar(): void {
-    this.sendItemsEl.innerHTML = "";
+    const grid = this.sendItemsEl;
+    grid.classList.add("send-bar-grid");
+    grid.hidden = false;
+    grid.classList.remove("hidden");
     const lane = this.actingLane();
     if (!lane) return;
     const label = document.querySelector(".send-bar-label");
     if (label instanceof HTMLElement) label.hidden = true;
+
+    // Column-major layout (3 rows × 2 cols):
+    //   [Base] [3]
+    //   [1]    [4]
+    //   [2]    [5]
+    const up = this.upgradeBaseBtn;
+    // Detach chips we keep, then rebuild grid order.
+    grid.querySelectorAll(".send-chip:not(#upgrade-base-btn)").forEach((el) => el.remove());
+    up.className = "send-chip upgrade-base-chip";
+    if (!up.querySelector(".send-meta")) {
+      up.innerHTML =
+        `<span class="send-key">▲</span>` +
+        `<span class="send-meta"><span class="up-label send-name">Upgrade Base</span>` +
+        `<span class="up-cost send-cost">—</span></span>`;
+    }
+    up.style.display = lane.disableBaseUpgrades ? "none" : "";
+    if (!up.isConnected) grid.prepend(up);
+    else grid.prepend(up);
+
     const packs = availableSendPacks(lane);
-    this.sendItemsEl.style.setProperty("--send-count", String(Math.max(1, packs.length)));
     for (const pack of packs) {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "send-chip";
       row.dataset.packId = pack.id;
-      const shortName = pack.name.replace(/\s*Pack\s*$/i, "").trim();
+      const shortName = pack.name.replace(/\s*Pack\s*$/i, "").trim() || pack.name;
       const tip = `<strong>${pack.name}</strong><br/>${pack.detail}<br/>Base ${pack.blurb}<br/><em>Cost scales with base upgrades</em>`;
       row.dataset.tip = tip;
       row.innerHTML =
@@ -972,7 +1132,7 @@ export class Game {
         buySendPack(act, pack.id);
         this.refreshSendBar();
       });
-      this.sendItemsEl.appendChild(row);
+      grid.appendChild(row);
     }
   }
 
@@ -981,26 +1141,37 @@ export class Game {
     if (!lane) return;
     if (this.mpMatch) focusBag(lane, this.mpMatch.mySlot);
     const packs = availableSendPacks(lane);
-    const unlockKey = `${lane.baseLevel}:${packs.map((p) => p.id).join(",")}`;
+    const unlockKey = `${lane.baseLevel}:${packs.map((p) => p.id).join(",")}:${lane.disableBaseUpgrades ? 0 : 1}`;
     if (unlockKey !== this.lastSendUnlockKey) {
       this.lastSendUnlockKey = unlockKey;
       this.buildSendBar();
+      // Re-measure HUD height so XP bar sits under the send strip.
+      this.layoutLaneChrome();
     }
 
-    const chips = this.sendItemsEl.querySelectorAll<HTMLButtonElement>(".send-chip");
-    chips.forEach((row, i) => {
-      const pack = packs[i];
+    const chips = document.querySelectorAll<HTMLButtonElement>("#send-bar .send-chip:not(#upgrade-base-btn)");
+    chips.forEach((row) => {
+      const packId = row.dataset.packId;
+      const pack = packs.find((p) => p.id === packId);
       if (!pack) return;
       const cost = sendPackCost(lane, pack.id);
       const costEl = row.querySelector(".send-cost");
       if (costEl) costEl.textContent = `${cost}g`;
+      const nameEl = row.querySelector(".send-name");
+      if (nameEl) {
+        const shortName = pack.name.replace(/\s*Pack\s*$/i, "").trim() || pack.name;
+        nameEl.textContent = shortName;
+      }
+      const keyEl = row.querySelector(".send-key");
+      if (keyEl) keyEl.textContent = String(pack.digit);
       row.disabled = lane.gold < cost || lane.paused;
       const full = SEND_PACKS.find((p) => p.id === pack.id)!;
       row.dataset.tip = `<strong>${full.name}</strong><br/>${full.detail}<br/>Current cost ${cost}g · Base Lv ${lane.baseLevel}`;
     });
 
     const cost = upgradeBaseCost(lane);
-    this.upgradeBaseBtn.disabled = lane.gold < cost || lane.paused;
+    this.upgradeBaseBtn.disabled = lane.gold < cost || lane.paused || !!lane.disableBaseUpgrades;
+    this.upgradeBaseBtn.style.display = lane.disableBaseUpgrades ? "none" : "";
     const upLabel = this.upgradeBaseBtn.querySelector(".up-label");
     const upCostEl = this.upgradeBaseBtn.querySelector(".up-cost");
     if (upLabel && upCostEl) {
@@ -1008,8 +1179,9 @@ export class Game {
       upCostEl.textContent = `${cost}g`;
     } else {
       this.upgradeBaseBtn.innerHTML =
-        `<span class="up-label">Base ${lane.baseLevel}→${lane.baseLevel + 1}</span>` +
-        `<span class="up-cost">${cost}g</span>`;
+        `<span class="send-key">▲</span>` +
+        `<span class="send-meta"><span class="up-label send-name">Base ${lane.baseLevel}→${lane.baseLevel + 1}</span>` +
+        `<span class="up-cost send-cost">${cost}g</span></span>`;
     }
     this.upgradeBaseBtn.dataset.tip =
       lane.baseLevel >= 4
@@ -1034,12 +1206,48 @@ export class Game {
 
   private refreshShopDom(): void {
     if (!this.state) return;
-    const offerKey = `${this.state.shopOffer.join(",")}:${JSON.stringify(this.state.shopOwned)}`;
-    if (offerKey !== this.lastShopKey) {
+    // Stock offer key excludes reroll-token price so stock refresh does not
+    // rebuild (visually "reroll") the dedicated token slot.
+    const stockKey = `${this.state.shopOffer.join(",")}:${this.state.shopStockRerollBuys}:${this.state.shopStockRerollDiscount}:${JSON.stringify(this.state.shopOwned)}:${this.state.disableArtifacts}`;
+    const tokenKey = `${this.state.shopRerollCost}:${this.state.shopRerollBuysWave}`;
+    if (stockKey !== this.lastShopKey) {
       this.shopItemsEl.innerHTML = "";
-      this.state.shopOffer.forEach((id, i) => {
+      {
+        const cost = shopItemCost(
+          this.state,
+          shopStockRerollCost(this.state.shopStockRerollBuys, this.state.shopStockRerollDiscount),
+        );
+        const broke = this.state.gold < cost;
+        const stockBtn = document.createElement("button");
+        stockBtn.type = "button";
+        stockBtn.id = "shop-stock-reroll";
+        stockBtn.className = "shop-stock-reroll" + (broke ? " unaffordable" : "");
+        stockBtn.disabled = broke || this.state.paused;
+        stockBtn.textContent = `Reroll stock · ${cost}g`;
+        stockBtn.dataset.tip = `Refresh gear + artifact offers. Reroll Token price is unchanged.`;
+        stockBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!this.state || this.state.paused) return;
+          buyShopStockReroll(this.state);
+          this.lastShopKey = "";
+          this.refreshShopDom();
+          this.canvas.focus({ preventScroll: true });
+        });
+        this.shopItemsEl.appendChild(stockBtn);
+      }
+      let gearRows = 0;
+      this.state.shopOffer.forEach((id) => {
         const item = getShopItem(id);
         if (!item) return;
+        if (item.category === "artifact" && this.state!.disableArtifacts) return;
+        if (item.category === "artifact" || gearRows === 3) {
+          if (item.category === "artifact") {
+            const div = document.createElement("div");
+            div.className = "shop-divider";
+            this.shopItemsEl.appendChild(div);
+          }
+        }
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
         const cost = shopItemCost(this.state!, item.cost);
@@ -1055,7 +1263,7 @@ export class Game {
         const tag = item.category === "artifact" ? "ARTIFACT · " : "";
         const rarity = RARITY_LABEL[item.rarity];
         const costLabel = maxed ? `×${owned} max` : broke ? `LOCKED ${cost}g` : `${cost}g`;
-        row.innerHTML = `<span class="shop-name">[${i + 4}] ${item.name}</span><span class="shop-meta">${tag}${item.effect}</span><span class="shop-cost">${costLabel}</span>`;
+        row.innerHTML = `<span class="shop-name">${item.name}</span><span class="shop-meta">${tag}${item.effect}</span><span class="shop-cost">${costLabel}</span>`;
         row.dataset.tip = `<strong style="color:${RARITY_COLOR[item.rarity]}">${item.name}</strong> · ${rarity}<br/>${item.effect}<br/>${cost}g · max ×${item.maxStacks}${broke && !maxed ? "<br/><span style=\"color:#ff6b6b\">Not enough gold</span>" : ""}`;
         const buyId = id;
         row.addEventListener("click", (ev) => {
@@ -1068,13 +1276,35 @@ export class Game {
           this.canvas.focus({ preventScroll: true });
         });
         this.shopItemsEl.appendChild(row);
+        if (item.category !== "artifact") gearRows += 1;
       });
-      this.lastShopKey = offerKey;
+      {
+        const div = document.createElement("div");
+        div.className = "shop-divider";
+        this.shopItemsEl.appendChild(div);
+        this.appendRerollTokenRow();
+      }
+      this.lastShopKey = stockKey;
+      this.lastTokenShopKey = tokenKey;
+      const closeHint = this.shopPanel.querySelector(".close-hint");
+      if (closeHint) closeHint.textContent = "F to close · click items to buy";
     } else {
+      for (const row of this.shopItemsEl.querySelectorAll<HTMLButtonElement>("button.shop-row")) {
+        if (row.classList.contains("reroll-slot")) {
+          const cost = shopItemCost(this.state, this.state.shopRerollCost);
+          const broke = this.state.gold < cost;
+          row.disabled = broke || this.state.paused;
+          row.classList.toggle("unaffordable", broke);
+          const costEl = row.querySelector(".shop-cost");
+          if (costEl) costEl.textContent = broke ? `LOCKED ${cost}g` : `${cost}g`;
+          continue;
+        }
+      }
       this.state.shopOffer.forEach((id, i) => {
         const item = getShopItem(id);
         if (!item) return;
-        const row = this.shopItemsEl.children[i] as HTMLButtonElement | undefined;
+        const rows = this.shopItemsEl.querySelectorAll<HTMLButtonElement>("button.shop-row:not(.reroll-slot)");
+        const row = rows[i];
         if (!row) return;
         const owned = this.state!.shopOwned[id] ?? 0;
         const maxed = owned >= item.maxStacks;
@@ -1088,6 +1318,23 @@ export class Game {
           costEl.textContent = maxed ? `×${owned} max` : broke ? `LOCKED ${cost}g` : `${cost}g`;
         }
       });
+      const stockBtn = this.shopItemsEl.querySelector<HTMLButtonElement>("#shop-stock-reroll");
+      if (stockBtn) {
+        const cost = shopItemCost(
+          this.state,
+          shopStockRerollCost(this.state.shopStockRerollBuys, this.state.shopStockRerollDiscount),
+        );
+        const broke = this.state.gold < cost;
+        stockBtn.disabled = broke || this.state.paused;
+        stockBtn.textContent = `Reroll stock · ${cost}g`;
+        stockBtn.classList.toggle("unaffordable", broke);
+      }
+      if (tokenKey !== this.lastTokenShopKey) {
+        const existing = this.shopItemsEl.querySelector(".reroll-slot");
+        if (existing) existing.remove();
+        this.appendRerollTokenRow();
+        this.lastTokenShopKey = tokenKey;
+      }
     }
 
     const isFrost = this.state.hero.heroId === "frost";
@@ -1110,6 +1357,29 @@ export class Game {
       stock = "Between waves — stock frozen";
     }
     this.shopMetaEl.textContent = `${stock} · Artifacts ${turrets}/${cap}`;
+  }
+
+  private appendRerollTokenRow(): void {
+    if (!this.state) return;
+    const cost = shopItemCost(this.state, this.state.shopRerollCost);
+    const broke = this.state.gold < cost;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "shop-row reroll-slot" + (broke ? " unaffordable" : "");
+    row.disabled = broke || this.state.paused;
+    const costLabel = broke ? `LOCKED ${cost}g` : `${cost}g`;
+    row.innerHTML = `<span class="shop-name">Reroll Token</span><span class="shop-meta">+1 draft reroll · price rises this wave</span><span class="shop-cost">${costLabel}</span>`;
+    row.dataset.tip = `<strong style="color:${RARITY_COLOR.uncommon}">Reroll Token</strong> · Uncommon<br/>+1 level or relic draft reroll<br/>Base cost scales with wave; each buy raises price until the next wave.<br/>${cost}g`;
+    row.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!this.state || this.state.paused) return;
+      buyShopRerollToken(this.state);
+      this.lastTokenShopKey = "";
+      this.refreshShopDom();
+      this.canvas.focus({ preventScroll: true });
+    });
+    this.shopItemsEl.appendChild(row);
   }
 
   /**
@@ -1382,9 +1652,9 @@ export class Game {
       if (!menusOpen) update(this.state, this.input, dt);
       else this.input.endFrame();
 
-      const view = computeView(this.canvas);
-      draw(this.ctx, this.state, view);
       this.layoutLaneChrome();
+      const view = this.viewForCanvas();
+      draw(this.ctx, this.state, view);
       this.syncHud();
       this.syncShopPanel();
       this.refreshSendBar();
@@ -1421,6 +1691,11 @@ export class Game {
         this.showMainMenu();
       },
       onMatchStart: (start, mySlot, isHost) => this.beginMultiplayerMatch(start, mySlot, isHost),
+      onEditGameTypes: () => {
+        this.mpUi?.destroy({ disconnect: false });
+        this.mpUi = null;
+        this.menus.gtReturnFromMultiplayer();
+      },
     });
     this.mpUi.show({
       mode: draft.mode,
@@ -1435,33 +1710,6 @@ export class Game {
       ascension: draft.ascension,
       livesPerWave: draft.livesPerWave,
       livesPerRun: draft.livesPerRun,
-      chestOpenMul: draft.chestOpenMul,
-      chestDespawnSec: draft.chestDespawnSec,
-      chestSpawnChance: draft.chestSpawnChance,
-      enemyDensityMul: draft.enemyDensityMul,
-      enemyHpMul: draft.enemyHpMul,
-      enemySpeedMul: draft.enemySpeedMul,
-      incomeMul: draft.incomeMul,
-      respawnMul: draft.respawnMul,
-      startingBaseLevel: draft.startingBaseLevel,
-      levelDraftSize: draft.levelDraftSize,
-      relicDraftSize: draft.relicDraftSize,
-      disableArtifacts: draft.disableArtifacts,
-      disableChests: draft.disableChests,
-      disableElites: draft.disableElites,
-      disableBosses: draft.disableBosses,
-      disableShop: draft.disableShop,
-      disableSends: draft.disableSends,
-      disableRelics: draft.disableRelics,
-      fogAlways: draft.fogAlways,
-      fogThicknessPct: draft.fogThicknessPct,
-      fogVisionRadius: draft.fogVisionRadius,
-      doubleElites: draft.doubleElites,
-      suddenDeathBaseHp: draft.suddenDeathBaseHp,
-      glassCannon: draft.glassCannon,
-      goldRush: draft.goldRush,
-      wildChests: draft.wildChests,
-      crampedLane: draft.crampedLane,
       heroId,
       preferredCode: draft.hostCode,
       joinCode: draft.joinCode,
@@ -1657,7 +1905,7 @@ export class Game {
 
   private frameMultiplayer(dt: number): void {
     if (!this.mpMatch) return;
-    const view = computeView(this.canvas);
+    const view = this.viewForCanvas();
 
     const controlled =
       heroForSlot(this.mpMatch.lanes[this.mpMatch.myTeam], this.mpMatch.mySlot) ??
@@ -1665,9 +1913,10 @@ export class Game {
 
     // Aim in world space
     const rect = this.canvas.getBoundingClientRect();
-    const dpr = this.canvas.width / Math.max(1, rect.width);
-    const sx = (this.input.mouseClientX - rect.left) * dpr;
-    const sy = (this.input.mouseClientY - rect.top) * dpr;
+    const dprX = this.canvas.width / Math.max(1, rect.width);
+    const dprY = this.canvas.height / Math.max(1, rect.height);
+    const sx = (this.input.mouseClientX - rect.left) * dprX;
+    const sy = (this.input.mouseClientY - rect.top) * dprY;
     const aim = {
       x: (sx - view.offsetX) / view.scale,
       y: (sy - view.offsetY) / view.scale,
@@ -1709,11 +1958,7 @@ export class Game {
     } else {
       this.wasNearShopAuto = false;
     }
-    // Shop slots when LOCAL player's shop is open: digits 4-6 (not viewed opponent lane)
-    if (myLane.shopOpen && local.sendDigit != null && local.sendDigit >= 4) {
-      local.shopSlot = local.sendDigit - 4;
-      local.sendDigit = null;
-    }
+    // Shop is click-only; digits always go to sends even while shop is open.
 
     const paused = this.canPauseNow() && !!this.mpMatch.lanes[this.mpMatch.myTeam].paused;
     if (!paused) {
@@ -1755,8 +2000,9 @@ export class Game {
     this.mpMatch.lanes[1].spectateRivalTint = false;
     this.state.spectateRivalTint = this.mpMatch.viewTeam !== this.mpMatch.myTeam;
 
-    draw(this.ctx, this.state, view);
     this.layoutLaneChrome();
+    const layoutView = this.viewForCanvas();
+    draw(this.ctx, this.state, layoutView);
     this.syncHudMp();
     this.syncShopPanel();
     this.refreshSendBar();
@@ -1901,7 +2147,7 @@ export class Game {
 
   private syncShopPanel(): void {
     if (!this.state) return;
-    if (this.state.shopOpen) {
+    if (this.state.shopOpen && !this.state.paused) {
       this.shopPanel.classList.remove("hidden");
       this.refreshShopDom();
     } else {
