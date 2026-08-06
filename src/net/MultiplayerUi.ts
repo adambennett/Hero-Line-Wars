@@ -1,25 +1,23 @@
-import { HERO_LIST, type HeroId } from "../data/heroes";
-import { isHeroUnlocked, loadMetaStore } from "../meta/store";
-import { ASCENSIONS } from "../meta/ascension";
-import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
-import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
-import { isMapUnlocked } from "../meta/contentLocks";
-import { enabledMapIds, isIdEnabled } from "../meta/contentFilters";
-import {
-  pickOne,
-  RUN_OPTION_DEFAULTS,
-  runTip,
-  type RunOptionTipKey,
-} from "../ui/runOptionsMeta";
 import {
   getGameType,
   gameTypeSelectHtml,
   gameTypeToMpExtras,
-  listGameTypes,
+  listEnabledGameTypes,
   loadSelectedGameTypeId,
   saveSelectedGameTypeId,
 } from "../meta/gameTypes";
-import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
+import { gameTypeSummaryHtml } from "../ui/gameTypeSummary";
+import {
+  heroCardHtml,
+  heroDetailForPick,
+  heroPagerHtml,
+  heroSelectPageCount,
+  listHeroSelectEntries,
+  RANDOM_HERO_ID,
+  sliceHeroPage,
+  type HeroPickId,
+} from "../ui/heroSelect";
+import { listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
 import { paintMapThumb } from "../ui/mapThumbs";
 import { isCustomHeroId } from "../custom/types";
 import { MainMenuFx } from "../ui/mainMenuFx";
@@ -34,6 +32,7 @@ import {
   hostAddAiSeat,
   hostRemoveAiSeat,
   hostReplaceAiSeats,
+  hostSetMaxHumans,
   hostSetOpts,
   hostStartMatch,
   hostUpdateAiSeat,
@@ -66,22 +65,28 @@ import type {
   NetMode,
   NetMsg,
 } from "./types";
-import { isPveMode, modeCap, teamNeed } from "./types";
+import { clampMaxHumans, isPveMode, lobbyHumanCap, modeFromMaxHumans } from "./types";
 import { aiKindOptionsHtml, aiKindLabel, parseAiKindValue } from "../ai/lobbyAi";
 import { loadAiStore } from "../ai/store";
+import type { HeroId } from "../data/heroes";
+import { HERO_LIST } from "../data/heroes";
+import { isHeroUnlocked, loadMetaStore } from "../meta/store";
+import { ASCENSIONS } from "../meta/ascension";
+import { MAP_LIST, resolveMapChoice, type MapId } from "../data/maps";
+import { STARTING_GOLD, WIN_WAVES } from "../data/constants";
+import { isMapUnlocked } from "../meta/contentLocks";
+import { enabledMapIds, isIdEnabled } from "../meta/contentFilters";
+import {
+  pickOne,
+  RUN_OPTION_DEFAULTS,
+  runTip,
+  type RunOptionTipKey,
+} from "../ui/runOptionsMeta";
 
 export type MpUiCallbacks = {
   onBack: () => void;
   onMatchStart: (start: Extract<NetMsg, { k: "start" }>, mySlot: number, isHost: boolean) => void;
   onEditGameTypes?: () => void;
-};
-
-const MODE_LABEL: Record<MatchMode, string> = {
-  "1v1": "1v1 PvP",
-  "2v2": "2v2 PvP",
-  "3v3": "3v3 PvP",
-  "2p-pve": "2 Player PvE",
-  "3p-pve": "3 Player PvE",
 };
 
 /** Live PeerJS lobby UI — host-authoritative online play. */
@@ -90,8 +95,10 @@ export class MultiplayerUi {
   private readonly cbs: MpUiCallbacks;
   private statusHtml = "";
   private name = "Player";
-  private heroId: HeroId = HERO_LIST[0]!.id;
-  private mode: MatchMode = "1v1";
+  private heroId: HeroPickId = HERO_LIST[0]!.id;
+  private heroPage = 0;
+  /** Human seat capacity 1–6 (teams decided in-lobby). */
+  private maxHumans = 2;
   private privacy: MatchPrivacy = "private";
   private role: "host" | "join" = "host";
   private joinCode = "";
@@ -110,6 +117,10 @@ export class MultiplayerUi {
   /** Host hub draft — copied into the PeerJS lobby when the room opens. */
   private hubAiSeats: LobbyAiSeat[] = [];
   private readonly menuFx = new MainMenuFx();
+
+  private get mode(): MatchMode {
+    return modeFromMaxHumans(this.maxHumans);
+  }
 
   constructor(root: HTMLElement, cbs: MpUiCallbacks) {
     this.root = root;
@@ -132,6 +143,7 @@ export class MultiplayerUi {
 
   show(opts?: {
     mode?: MatchMode;
+    maxHumans?: number;
     privacy?: MatchPrivacy;
     role?: "host" | "join";
     mapChoice?: MapId | string | "random";
@@ -147,7 +159,8 @@ export class MultiplayerUi {
     preferredCode?: string;
     joinCode?: string;
   }): void {
-    if (opts?.mode) this.mode = opts.mode;
+    if (opts?.maxHumans != null) this.maxHumans = clampMaxHumans(opts.maxHumans);
+    else if (opts?.mode) this.maxHumans = lobbyHumanCap({ mode: opts.mode });
     if (opts?.privacy) this.privacy = opts.privacy;
     if (opts?.role) this.role = opts.role;
     if (opts?.mapChoice) this.mapChoice = opts.mapChoice;
@@ -162,6 +175,7 @@ export class MultiplayerUi {
     if (opts?.heroId) this.heroId = opts.heroId;
     if (opts?.preferredCode) this.preferredCode = opts.preferredCode.toUpperCase();
     if (opts?.joinCode) this.joinCode = opts.joinCode.toUpperCase();
+    this.applyGameTypeId(loadSelectedGameTypeId());
     this.root.classList.remove("hidden");
     // Re-entering after the Game Type editor applies the selected type to a live host lobby.
     const S = getSession();
@@ -235,6 +249,7 @@ export class MultiplayerUi {
   private runExtras(): MpRunExtras {
     return {
       ...gameTypeToMpExtras(getGameType(this.gameTypeId).options),
+      gameTypeId: this.gameTypeId,
       utilityDraftLevel: this.utilityDraftLevel,
       ascension: this.ascension,
       livesPerWave: this.livesPerWave,
@@ -252,7 +267,11 @@ export class MultiplayerUi {
     this.livesPerWave = o.livesPerWave;
     this.livesPerRun = o.livesPerRun;
     this.utilityDraftLevel = o.utilityDraftLevel;
-    this.friendlyFire = o.friendlyFire;
+    this.friendlyFire = o.endless ? false : o.friendlyFire;
+    if (o.endless) {
+      // Strip rival-lane AI only; keep home-lane AI seats.
+      this.hubAiSeats = this.hubAiSeats.filter((a) => a.team === 0);
+    }
     if (
       this.mapChoice !== "random"
     ) {
@@ -294,7 +313,7 @@ export class MultiplayerUi {
     ];
     this.mapChoice = pickOne(mapPool);
     this.ascension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
-    this.applyGameTypeId(pickOne(listGameTypes()).id);
+    this.applyGameTypeId(pickOne(listEnabledGameTypes()).id);
   }
 
   private bindRunResetRandom(prefix: string, editable: boolean, onChange?: () => void): void {
@@ -311,11 +330,24 @@ export class MultiplayerUi {
     });
   }
 
-  private runSetupHtml(prefix: string, editable: boolean): string {
+  private runSetupHtml(
+    prefix: string,
+    editable: boolean,
+    aiRosterOpts?: {
+      seats: LobbyAiSeat[];
+      editable: boolean;
+      pve: boolean;
+      team0Humans: number;
+      team1Humans: number;
+      noRival?: boolean;
+    } | null,
+  ): string {
     const dis = editable ? "" : "disabled";
     const tip = (key: RunOptionTipKey) => ` data-tip="${escapeAttr(runTip(key))}"`;
     const customMaps = listCustomMaps();
-    const mapFilters = getGameType(this.gameTypeId).options.contentFilters;
+    const gtOpts = getGameType(this.gameTypeId).options;
+    const mapFilters = gtOpts.contentFilters;
+    const noRival = !!gtOpts.endless;
     const strictMaps = (mapFilters?.maps?.length ?? 0) > 0;
     const allowedBuiltins = new Set(enabledMapIds(mapFilters).map(String));
     const mapOk = (id: string) =>
@@ -347,8 +379,16 @@ export class MultiplayerUi {
       ? `<div class="panel-head-actions">
             <button type="button" class="menu-btn small ghost" id="${prefix}-run-reset" data-tip="Restore default run options"><span class="btn-label">Reset</span></button>
             <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-run-randomize" data-tip="Roll random run options"><span class="btn-label">Randomize</span></button>
+            <button type="button" class="menu-btn small ghost shine-btn ${this.heroId === RANDOM_HERO_ID ? "primary" : ""}" id="${prefix}-hero-random" data-tip="Pick a random unlocked hero at match start"><span class="btn-label">Random</span></button>
           </div>`
-      : "";
+      : this.heroId === RANDOM_HERO_ID
+        ? `<div class="panel-head-actions"><span class="menu-note compact">Hero · Random</span></div>`
+        : "";
+
+    const aiBlock =
+      aiRosterOpts != null
+        ? this.aiRosterInnerHtml({ ...aiRosterOpts, noRival: aiRosterOpts.noRival ?? noRival })
+        : "";
 
     return `
       <section class="sp-setup">
@@ -356,7 +396,7 @@ export class MultiplayerUi {
           <h2 class="sp-setup-title">${editable ? "Run setup" : "Host settings"}</h2>
           ${headActions}
         </div>
-        <div class="run-grid cols-3">
+        <div class="run-grid cols-2">
           <label class="run-field">
             <span>Map</span>
             <select id="${prefix}-map" ${dis}${tip("map")}>${mapOpts}</select>
@@ -365,25 +405,112 @@ export class MultiplayerUi {
             <span>Ascension</span>
             <select id="${prefix}-ascension" ${dis}${tip("ascension")}>${ascOpts}</select>
           </label>
-          ${gameTypeSelectHtml(this.gameTypeId, `${prefix}-game-type`, !editable)}
         </div>
-        ${
-          editable
-            ? `<div class="run-grid cols-2" style="margin-top:8px">
-          <button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-edit-gt"><span class="btn-label">Edit Gametypes</span></button>
-          <p class="menu-note compact" style="margin:0">${escapeAttr(getGameType(this.gameTypeId).description || getGameType(this.gameTypeId).name)}</p>
-        </div>`
-            : `<p class="menu-note compact">${escapeAttr(getGameType(this.gameTypeId).description || getGameType(this.gameTypeId).name)}</p>`
-        }
         <div class="map-preview" id="${prefix}-map-preview" aria-hidden="true">
           <canvas></canvas>
           <span class="map-preview-label"></span>
+        </div>
+        ${aiBlock}
+        <div class="gt-lobby-row">
+          ${gameTypeSelectHtml(this.gameTypeId, `${prefix}-game-type`, !editable)}
+          ${
+            editable
+              ? `<button type="button" class="menu-btn small ghost shine-btn" id="${prefix}-edit-gt"><span class="btn-label">Edit Gametypes</span></button>`
+              : ""
+          }
+        </div>
+        <div class="gt-lobby-summary" id="${prefix}-gt-summary">
+          ${gameTypeSummaryHtml(getGameType(this.gameTypeId).options, {
+            maxVisible: 12,
+            columns: 2,
+            showMoreId: `${prefix}-gt-more`,
+          })}
         </div>
       </section>
     `;
   }
 
-  /** Live shape-aware preview of the selected map (or a placeholder for Random). */
+  private aiRosterInnerHtml(opts: {
+    seats: LobbyAiSeat[];
+    editable: boolean;
+    pve: boolean;
+    team0Humans: number;
+    team1Humans: number;
+    /** Game type / lobby has no rival lane. */
+    noRival?: boolean;
+  }): string {
+    // Same as old aiRosterHtml body, nested under sp-setup (no separate floating box).
+    const store = loadAiStore();
+    const noRival = !!opts.noRival;
+    const heroOpts = (sel: LobbyAiHeroPick) =>
+      [
+        `<option value="random" ${sel === "random" ? "selected" : ""}>Random</option>`,
+        ...HERO_LIST.map(
+          (h) =>
+            `<option value="${h.id}" ${h.id === sel ? "selected" : ""}>${escapeAttr(h.name)}</option>`,
+        ),
+      ].join("");
+
+    const count = (team: MpTeam) =>
+      (team === 0 ? opts.team0Humans : opts.team1Humans) +
+      opts.seats.filter((a) => a.team === team).length;
+    const room = (team: MpTeam) => Math.max(0, MAX_TEAM_COMBATANTS - count(team));
+
+    const col = (team: MpTeam, title: string) => {
+      if (team === 1 && noRival) {
+        return `
+        <div class="sp-ai-col" data-team="${team}">
+          <h4>${title}</h4>
+          <p class="menu-note">No rival lane enabled</p>
+        </div>`;
+      }
+      const rows = opts.seats.filter((a) => a.team === team);
+      const list = rows.length
+        ? rows
+            .map((a) => {
+              const heroLabel =
+                a.heroId === "random" ? "Random" : resolveHero(a.heroId).name;
+              if (!opts.editable) {
+                return `<div class="sp-ai-row"><span class="sp-ai-you-name">AI · ${escapeAttr(heroLabel)}</span><span class="sp-ai-you-meta">${escapeAttr(aiKindLabel(a.ai, store))}</span><span class="sp-ai-lock">—</span></div>`;
+              }
+              return `<div class="sp-ai-row" data-ai-id="${escapeAttr(a.id)}">
+                <select class="menu-select mp-ai-hero" data-ai-id="${escapeAttr(a.id)}">${heroOpts(a.heroId)}</select>
+                <select class="menu-select mp-ai-kind" data-ai-id="${escapeAttr(a.id)}">${aiKindOptionsHtml(a.ai, store)}</select>
+                <button type="button" class="menu-btn small ghost mp-ai-rm" data-ai-id="${escapeAttr(a.id)}">✕</button>
+              </div>`;
+            })
+            .join("")
+        : `<p class="menu-note compact">No AI fillers</p>`;
+      return `
+        <div class="sp-ai-col" data-team="${team}">
+          <h4>${title} · ${count(team)}/${MAX_TEAM_COMBATANTS}</h4>
+          ${list}
+          ${
+            opts.editable
+              ? `<button type="button" class="menu-btn small ghost sp-ai-add mp-ai-add" data-team="${team}" ${room(team) <= 0 ? "disabled" : ""}>+ AI</button>`
+              : ""
+          }
+        </div>`;
+    };
+
+    return `
+      <div class="sp-ai-roster mp-ai-roster nested">
+        <div class="panel-head">
+          <h3 class="sp-setup-title">AI roster</h3>
+        </div>
+        <p class="menu-note">${
+          noRival
+            ? "Add AI allies on the home lane. No rival lane enabled."
+            : `Add AI allies/enemies (max ${MAX_TEAM_COMBATANTS} per team). Switch Team for humans; PvP/co-op is free-form.`
+        }</p>
+        <div class="sp-ai-cols">
+          ${col(0, opts.pve ? "AI allies (co-op)" : "Home · AI")}
+          ${col(1, opts.pve ? "AI foe lane" : "Away · AI")}
+        </div>
+      </div>`;
+  }
+
+  /** @deprecated outer wrapper kept as alias */
   private paintMapPreview(prefix: string): void {
     const box = this.root.querySelector<HTMLElement>(`#${prefix}-map-preview`);
     if (!box) return;
@@ -426,6 +553,13 @@ export class MultiplayerUi {
     this.root.querySelector(`#${prefix}-edit-gt`)?.addEventListener("click", () => {
       this.cbs.onEditGameTypes?.();
     });
+    this.root.querySelector(`#${prefix}-gt-more`)?.addEventListener("click", () => {
+      this.cbs.onEditGameTypes?.();
+    });
+    this.root.querySelector(`#${prefix}-hero-random`)?.addEventListener("click", () => {
+      this.heroId = RANDOM_HERO_ID;
+      this.refresh();
+    });
   }
 
   private syncOptsFromLobby(lobby: LobbyState): void {
@@ -438,74 +572,89 @@ export class MultiplayerUi {
     if (lobby.livesPerWave != null) this.livesPerWave = lobby.livesPerWave;
     if (lobby.livesPerRun != null) this.livesPerRun = lobby.livesPerRun;
     if (lobby.ascension != null) this.ascension = lobby.ascension;
+    if (lobby.gameTypeId) {
+      // Identity only — options already arrived on the lobby; don't re-apply defaults over host.
+      this.gameTypeId = lobby.gameTypeId;
+    }
   }
 
   private heroGridHtml(): string {
-    const custom = listCustomHeroes().map((h) => {
-      const selected = h.id === this.heroId;
-      return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""}" data-hero="${h.id}">
-          <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong class="btn-label">${escapeAttr(h.name)}</strong>
-          <span>Custom · ${escapeAttr(h.blurb)}</span>
-        </button>
-      `;
-    });
-    const builtins = HERO_LIST.map((h) => {
-      const selected = h.id === this.heroId;
-      const unlocked = isHeroUnlocked(h.id);
-      return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-hero="${h.id}" ${unlocked ? "" : "disabled data-tip=\"Unlock in Barracks\""}>
-          <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong class="btn-label">${escapeAttr(h.name)}</strong>
-          <span>${unlocked ? escapeAttr(h.blurb) : "Locked"}</span>
-        </button>
-      `;
-    });
-    return [...custom, ...builtins].join("");
+    const entries = listHeroSelectEntries({ includeRandom: false });
+    const pages = heroSelectPageCount(entries.length);
+    const page = Math.min(this.heroPage, pages - 1);
+    this.heroPage = page;
+    // When Random is selected, no hero card should appear selected.
+    const selectedId = this.heroId === RANDOM_HERO_ID ? "" : String(this.heroId);
+    const slice = sliceHeroPage(entries, page);
+    const cards = slice.map((e) => heroCardHtml(e, selectedId)).join("");
+    return `${cards}${heroPagerHtml(page, pages, { prefix: "mp-hero" })}`;
   }
 
   private heroDetailHtml(): string {
-    const h = resolveHero(this.heroId);
-    const custom = isCustomHeroId(this.heroId);
-    const unlocked = custom || isHeroUnlocked(h.id as HeroId);
-    if (!unlocked) {
+    const d = heroDetailForPick(this.heroId);
+    if (d.random) {
       return `
-        <div class="sp-hero-detail-inner locked">
-          <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong>${escapeAttr(h.name)} · Locked</strong>
-          <p class="sp-hero-locked">Commission this hero in the Barracks to unlock.</p>
+        <div class="sp-hero-detail-inner">
+          <span class="hero-swatch" style="--hero:${d.color}"></span>
+          <strong style="color:${d.color}">???</strong>
+          <p class="sp-hero-blurb">???</p>
+          <ul class="hero-abilities">
+            <li><em>Passive</em> ???</li>
+            <li>???</li>
+            <li>???</li>
+            <li>???</li>
+          </ul>
         </div>
       `;
     }
-    const [mobility, ultimate] = h.abilities;
+    if (d.locked) {
+      return `
+        <div class="sp-hero-detail-inner locked">
+          <span class="hero-swatch" style="--hero:${d.color}"></span>
+          <strong>${escapeAttr(d.name)} · Locked</strong>
+          <p class="sp-hero-locked">${escapeAttr(d.blurb)}</p>
+        </div>
+      `;
+    }
     return `
       <div class="sp-hero-detail-inner">
-        <span class="hero-swatch" style="--hero:${h.color}"></span>
-        <strong style="color:${h.color}">${escapeAttr(h.name)}${custom ? " · Custom" : ""}</strong>
-        <p class="sp-hero-blurb">${escapeAttr(h.blurb)}</p>
+        <span class="hero-swatch" style="--hero:${d.color}"></span>
+        <strong style="color:${d.color}">${escapeAttr(d.name)}${d.custom ? " · Custom" : ""}</strong>
+        <p class="sp-hero-blurb">${escapeAttr(d.blurb)}</p>
         <ul class="hero-abilities">
-          <li><em>Passive</em> ${escapeAttr(h.passive.name)} — ${escapeAttr(h.passive.blurb)}</li>
-          <li>${escapeAttr(h.attackHint)}</li>
-          <li>${escapeAttr(mobility.name)} — ${escapeAttr(mobility.hint)}</li>
-          <li>${escapeAttr(ultimate.name)} — ${escapeAttr(ultimate.hint)}</li>
+          <li><em>Passive</em> ${escapeAttr(d.passive ?? "")}</li>
+          <li>${escapeAttr(d.attack ?? "")}</li>
+          <li>${escapeAttr(d.mobility ?? "")}</li>
+          <li>${escapeAttr(d.ultimate ?? "")}</li>
         </ul>
       </div>
     `;
   }
 
   private bindHeroGrid(onPick?: () => void): void {
-    this.root.querySelectorAll<HTMLElement>("[data-hero]").forEach((btn) => {
+    this.root.querySelectorAll<HTMLElement>("[data-hero-id]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const id = btn.dataset.hero as HeroId;
-        if (!isCustomHeroId(id) && !isHeroUnlocked(id)) return;
+        const id = btn.dataset.heroId as HeroPickId;
+        if (id !== RANDOM_HERO_ID && !isCustomHeroId(id) && !isHeroUnlocked(id as HeroId)) return;
         this.heroId = id;
         onPick?.();
-        this.root.querySelectorAll<HTMLElement>("[data-hero]").forEach((c) => {
-          c.classList.toggle("selected", c.dataset.hero === this.heroId);
+        this.root.querySelectorAll<HTMLElement>("[data-hero-id]").forEach((c) => {
+          c.classList.toggle("selected", c.dataset.heroId === String(this.heroId));
         });
         const detail = this.root.querySelector("#mp-hero-detail");
         if (detail) detail.innerHTML = this.heroDetailHtml();
+      });
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-action='mp-hero-page-prev']").forEach((b) => {
+      b.addEventListener("click", () => {
+        this.heroPage = Math.max(0, this.heroPage - 1);
+        this.refresh();
+      });
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-action='mp-hero-page-next']").forEach((b) => {
+      b.addEventListener("click", () => {
+        this.heroPage += 1;
+        this.refresh();
       });
     });
   }
@@ -536,10 +685,10 @@ export class MultiplayerUi {
   }
 
   private renderHub(): void {
-    const modes = (Object.keys(MODE_LABEL) as MatchMode[])
+    const playersOpts = [1, 2, 3, 4, 5, 6]
       .map(
-        (m) =>
-          `<option value="${m}" ${m === this.mode ? "selected" : ""}>${MODE_LABEL[m]}</option>`,
+        (n) =>
+          `<option value="${n}" ${n === this.maxHumans ? "selected" : ""}>${n}</option>`,
       )
       .join("");
 
@@ -552,13 +701,21 @@ export class MultiplayerUi {
           ? "Find match"
           : "Join lobby";
 
+    const hubAi = {
+      seats: this.hubAiSeats,
+      editable: true,
+      pve: false,
+      team0Humans: this.hubTeamHumans(0),
+      team1Humans: this.hubTeamHumans(1),
+    };
+
     this.mountFxShell(`
       <div class="menu-shell tight mp-shell">
-        <header class="menu-header compact sp-header">
+        <header class="menu-header compact sp-header mp-lobby-header">
           <div class="sp-header-row">
-            <div class="sp-header-titles">
+            <div class="sp-header-titles mp-lobby-titles">
               <button type="button" class="menu-back" id="mp-back">← Back</button>
-              <h1 class="menu-title">Online Lobby</h1>
+              <h1 class="menu-title mp-lobby-title">Online Lobby</h1>
             </div>
           </div>
           <p class="menu-lead">PeerJS · host-authoritative</p>
@@ -572,8 +729,8 @@ export class MultiplayerUi {
               <input id="mp-name" class="menu-input run-input" maxlength="18" value="${escapeAttr(this.name)}" />
             </label>
             <label class="run-field">
-              <span>Mode</span>
-              <select id="mp-mode">${modes}</select>
+              <span>Number of Players</span>
+              <select id="mp-players">${playersOpts}</select>
             </label>
             <label class="run-field">
               <span>Lobby</span>
@@ -591,16 +748,7 @@ export class MultiplayerUi {
         <div class="sp-run-layout">
           ${
             this.role === "host"
-              ? `<div class="mp-setup-col">
-                  ${this.runSetupHtml("hub", true)}
-                  ${this.aiRosterHtml({
-                    seats: this.hubAiSeats,
-                    editable: true,
-                    pve: isPveMode(this.mode),
-                    team0Humans: this.hubTeamHumans(0),
-                    team1Humans: this.hubTeamHumans(1),
-                  })}
-                </div>`
+              ? this.runSetupHtml("hub", true, hubAi)
               : `<section class="sp-setup"><h2 class="sp-setup-title">Run setup</h2><p class="menu-note">Host sets map, run options, and AI roster after the lobby opens.</p></section>`
           }
 
@@ -638,8 +786,8 @@ export class MultiplayerUi {
       this.role = "join";
       this.refresh();
     });
-    this.root.querySelector("#mp-mode")!.addEventListener("change", (e) => {
-      this.mode = (e.target as HTMLSelectElement).value as MatchMode;
+    this.root.querySelector("#mp-players")!.addEventListener("change", (e) => {
+      this.maxHumans = clampMaxHumans(Number((e.target as HTMLSelectElement).value) || 2);
       this.clampHubAiSeats();
       this.refresh();
     });
@@ -684,7 +832,7 @@ export class MultiplayerUi {
 
   private async doHost(): Promise<void> {
     if (this.busy) return;
-    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
+    if (this.heroId !== RANDOM_HERO_ID && !isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId as HeroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
@@ -695,7 +843,7 @@ export class MultiplayerUi {
     const code = await quickHost(
       this.mode,
       this.name,
-      this.heroId,
+      this.heroId as HeroId | "random",
       this.privacy,
       this.mapChoice,
       this.maxTurrets,
@@ -703,6 +851,7 @@ export class MultiplayerUi {
       this.startingGold,
       this.wavesToWin,
       this.friendlyFire,
+      this.maxHumans,
     );
     if (code) {
       hostReplaceAiSeats(this.hubAiSeats);
@@ -715,28 +864,28 @@ export class MultiplayerUi {
 
   private async doJoin(): Promise<void> {
     if (this.busy) return;
-    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
+    if (this.heroId !== RANDOM_HERO_ID && !isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId as HeroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
     }
     this.busy = true;
     this.captureName();
-    await quickJoin(this.joinCode, this.name, this.heroId);
+    await quickJoin(this.joinCode, this.name, this.heroId as HeroId | "random");
     this.busy = false;
     this.refresh();
   }
 
   private async doFindPublic(): Promise<void> {
     if (this.busy) return;
-    if (!isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId)) {
+    if (this.heroId !== RANDOM_HERO_ID && !isCustomHeroId(this.heroId) && !isHeroUnlocked(this.heroId as HeroId)) {
       this.statusHtml = '<b style="color:#e85d04">Unlock that hero in the Barracks first.</b>';
       this.refreshStatusOnly();
       return;
     }
     this.busy = true;
     this.captureName();
-    await findPublicMatch(this.mode, this.name, this.heroId);
+    await findPublicMatch(this.mode, this.name, this.heroId as HeroId | "random");
     this.busy = false;
     this.refresh();
   }
@@ -744,13 +893,12 @@ export class MultiplayerUi {
   private captureName(): void {
     const n = this.root.querySelector<HTMLInputElement>("#mp-name");
     if (n) this.name = n.value.trim() || "Player";
-    const m = this.root.querySelector<HTMLSelectElement>("#mp-mode");
-    if (m) this.mode = m.value as MatchMode;
+    const p = this.root.querySelector<HTMLSelectElement>("#mp-players");
+    if (p) this.maxHumans = clampMaxHumans(Number(p.value) || 2);
   }
 
   /** Hub preview: host alone on team 0 until friends join. */
   private hubTeamHumans(team: MpTeam): number {
-    if (isPveMode(this.mode)) return team === 0 ? 1 : 0;
     return team === 0 ? 1 : 0;
   }
 
@@ -775,80 +923,12 @@ export class MultiplayerUi {
     this.hubAiSeats = kept;
   }
 
-  /**
-   * Shared AI roster panel (hub draft + live lobby). Mirrors the SP layout so
-   * host can actually find and use the controls.
-   */
-  private aiRosterHtml(opts: {
-    seats: LobbyAiSeat[];
-    editable: boolean;
-    pve: boolean;
-    team0Humans: number;
-    team1Humans: number;
-  }): string {
-    const store = loadAiStore();
-    const heroOpts = (sel: LobbyAiHeroPick) =>
-      [
-        `<option value="random" ${sel === "random" ? "selected" : ""}>Random</option>`,
-        ...HERO_LIST.map(
-          (h) =>
-            `<option value="${h.id}" ${h.id === sel ? "selected" : ""}>${escapeAttr(h.name)}</option>`,
-        ),
-      ].join("");
-
-    const count = (team: MpTeam) =>
-      (team === 0 ? opts.team0Humans : opts.team1Humans) +
-      opts.seats.filter((a) => a.team === team).length;
-    const room = (team: MpTeam) => Math.max(0, MAX_TEAM_COMBATANTS - count(team));
-
-    const col = (team: MpTeam, title: string) => {
-      const rows = opts.seats.filter((a) => a.team === team);
-      const list = rows.length
-        ? rows
-            .map((a) => {
-              const heroLabel =
-                a.heroId === "random" ? "Random" : resolveHero(a.heroId).name;
-              if (!opts.editable) {
-                return `<div class="sp-ai-row"><span class="sp-ai-you-name">AI · ${escapeAttr(heroLabel)}</span><span class="sp-ai-you-meta">${escapeAttr(aiKindLabel(a.ai, store))}</span><span class="sp-ai-lock">—</span></div>`;
-              }
-              return `<div class="sp-ai-row" data-ai-id="${escapeAttr(a.id)}">
-                <select class="menu-select mp-ai-hero" data-ai-id="${escapeAttr(a.id)}">${heroOpts(a.heroId)}</select>
-                <select class="menu-select mp-ai-kind" data-ai-id="${escapeAttr(a.id)}">${aiKindOptionsHtml(a.ai, store)}</select>
-                <button type="button" class="menu-btn small ghost mp-ai-rm" data-ai-id="${escapeAttr(a.id)}">✕</button>
-              </div>`;
-            })
-            .join("")
-        : `<p class="menu-note compact">No AI fillers</p>`;
-      return `
-        <div class="sp-ai-col" data-team="${team}">
-          <h4>${title} · ${count(team)}/${MAX_TEAM_COMBATANTS}</h4>
-          ${list}
-          ${
-            opts.editable
-              ? `<button type="button" class="menu-btn small ghost sp-ai-add mp-ai-add" data-team="${team}" ${room(team) <= 0 ? "disabled" : ""}>+ AI</button>`
-              : ""
-          }
-        </div>`;
-    };
-
-    return `
-      <div class="sp-ai-roster mp-ai-roster">
-        <div class="panel-head">
-          <h3 class="sp-setup-title">AI roster</h3>
-        </div>
-        <p class="menu-note">Add AI allies/enemies (max ${MAX_TEAM_COMBATANTS} per team). Each seat has its own Classic / trained difficulty — asymmetric 1v2 etc. are allowed.</p>
-        <div class="sp-ai-cols">
-          ${col(0, opts.pve ? "AI allies (co-op)" : "Team A · AI")}
-          ${col(1, opts.pve ? "AI foe lane" : "Team B · AI")}
-        </div>
-      </div>`;
-  }
-
   /** Wire +AI / remove / hero / difficulty. `source: "hub"` edits local draft; `"live"` hits the session. */
   private bindAiRoster(source: "hub" | "live"): void {
     this.root.querySelectorAll<HTMLButtonElement>(".mp-ai-add").forEach((btn) => {
       btn.addEventListener("click", () => {
         const team = Number(btn.dataset.team) as MpTeam;
+        if (team === 1 && getGameType(this.gameTypeId).options.endless) return;
         if (source === "hub") {
           if (this.hubTeamRoom(team) <= 0) return;
           this.hubAiSeats.push(newAiSeat(team, { kind: "classic" }, "random"));
@@ -903,68 +983,79 @@ export class MultiplayerUi {
 
   private renderLobby(lobby: LobbyState, mySlot: number, mode: NetMode): void {
     this.syncOptsFromLobby(lobby);
+    this.maxHumans = lobbyHumanCap(lobby);
     const mySeat = lobbySeat(lobby, mySlot);
     if (mySeat) this.heroId = mySeat.heroId;
 
-    const cap = modeCap(lobby.mode);
-    const seats = Array.from({ length: cap }, (_, i) => {
-      const s = lobbySeat(lobby, i);
-      if (!s) {
-        return `<li class="mp-seat empty">Seat ${i + 1} — open</li>`;
+    const cap = lobbyHumanCap(lobby);
+    const seatFor = (s: NonNullable<ReturnType<typeof lobbySeat>>, you: string) => {
+      const ready = s.ready ? "✓" : "…";
+      const hero = s.heroId === "random" ? "Random" : resolveHero(s.heroId).name;
+      const tint = s.team === 0 ? "team-home" : "team-away";
+      return `<li class="mp-seat ${tint} ${s.slot === mySlot ? "you" : ""}"><strong>${escapeAttr(s.name)}${you}</strong><span class="mp-seat-hero">${escapeAttr(hero)}</span><span class="mp-seat-ready">${ready}</span></li>`;
+    };
+    const colSeats = (team: MpTeam) => {
+      const items: string[] = [];
+      for (let i = 0; i < cap; i++) {
+        const s = lobbySeat(lobby, i);
+        if (!s || s.team !== team) continue;
+        const you = s.slot === mySlot ? " (you)" : "";
+        items.push(seatFor(s, you));
       }
-      const you = s.slot === mySlot ? " (you)" : "";
-      const team = isPveMode(lobby.mode) ? "Co-op" : s.team === 0 ? "Team A" : "Team B";
-      const ready = s.ready ? "✓ ready" : "…";
-      const hero = resolveHero(s.heroId).name;
-      return `<li class="mp-seat ${s.slot === mySlot ? "you" : ""}"><strong>${escapeAttr(s.name)}${you}</strong> · ${team} · ${escapeAttr(hero)} · ${ready}</li>`;
-    }).join("");
-
-    const need = teamNeed(lobby.mode);
-    const aN = lobbyCombatantCount(lobby, 0);
-    const bN = isPveMode(lobby.mode)
-      ? Math.max(1, lobbyCombatantCount(lobby, 1))
-      : lobbyCombatantCount(lobby, 1);
-    const bal = isPveMode(lobby.mode)
-      ? `Co-op ${aN}/${MAX_TEAM_COMBATANTS} · AI foe lane`
-      : `A ${aN}/${MAX_TEAM_COMBATANTS} · B ${bN}/${MAX_TEAM_COMBATANTS}` +
-        (lobbyTeamCount(lobby, 0) !== need || lobbyTeamCount(lobby, 1) !== need
-          ? ` · mode ${need}v${need} seats`
-          : "");
+      for (let i = 0; i < cap; i++) {
+        if (!lobbySeat(lobby, i) && team === 0 && items.length + openCount(1) < cap) {
+          /* open seats stay uncolored below */
+        }
+      }
+      return items;
+    };
+    const openCount = (excludeTeam: MpTeam | null) => {
+      void excludeTeam;
+      return Math.max(0, cap - lobby.slots.length);
+    };
+    const homeSeats = colSeats(0);
+    const awaySeats = colSeats(1);
+    const opens = openCount(null);
+    for (let i = 0; i < opens; i++) {
+      // Prefer filling open markers under home column first visually.
+      (homeSeats.length <= awaySeats.length ? homeSeats : awaySeats).push(
+        `<li class="mp-seat empty">Open seat</li>`,
+      );
+    }
 
     const canStart = mode === "host" && canStartMatch();
     const amReady = mySeat?.ready ?? false;
     const isHost = mode === "host";
-    // Keep hub draft in sync with the live lobby so Leave → re-host preserves picks.
     this.hubAiSeats = structuredClone(lobby.aiSeats ?? []);
 
+    const liveAi = {
+      seats: lobby.aiSeats ?? [],
+      editable: isHost,
+      pve: isPveMode(lobby.mode),
+      team0Humans: lobbyTeamCount(lobby, 0),
+      team1Humans: lobbyTeamCount(lobby, 1),
+    };
+
     this.mountFxShell(`
-      <div class="menu-shell tight mp-shell">
-        <header class="menu-header compact sp-header">
-          <div class="sp-header-row">
-            <div class="sp-header-titles">
-              <button type="button" class="menu-back" id="mp-leave">← Leave</button>
-              <h1 class="menu-title">${MODE_LABEL[lobby.mode]}</h1>
-            </div>
+      <div class="menu-shell tight mp-shell mp-lobby-live">
+        <header class="menu-header compact sp-header mp-lobby-header">
+          <button type="button" class="menu-back mp-lobby-leave" id="mp-leave">← Leave</button>
+          <h1 class="menu-title mp-lobby-title">Multiplayer Lobby</h1>
+          <div class="mp-lobby-code-wrap">
+            <code class="lobby-code">${escapeAttr(lobby.code ?? "—")}</code>
           </div>
-          <p class="menu-lead">Code <code class="lobby-code">${escapeAttr(lobby.code ?? "—")}</code> · ${bal}</p>
         </header>
 
         <section class="menu-section mp-players">
           <h2 class="sp-heroes-title">Players</h2>
-          <ul class="mp-seat-list">${seats}</ul>
+          <div class="mp-seat-cols">
+            <ul class="mp-seat-list team-home">${homeSeats.join("") || `<li class="mp-seat empty">Open seat</li>`}</ul>
+            <ul class="mp-seat-list team-away">${awaySeats.join("") || `<li class="mp-seat empty">Open seat</li>`}</ul>
+          </div>
         </section>
 
         <div class="sp-run-layout">
-          <div class="mp-setup-col">
-            ${this.runSetupHtml("live", isHost)}
-            ${this.aiRosterHtml({
-              seats: lobby.aiSeats ?? [],
-              editable: isHost,
-              pve: isPveMode(lobby.mode),
-              team0Humans: lobbyTeamCount(lobby, 0),
-              team1Humans: lobbyTeamCount(lobby, 1),
-            })}
-          </div>
+          ${this.runSetupHtml("live", isHost, liveAi)}
 
           <section class="sp-heroes">
             <h2 class="sp-heroes-title">Your hero</h2>
@@ -975,11 +1066,7 @@ export class MultiplayerUi {
 
         <div class="menu-footer sp-footer stack">
           <div class="mp-footer-row">
-            ${
-              !isPveMode(lobby.mode)
-                ? `<button type="button" class="menu-btn ghost" id="mp-team">Switch team</button>`
-                : ""
-            }
+            <button type="button" class="menu-btn ghost" id="mp-team">Switch team</button>
             <button type="button" class="menu-btn ${amReady ? "ghost" : "primary"} shine-btn" id="mp-ready">
               <span class="btn-label">${amReady ? "Unready" : "Ready"}</span>
             </button>
@@ -1002,7 +1089,7 @@ export class MultiplayerUi {
     });
 
     this.bindHeroGrid(() => {
-      localPickHero(this.heroId);
+      localPickHero(this.heroId as HeroId | "random");
     });
 
     if (isHost) {
@@ -1025,7 +1112,6 @@ export class MultiplayerUi {
     });
     this.root.querySelector("#mp-start")?.addEventListener("click", () => {
       if (!canStartMatch()) return;
-      // Avoid hostSetMode(mode): setMode always cleared ready and blocked start.
       this.pushHostOpts();
       const mapId = resolveMapChoice(
         this.mapChoice,
@@ -1044,6 +1130,8 @@ export class MultiplayerUi {
 
     void lobbyFull;
     void lobbyBalanced;
+    void hostSetMaxHumans;
+    void lobbyCombatantCount;
   }
 }
 

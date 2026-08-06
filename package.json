@@ -1,7 +1,7 @@
 {
   "name": "hero-line-wars",
   "private": true,
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Hero Line Wars — WC3-style line wars prototype",
   "author": "Hero Line Wars",
   "type": "module",

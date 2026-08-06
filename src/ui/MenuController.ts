@@ -27,22 +27,37 @@ import {
   getGameType,
   gameTypeSelectHtml,
   gameTypeToRunOptions,
+  listEnabledGameTypes,
   listGameTypes,
+  listGameTypeNames,
   loadCustomListSans,
   loadSelectedGameTypeId,
   newGameTypeId,
   saveCustomGameTypes,
   saveSelectedGameTypeId,
+  setGameTypeEnabled,
   type GameTypeDef,
   type GameTypeOptions,
   defaultGameTypeOptions,
   defaultGameTypeDescription,
   exportGameTypeJson,
   importGameTypeJson,
-  BUILTIN_GAME_TYPES,
   normalizeGameTypeId,
+  isGameTypeEnabled,
 } from "../meta/gameTypes";
-import { emptyContentFilters, enabledMapIds, isIdEnabled, validateContentFilters } from "../meta/contentFilters";
+import { isNameTaken, uniqueNameError } from "../meta/uniqueNames";
+import {
+  heroCardHtml,
+  heroPagerHtml,
+  heroSelectPageCount,
+  listHeroSelectEntries,
+  RANDOM_HERO_ID,
+  resolveHeroPick,
+  sliceHeroPage,
+  type HeroPickId,
+} from "./heroSelect";
+import { gameTypeSummaryHtml } from "./gameTypeSummary";
+import { enabledMapIds, isIdEnabled, validateContentFilters } from "../meta/contentFilters";
 import {
   getRunStartBonus,
   rollRunStartBonusChoices,
@@ -117,7 +132,7 @@ import { downloadSaveExport, importSaveFromFile } from "../meta/saveio";
 import { isMapUnlocked } from "../meta/contentLocks";
 import { unlockAudio } from "../systems/audio";
 import { stopMenuMusic, syncMenuMusicFromSettings } from "../systems/music";
-import { listCustomHeroes, listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
+import { listCustomMaps, resolveHero, resolveMap } from "../custom/registry";
 import { isCustomHeroId } from "../custom/types";
 import { MapEditorPanel } from "./MapEditorPanel";
 import { HeroEditorPanel } from "./HeroEditorPanel";
@@ -286,7 +301,8 @@ export class MenuController {
   private screen: MenuScreen = "main";
   /** Screen we navigated from — decides whether "Back" is an honest label. */
   private prevScreen: MenuScreen = "main";
-  private selectedHero: HeroId = HERO_LIST[0]!.id;
+  private selectedHero: HeroPickId = HERO_LIST[0]!.id;
+  private heroPage = 0;
   private lobby: LobbyDraft = {
     mode: "1v1",
     privacy: "private",
@@ -377,6 +393,8 @@ export class MenuController {
   private gtEditName = "Outlast";
   private gtEditDescription = "";
   private gtConfirmDelete = false;
+  /** Ok-only modal when a workshop save hits a non-unique name. */
+  private nameConflictMsg: string | null = null;
   private gtReturnScreen: MenuScreen = "singleplayer";
   private gtReturnToMp = false;
   private rebinding: BindableAction | null = null;
@@ -528,7 +546,8 @@ export class MenuController {
     }
     if (action === "campaign-new") {
       const gt = getGameType(this.campaignLobbyGameTypeId).options;
-      this.campaign = createCampaignRun(this.selectedHero, gt);
+      const heroId = resolveHeroPick(this.selectedHero) as HeroId;
+      this.campaign = createCampaignRun(heroId, gt);
       this.campaignEventId = null;
       this.campaignConfirmAbandon = false;
       this.campaignBagOpen = false;
@@ -671,6 +690,11 @@ export class MenuController {
       this.render();
       return;
     }
+    if (action === "name-conflict-ok") {
+      this.nameConflictMsg = null;
+      this.render();
+      return;
+    }
     if (action === "gt-save") {
       this.commitGameTypeEditor();
       return;
@@ -761,7 +785,12 @@ export class MenuController {
           break;
         }
         if (t.dataset.screen === "multiplayer") {
-          this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
+          this.callbacks.onOpenMultiplayer(
+            { ...this.lobby },
+            this.selectedHero === RANDOM_HERO_ID
+              ? HERO_LIST[0]!.id
+              : (this.selectedHero as HeroId),
+          );
           break;
         }
         this.go(t.dataset.screen as MenuScreen);
@@ -770,38 +799,53 @@ export class MenuController {
         this.quit();
         break;
       case "pick-hero":
-        this.selectedHero = t.dataset.heroId as HeroId;
+        this.selectedHero = t.dataset.heroId as HeroPickId;
         if (this.screen === "singleplayer") this.paintSpHeroSelection();
         else this.render();
         break;
+      case "pick-random-hero":
+        this.selectedHero = RANDOM_HERO_ID;
+        if (this.screen === "singleplayer") this.paintSpHeroSelection();
+        else this.render();
+        break;
+      case "hero-page-prev":
+        this.heroPage = Math.max(0, this.heroPage - 1);
+        this.render();
+        break;
+      case "hero-page-next":
+        this.heroPage += 1;
+        this.render();
+        break;
       case "play-sp":
-        if (!isCustomHeroId(this.selectedHero) && !isHeroUnlocked(this.selectedHero)) {
+        if (
+          this.selectedHero !== RANDOM_HERO_ID &&
+          !isCustomHeroId(this.selectedHero) &&
+          !isHeroUnlocked(this.selectedHero as HeroId)
+        ) {
           this.setToast("Commission that hero in the Barracks first.");
           break;
         }
         {
           const gt = getGameType(this.selectedGameTypeId).options;
-          if (!gt.endless) this.ensureSpAiRoster();
+          this.ensureSpAiRoster();
           const fromGt = gameTypeToRunOptions(gt);
-          this.callbacks.onStartSingleplayer(this.selectedHero, {
+          const heroId = resolveHeroPick(this.selectedHero) as HeroId;
+          this.callbacks.onStartSingleplayer(heroId, {
             ...fromGt,
             mapId: resolveMapChoice(this.spMapChoice, gt.contentFilters?.maps),
             ascension: this.spAscension,
-            teamSize: gt.endless
-              ? 1
-              : (Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3),
-            aiAllies: gt.endless
-              ? undefined
-              : this.spAllies.map(({ heroId, ai }) => ({ heroId, ai })),
+            teamSize: Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3,
+            aiAllies: this.spAllies.map(({ heroId, ai }) => ({ heroId, ai })),
+            // No rival lane: never launch enemy-side AI seats
             aiEnemies: gt.endless
-              ? undefined
+              ? []
               : this.spEnemies.map(({ heroId, ai }) => ({ heroId, ai })),
             sharedFriendlyFire: !!fromGt.friendlyFire && this.spAllies.length > 0,
           });
         }
         break;
       case "sp-add-ally":
-        if (!this.spEndless && this.spAllies.length < 2) {
+        if (this.spAllies.length < 2) {
           this.spAllies.push(this.newSpAiRow({ kind: "classic" }));
           this.spTeamSize = Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3;
           this.render();
@@ -1797,9 +1841,8 @@ export class MenuController {
     const o = getGameType(id).options;
     this.spEndless = o.endless;
     if (o.endless) {
-      this.spAllies = [];
+      // No rival lane: clear enemy seats only — allies remain configurable.
       this.spEnemies = [];
-      this.spTeamSize = 1;
     }
     this.clampSpMapToGameType(o);
   }
@@ -1826,7 +1869,12 @@ export class MenuController {
   private leaveGameTypeEditor(): void {
     if (this.gtReturnToMp) {
       this.gtReturnToMp = false;
-      this.callbacks.onOpenMultiplayer({ ...this.lobby }, this.selectedHero);
+      this.callbacks.onOpenMultiplayer(
+        { ...this.lobby },
+        this.selectedHero === RANDOM_HERO_ID
+          ? HERO_LIST[0]!.id
+          : (this.selectedHero as HeroId),
+      );
       return;
     }
     this.go(this.gtReturnScreen);
@@ -1847,8 +1895,10 @@ export class MenuController {
     this.gtEditOptions = readGameTypeOptionsFromDom(this.root, "gt");
     const nameEl = this.root.querySelector<HTMLInputElement>("#gt-name");
     const descEl = this.root.querySelector<HTMLTextAreaElement>("#gt-desc");
+    const enEl = this.root.querySelector<HTMLInputElement>("#gt-enabled");
     if (nameEl?.value.trim()) this.gtEditName = nameEl.value.trim().slice(0, 40);
     if (descEl) this.gtEditDescription = descEl.value.trim().slice(0, 160);
+    const enabled = enEl ? enEl.checked : true;
     const filterErr = validateContentFilters(this.gtEditOptions.contentFilters);
     if (filterErr) {
       this.setToast(filterErr);
@@ -1856,16 +1906,21 @@ export class MenuController {
     }
     const all = listGameTypes();
     const existing = all.find((t) => t.id === this.gtEditId);
+    // Built-in: only enable/disable is saved (no renames / options mutate).
     if (existing?.builtin) {
-      this.gtEditId = newGameTypeId();
+      setGameTypeEnabled(existing.id, enabled);
+      this.setToast(
+        enabled
+          ? `“${existing.name}” enabled for selectors`
+          : `“${existing.name}” hidden from selectors`,
+      );
+      this.render();
+      return;
     }
-    // Built-ins must never carry filters when used as templates without copy —
-    // saved customs may filter; force empty if somehow still builtin id.
-    if (BUILTIN_GAME_TYPES.some((b) => b.id === this.gtEditId)) {
-      this.gtEditOptions = {
-        ...this.gtEditOptions,
-        contentFilters: emptyContentFilters(),
-      };
+    if (isNameTaken(this.gtEditName || "Custom type", listGameTypeNames(this.gtEditId))) {
+      this.nameConflictMsg = uniqueNameError("game type", this.gtEditName || "Custom type");
+      this.render();
+      return;
     }
     const next: GameTypeDef = {
       id: this.gtEditId,
@@ -1873,6 +1928,7 @@ export class MenuController {
       description:
         this.gtEditDescription || defaultGameTypeDescription(this.gtEditName || "Custom type"),
       builtin: false,
+      enabled,
       options: this.gtEditOptions,
     };
     const customs = loadCustomListSans(this.gtEditId);
@@ -1950,11 +2006,11 @@ export class MenuController {
     this.spMapChoice = pickOne(mapPool);
     this.spAscension = Math.floor(Math.random() * (meta.ascensionUnlocked + 1));
     setSelectedOpponent(randomAiSelection(loadAiStore()));
-    this.applyGameType(pickOne(listGameTypes()).id);
+    this.applyGameType(pickOne(listEnabledGameTypes()).id);
     if (!this.spEndless) {
       this.spTeamSize = pickOne(RUN_OPTION_POOLS.teamSize);
-      this.ensureSpAiRoster(true);
     }
+    this.ensureSpAiRoster(true);
   }
 
   private newSpAiRow(ai: LobbyAiKind): { id: string; heroId: LobbyAiHeroPick; ai: LobbyAiKind } {
@@ -1963,10 +2019,21 @@ export class MenuController {
 
   /** Keep ally/enemy AI lists in bounds; `resizeToMode` rebuilds from the Mode preset. */
   private ensureSpAiRoster(resizeToMode = false): void {
-    if (this.spEndless) return;
     const wantAllies = Math.max(0, this.spTeamSize - 1);
-    const wantEnemies = Math.max(0, this.spTeamSize);
+    const wantEnemies = this.spEndless ? 0 : Math.max(0, this.spTeamSize);
     const defAi = selectionToLobbyAi(loadAiStore().selected);
+    if (this.spEndless) {
+      this.spEnemies = [];
+      if (resizeToMode) {
+        this.spAllies = Array.from({ length: wantAllies }, () =>
+          this.newSpAiRow({ kind: "classic" }),
+        );
+      } else {
+        this.spAllies = this.spAllies.slice(0, 2);
+      }
+      this.spTeamSize = Math.min(3, 1 + this.spAllies.length) as 1 | 2 | 3;
+      return;
+    }
     if (resizeToMode || (this.spAllies.length === 0 && this.spEnemies.length === 0)) {
       this.spAllies = Array.from({ length: wantAllies }, () =>
         this.newSpAiRow({ kind: "classic" }),
@@ -1982,9 +2049,6 @@ export class MenuController {
   }
 
   private spAiRosterHtml(): string {
-    if (this.spEndless) {
-      return `<p class="menu-note">Endless has no rival lane — AI roster disabled.</p>`;
-    }
     this.ensureSpAiRoster();
     const heroOpts = (sel: LobbyAiHeroPick) =>
       [
@@ -2009,12 +2073,26 @@ export class MenuController {
         }
       </div>`;
     const you = resolveHero(this.selectedHero).name;
+    const enemyCol = this.spEndless
+      ? `<div class="sp-ai-col">
+            <h4>Enemy lane</h4>
+            <p class="menu-note">No rival lane enabled</p>
+          </div>`
+      : `<div class="sp-ai-col">
+            <h4>Enemy lane · ${this.spEnemies.length}/3</h4>
+            ${this.spEnemies.map((r) => rowHtml("enemy", r, true)).join("")}
+            <button type="button" class="menu-btn small ghost sp-ai-add" data-action="sp-add-enemy" ${this.spEnemies.length >= 3 ? "disabled" : ""}>+ AI enemy</button>
+          </div>`;
     return `
       <div class="sp-ai-roster">
         <div class="panel-head">
           <h3 class="sp-setup-title">AI roster</h3>
         </div>
-        <p class="menu-note">Add or remove AI per lane (0–3 foes). Empty enemy lane uses the abstract rival.</p>
+        <p class="menu-note">${
+          this.spEndless
+            ? "Add AI allies on your lane. No rival lane enabled."
+            : "Add or remove AI per lane (0–3 per side)."
+        }</p>
         <div class="sp-ai-cols">
           <div class="sp-ai-col">
             <h4>Your lane · ${1 + this.spAllies.length}/3</h4>
@@ -2026,45 +2104,27 @@ export class MenuController {
             ${this.spAllies.map((r) => rowHtml("ally", r, true)).join("")}
             <button type="button" class="menu-btn small ghost sp-ai-add" data-action="sp-add-ally" ${this.spAllies.length >= 2 ? "disabled" : ""}>+ AI ally</button>
           </div>
-          <div class="sp-ai-col">
-            <h4>Enemy lane · ${this.spEnemies.length}/3</h4>
-            ${this.spEnemies.map((r) => rowHtml("enemy", r, true))
-              .join("")}
-            <button type="button" class="menu-btn small ghost sp-ai-add" data-action="sp-add-enemy" ${this.spEnemies.length >= 3 ? "disabled" : ""}>+ AI enemy</button>
-          </div>
+          ${enemyCol}
         </div>
       </div>`;
   }
 
-  /** Game type dropdown + edit — dense options live in the Game Type Editor. */
-  private runOptionsFields(): string {
-    const gt = getGameType(this.selectedGameTypeId);
-    const o = gt.options;
-    const blurb = [
-      o.endless ? "No rival" : null,
-      o.livesPerRun > 0 ? `${o.livesPerRun} lives` : null,
-      o.wavesToWin === 0 ? "∞ waves" : `${o.wavesToWin} waves`,
-      o.sendLocation === "own" ? "sends→own" : "sends→enemy",
-      o.playerBaseInvincible || o.enemyBaseInvincible ? "base invuln" : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return `
-      <div class="run-grid cols-3">
-        ${gameTypeSelectHtml(this.selectedGameTypeId, "sp-game-type")}
-        <label class="run-field">
-          <span>Edit</span>
-          <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="singleplayer" style="width:100%"><span class="btn-label">Edit Gametypes</span></button>
-        </label>
-        <div class="run-field">
-          <span>Summary</span>
-          <p class="menu-note compact" style="margin:0">${escapeHtml(gt.name)}${blurb ? ` — ${escapeHtml(blurb)}` : ""}</p>
-        </div>
-      </div>
-    `;
-  }
-
   private spHeroDetailHtml(): string {
+    if (this.selectedHero === RANDOM_HERO_ID) {
+      return `
+        <div class="sp-hero-detail-inner">
+          <span class="hero-swatch" style="--hero:#9ab0c8"></span>
+          <strong style="color:#9ab0c8">???</strong>
+          <p class="sp-hero-blurb">???</p>
+          <ul class="hero-abilities">
+            <li><em>Passive</em> ???</li>
+            <li>???</li>
+            <li>???</li>
+            <li>???</li>
+          </ul>
+        </div>
+      `;
+    }
     const kb = this.settings.keybinds;
     const meta = loadMetaStore();
     const h = resolveHero(this.selectedHero);
@@ -2102,7 +2162,12 @@ export class MenuController {
     const detail = this.root.querySelector("#sp-hero-detail");
     if (detail) detail.innerHTML = this.spHeroDetailHtml();
     const you = this.root.querySelector(".sp-ai-you-name");
-    if (you) you.textContent = `You · ${resolveHero(this.selectedHero).name}`;
+    if (you) {
+      you.textContent =
+        this.selectedHero === RANDOM_HERO_ID
+          ? "You · Random"
+          : `You · ${resolveHero(this.selectedHero).name}`;
+    }
   }
 
   private paintSpRunMeta(): void {
@@ -2117,30 +2182,22 @@ export class MenuController {
   private renderSingleplayer(): string {
     const meta = loadMetaStore();
     this.spAscension = Math.min(this.spAscension, meta.ascensionUnlocked);
-    const customHeroCards = listCustomHeroes().map((h) => {
-      const selected = h.id === this.selectedHero;
-      return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""}" data-action="pick-hero" data-hero-id="${h.id}">
-          <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong class="btn-label">${escapeHtml(h.name)}</strong>
-          <span>Custom · ${escapeHtml(h.blurb)}</span>
-        </button>
-      `;
+    const entries = listHeroSelectEntries({ includeRandom: false });
+    const pages = heroSelectPageCount(entries.length);
+    this.heroPage = Math.min(this.heroPage, pages - 1);
+    const selectedId = this.selectedHero === RANDOM_HERO_ID ? "" : String(this.selectedHero);
+    const cards = sliceHeroPage(entries, this.heroPage)
+      .map((e) =>
+        heroCardHtml(e, selectedId, {
+          dataAttr: "data-hero-id",
+          action: "pick-hero",
+        }),
+      )
+      .join("");
+    const pager = heroPagerHtml(this.heroPage, pages, {
+      actionPrev: "hero-page-prev",
+      actionNext: "hero-page-next",
     });
-    const cards = [
-      ...customHeroCards,
-      ...HERO_LIST.map((h) => {
-        const selected = h.id === this.selectedHero;
-        const unlocked = isHeroUnlocked(h.id, meta);
-        return `
-        <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : "data-tip=\"Unlock in Barracks\""}>
-          <span class="hero-swatch" style="--hero:${h.color}"></span>
-          <strong class="btn-label">${escapeHtml(h.name)}</strong>
-          <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
-        </button>
-      `;
-      }),
-    ].join("");
 
     const customMaps = listCustomMaps();
     const mapFilters = getGameType(this.selectedGameTypeId).options.contentFilters;
@@ -2173,6 +2230,14 @@ export class MenuController {
       const def = ASCENSIONS[i]!;
       return `<option value="${i}" ${this.spAscension === i ? "selected" : ""}>A${i} · ${escapeHtml(def.name)}</option>`;
     }).join("");
+
+    const gtOpts = getGameType(this.selectedGameTypeId).options;
+    const gtSummary = gameTypeSummaryHtml(gtOpts, {
+      maxVisible: 10,
+      columns: 2,
+      showMoreId: "sp-gt-more",
+      showMoreAction: "edit-gametypes",
+    });
 
     return `
       <header class="menu-header compact sp-header">
@@ -2213,9 +2278,10 @@ export class MenuController {
             <div class="panel-head-actions">
               <button type="button" class="menu-btn small ghost" data-action="sp-run-reset" data-tip="Restore default run options"><span class="btn-label">Reset</span></button>
               <button type="button" class="menu-btn small ghost shine-btn" data-action="sp-run-randomize" data-tip="Roll random run options"><span class="btn-label">Randomize</span></button>
+              <button type="button" class="menu-btn small ghost shine-btn ${this.selectedHero === RANDOM_HERO_ID ? "primary" : ""}" data-action="pick-random-hero" data-tip="Pick a random unlocked hero at match start"><span class="btn-label">Random</span></button>
             </div>
           </div>
-          <div class="run-grid cols-3">
+          <div class="run-grid cols-2">
             <label class="run-field">
               <span>Map</span>
               <select data-field="sp-map" data-tip="${escapeHtml(runTip("map"))}">${mapOpts}</select>
@@ -2224,24 +2290,22 @@ export class MenuController {
               <span>Ascension</span>
               <select data-field="sp-ascension" data-tip="${escapeHtml(runTip("ascension"))}">${ascOpts}</select>
             </label>
-            <label class="run-field">
-              <span>Match AI</span>
-              <select disabled data-tip="Per-seat difficulty is set in the AI roster below">
-                <option selected>${this.spEndless ? "None (Endless)" : "See AI roster"}</option>
-              </select>
-            </label>
           </div>
           <div class="map-preview" id="sp-map-preview" aria-hidden="true">
             <canvas id="sp-map-preview-canvas"></canvas>
             <span class="map-preview-label" id="sp-map-preview-label"></span>
           </div>
           ${this.spAiRosterHtml()}
-          ${this.runOptionsFields()}
+          <div class="gt-lobby-row">
+            ${gameTypeSelectHtml(this.selectedGameTypeId, "sp-game-type")}
+            <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="singleplayer"><span class="btn-label">Edit Gametypes</span></button>
+          </div>
+          <div class="gt-lobby-summary">${gtSummary}</div>
         </section>
 
         <section class="sp-heroes">
           <h2 class="sp-heroes-title">Hero</h2>
-          <div class="hero-grid compact">${cards}</div>
+          <div class="hero-grid compact">${cards}${pager}</div>
           <div id="sp-hero-detail" class="sp-hero-detail">${this.spHeroDetailHtml()}</div>
         </section>
       </div>
@@ -2715,17 +2779,23 @@ export class MenuController {
 
     if (!this.campaign || !this.campaign.alive || this.campaignLobby) {
       if (!(this.campaign && this.campaign.alive && !this.campaignLobby)) {
-        const meta = loadMetaStore();
-        const cards = HERO_LIST.map((h) => {
-          const selected = h.id === this.selectedHero;
-          const unlocked = isHeroUnlocked(h.id, meta);
-          return `
-          <button type="button" class="hero-card compact shine-btn ${selected ? "selected" : ""} ${unlocked ? "" : "locked"}" data-action="pick-hero" data-hero-id="${h.id}" ${unlocked ? "" : 'data-tip="Unlock in Barracks"'}>
-            <span class="hero-swatch" style="--hero:${h.color}"></span>
-            <strong class="btn-label">${escapeHtml(h.name)}</strong>
-            <span>${unlocked ? escapeHtml(h.blurb) : "Locked"}</span>
-          </button>`;
-        }).join("");
+        const entries = listHeroSelectEntries({ includeRandom: false });
+        const pages = heroSelectPageCount(entries.length);
+        this.heroPage = Math.min(this.heroPage, pages - 1);
+        const selectedId = this.selectedHero === RANDOM_HERO_ID ? "" : String(this.selectedHero);
+        const cards =
+          sliceHeroPage(entries, this.heroPage)
+            .map((e) =>
+              heroCardHtml(e, selectedId, {
+                dataAttr: "data-hero-id",
+                action: "pick-hero",
+              }),
+            )
+            .join("") +
+          heroPagerHtml(this.heroPage, pages, {
+            actionPrev: "hero-page-prev",
+            actionNext: "hero-page-next",
+          });
         const resume =
           this.campaign && this.campaign.alive
             ? `<button type="button" class="menu-btn primary shine-btn" data-action="campaign-resume"><span class="btn-label">Resume run</span></button>`
@@ -2739,22 +2809,20 @@ export class MenuController {
                 <h1 class="menu-title">Campaign</h1>
                 <p class="menu-lead">Lobby: pick hero + game type, then start a branching run.</p>
               </header>
-              <div class="run-grid cols-2">
-                ${gameTypeSelectHtml(this.campaignLobbyGameTypeId, "sp-game-type")}
-                <label class="run-field">
-                  <span>Edit</span>
-                  <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="campaign" style="width:100%"><span class="btn-label">Edit Gametypes</span></button>
-                </label>
+              <div class="panel-head-actions campaign-random-row">
+                <button type="button" class="menu-btn small ghost shine-btn ${this.selectedHero === RANDOM_HERO_ID ? "primary" : ""}" data-action="pick-random-hero" data-tip="Pick a random unlocked hero at run start"><span class="btn-label">Random</span></button>
               </div>
-              ${(() => {
-                const gt = getGameType(this.campaignLobbyGameTypeId);
-                return gt.description
-                  ? `<p class="menu-note">${escapeHtml(gt.description)}</p>`
-                  : "";
-              })()}
+              <div class="gt-lobby-row">
+                ${gameTypeSelectHtml(this.campaignLobbyGameTypeId, "sp-game-type")}
+                <button type="button" class="menu-btn small ghost shine-btn" data-action="edit-gametypes" data-from="campaign"><span class="btn-label">Edit Gametypes</span></button>
+              </div>
+              <div class="gt-lobby-summary">${gameTypeSummaryHtml(getGameType(this.campaignLobbyGameTypeId).options, { maxVisible: 10, columns: 2, showMoreAction: "edit-gametypes" })}</div>
               <div class="hero-detail-panel">
                 ${(() => {
-                  const h = HEROES[this.selectedHero] ?? HERO_LIST[0]!;
+                  if (this.selectedHero === RANDOM_HERO_ID) {
+                    return `<h3>???</h3><p>???</p><p class="comp-meta">Passive · ???</p>`;
+                  }
+                  const h = resolveHero(this.selectedHero);
                   return `<h3>${escapeHtml(h.name)}</h3>
                     <p>${escapeHtml(h.blurb)}</p>
                     <p class="comp-meta">Passive · ${escapeHtml(h.passive.name)}</p>
@@ -3010,9 +3078,22 @@ export class MenuController {
             </div>
           </div>`
         : "";
+    const nameConflict = this.nameConflictMsg
+      ? `<div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="gt-name-title" aria-describedby="gt-name-body">
+            <div class="menu-confirm-card">
+              <h1 id="gt-name-title">Name already used</h1>
+              <p id="gt-name-body">${escapeHtml(this.nameConflictMsg)}</p>
+              <div class="menu-confirm-actions">
+                <button type="button" data-action="name-conflict-ok">Ok</button>
+              </div>
+            </div>
+          </div>`
+      : "";
+    const enabledChecked = isGameTypeEnabled(editing ?? { enabled: true } as GameTypeDef);
     return `
       <div class="prefs-layout">
         ${confirmDelete}
+        ${nameConflict}
         <header class="menu-header compact">
           ${back}
           <h1 class="menu-title">Game Type Editor</h1>
@@ -3034,9 +3115,13 @@ export class MenuController {
           <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-export"><span class="btn-label">Export</span></button>
           <button type="button" class="menu-btn small ghost shine-btn" data-action="gt-import"><span class="btn-label">Import</span></button>
           ${canDelete ? `<button type="button" class="menu-btn small ghost danger" data-action="gt-delete"><span class="btn-label">Delete</span></button>` : ""}
+          <label class="setting-row check gt-enabled-check">
+            <span>Enabled</span>
+            <input type="checkbox" id="gt-enabled" ${enabledChecked ? "checked" : ""} />
+          </label>
         </div>
-        ${gameTypeOptionsFieldsHtml(this.gtEditOptions, "gt", true)}
-        ${isBuiltin ? `<p class="menu-note">Built-in types save as a custom copy when you hit Save.</p>` : !editing ? `<p class="menu-note">Unsaved draft — hit Save to add it to your library.</p>` : ""}
+        ${gameTypeOptionsFieldsHtml(this.gtEditOptions, "gt", !isBuiltin)}
+        ${isBuiltin ? `<p class="menu-note">Built-in types: toggle Enabled and Save. Options are fixed — use New copy to edit as a custom.</p>` : !editing ? `<p class="menu-note">Unsaved draft — hit Save to add it to your library.</p>` : ""}
       </div>
     `;
   }

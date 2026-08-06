@@ -90,6 +90,8 @@ export class HeroEditorPanel {
   /** When kit pickers change, force Ability text inputs to template defaults. */
   private syncAbilityTextOnPaint = false;
   private pendingDeleteConfirm = false;
+  /** Ok-only modal for non-unique name on save. */
+  nameConflictMsg: string | null = null;
 
   load(id: string | null): void {
     this.pendingDeleteConfirm = false;
@@ -250,6 +252,18 @@ export class HeroEditorPanel {
   }
 
   private confirmOverlayHtml(): string {
+    if (this.nameConflictMsg) {
+      return `
+      <div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="he-name-title" aria-describedby="he-name-body">
+        <div class="menu-confirm-card">
+          <h1 id="he-name-title">Name already used</h1>
+          <p id="he-name-body">${escape(this.nameConflictMsg)}</p>
+          <div class="menu-confirm-actions">
+            <button type="button" data-action="he-name-ok">Ok</button>
+          </div>
+        </div>
+      </div>`;
+    }
     if (!this.pendingDeleteConfirm) return "";
     const name = this.draft.name || "this hero";
     return `
@@ -373,8 +387,17 @@ export class HeroEditorPanel {
         this.status = err;
         return true;
       }
-      saveCustomHero(this.draft);
+      const saveErr = saveCustomHero(this.draft);
+      if (saveErr) {
+        this.nameConflictMsg = saveErr;
+        this.status = "";
+        return true;
+      }
       this.status = "Saved to library.";
+      return true;
+    }
+    if (action === "he-name-ok") {
+      this.nameConflictMsg = null;
       return true;
     }
     if (action === "he-export") {

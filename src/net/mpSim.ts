@@ -44,6 +44,11 @@ import { updateEnemies, createEnemy } from "../systems/enemies";
 import { updateTurrets, tryPlacePendingArtifact } from "../systems/turrets";
 import { chooseChestReward, tickChests, tickMapSpecials } from "../systems/chests";
 import { applyWaveRider, tryPhoenixRevive } from "../systems/relics";
+import {
+  pressRespawnMinigame,
+  tickRespawnMinigame,
+} from "../systems/respawnMinigame";
+import { applyCreativeWaveStart, maybeRandomizeMap } from "../systems/creativeRuntime";
 import { pickEnemyKind } from "../data/enemies";
 import { MAP_W, WAVE_SCALE } from "../data/constants";
 import {
@@ -281,6 +286,7 @@ function startWave(state: GameState): void {
   spawnWaveSpecials(state, plan);
   applyWaveRider(state);
   resetWaveLives(state);
+  applyCreativeWaveStart(state);
 }
 
 function popNextSpawn(state: GameState): { hpScale: number; sent: boolean } | null {
@@ -346,7 +352,8 @@ function respawnHeroObj(state: GameState, hero: HeroRuntime): void {
   hero.attackCd = 0.4;
   hero.barrierTimer = 0;
   hero.whirlwindTimer = 0;
-  hero.radius = def.radius;
+  hero.radius = Math.max(4, def.radius * state.playerSizeMul);
+  if (hero === state.hero) state.respawnMinigame = null;
 }
 
 function updateProjectilesMp(state: GameState, dt: number): void {
@@ -424,6 +431,7 @@ function updateProjectilesMp(state: GameState, dt: number): void {
         damageEnemy(state, e, p.damage, {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
+          creditSlot: p.ownerSlot,
         });
         if (p.magnetPull) applyMagnetPull(state, e, p.magnetPull);
         if (p.appliesSlow) applySlow(e, 0.6, 1.5);
@@ -449,9 +457,15 @@ function openRelicDraftOnBag(state: GameState): boolean {
 }
 
 function afterWaveClearMp(state: GameState): void {
+  // Between-wave map/utility/hero scramble only on completed waves (1→2…), never at match boot.
+  if (state.wave >= 1) maybeRandomizeMap(state);
+
   const bags = state.playerBags;
   const openForActive = () => {
-    if (state.waveTier === "elite" || state.waveTier === "boss") {
+    if (
+      !state.disableRelics &&
+      shouldOfferRelicMp(state)
+    ) {
       if (openRelicDraftOnBag(state)) {
         state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
         if (state.pendingLevelUps > 0) openLevelDraft(state);
@@ -477,10 +491,20 @@ function afterWaveClearMp(state: GameState): void {
     openForActive();
   }
 
+  // Full break duration; countdown only once both lanes are clear (see stepMpMatch).
   state.waveTimer = state.waveBreakSec * state.modifiers.waveBreakMul;
   if (waveVictoryReached(state)) {
     state.status = "won";
   }
+}
+
+function shouldOfferRelicMp(state: GameState): boolean {
+  const mode = state.relicDrop ?? "elites_bosses";
+  if (mode === "never") return false;
+  if (mode === "every_wave") return true;
+  if (mode === "bosses_only") return state.waveTier === "boss";
+  if (mode === "elites_only") return state.waveTier === "elite";
+  return state.waveTier === "elite" || state.waveTier === "boss";
 }
 
 function resolveAiIntent(state: GameState, neural: NeuralLaneAi | null | undefined, dt: number): CombatIntent {
@@ -579,8 +603,13 @@ function updateLaneMp(
   dt: number,
   outboundSends: GameState["pendingSends"],
   neuralFor: (hero: HeroRuntime) => NeuralLaneAi | null,
-  /** Unlimited dual-lane: hold next wave until both lanes are ready. */
-  holdNextWave = false,
+  /**
+   * When false, do not tick or expire the between-wave break (other lane still fighting).
+   * When true and holdStartWave, timer may hit 0 but startWave is deferred to the host.
+   */
+  peerLaneClear = true,
+  /** Unlimited / dual-lane sync: hold next wave until host starts both. */
+  holdStartWave = false,
 ): void {
   if (state.status !== "playing") return;
 
@@ -681,6 +710,27 @@ function updateLaneMp(
     if (!h.alive) {
       if (h === state.hero) {
         if (Number.isFinite(state.respawnTimer)) {
+          if (state.respawnMinigame && state.respawnTimer > 1) {
+            tickRespawnMinigame(state.respawnMinigame, dt);
+            const slot = h.controllerSlot;
+            const intent =
+              slot != null && !isAiControllerSlot(slot)
+                ? intents.get(slot) ?? emptyIntent()
+                : emptyIntent();
+            if (intent.utility) {
+              const shaved = pressRespawnMinigame(state.respawnMinigame, state.respawnTimer);
+              if (shaved > 0) {
+                state.respawnTimer = Math.max(1, state.respawnTimer - shaved);
+                state.toast = `Precision! −${shaved.toFixed(1)}s`;
+                state.toastTimer = 0.7;
+              } else if (state.respawnMinigame.lastHit === false) {
+                state.toast = "Missed the window";
+                state.toastTimer = 0.45;
+              }
+            }
+          } else {
+            state.respawnMinigame = null;
+          }
           state.respawnTimer -= dt;
           if (state.respawnTimer <= 0) respawnHeroObj(state, h);
         }
@@ -719,6 +769,12 @@ function updateLaneMp(
 
   for (const f of state.fx) f.life -= dt;
   state.fx = state.fx.filter((f) => f.life > 0);
+  for (const f of state.damageFloaters) {
+    f.life -= dt;
+    f.y += f.vy * dt;
+    f.vy *= 0.92;
+  }
+  state.damageFloaters = state.damageFloaters.filter((f) => f.life > 0);
 
   const waveActive = state.spawning || state.enemies.length > 0;
   // Shop rotation per bag
@@ -748,12 +804,15 @@ function updateLaneMp(
       afterWaveClearMp(state);
     }
   } else if (!draftsMayPause || !humanBagPausedForDraft(state)) {
-    state.waveTimer -= dt;
-    if (state.waveTimer <= 0) {
-      if (holdNextWave) {
-        state.waveTimer = 0;
-      } else {
-        startWave(state);
+    // Break timer only advances when both lanes are clear of living enemies.
+    if (peerLaneClear) {
+      state.waveTimer -= dt;
+      if (state.waveTimer <= 0) {
+        if (holdStartWave) {
+          state.waveTimer = 0;
+        } else {
+          startWave(state);
+        }
       }
     }
   }
@@ -785,15 +844,68 @@ export function stepMpMatch(
 ): void {
   if (match.ended) return;
 
+  // No-rival: only simulate the player lane (ghost peer never fights).
+  const noRival =
+    !!match.lanes[0].endless ||
+    (!!match.soloOffline &&
+      match.lanes[1].baseInvincible &&
+      match.lanes[1].hero &&
+      !match.lanes[1].hero.alive);
+  if (noRival) {
+    const out0: GameState["pendingSends"] = [];
+    setLaneSfxEnabled(true);
+    updateLaneMp(
+      match.lanes[0],
+      intents,
+      dt,
+      out0,
+      (h) => neuralForHero(match, 0, h),
+      true,
+      true,
+    );
+    // Own-lane sends stay buffered for the next player wave (send system).
+    match.lanes[0].pendingSends.push(...out0);
+    if (laneReadyToStartWave(match.lanes[0])) {
+      startWave(match.lanes[0]);
+    }
+    if (match.lanes[0].status === "won") {
+      match.ended = true;
+      match.winnerTeam = 0;
+    } else if (match.lanes[0].status === "lost") {
+      match.ended = true;
+      match.winnerTeam = 1;
+    }
+    return;
+  }
+
   const out0: GameState["pendingSends"] = [];
   const out1: GameState["pendingSends"] = [];
-  // Unlimited: keep both lanes on the same wave cadence so one can't soft-lock forever alone
-  const syncWaves = match.lanes[0].wavesToWin <= 0 || match.lanes[1].wavesToWin <= 0;
+  const fighting = (s: GameState) => s.spawning || s.enemies.length > 0;
+  // Dual-lane: both must be free of enemies before either break timer ticks.
+  // Always hold auto-start so wave indices stay aligned (next wave begins together).
+  const peer0Clear = !fighting(match.lanes[1]);
+  const peer1Clear = !fighting(match.lanes[0]);
 
   setLaneSfxEnabled(match.viewTeam === 0);
-  updateLaneMp(match.lanes[0], intents, dt, out0, (h) => neuralForHero(match, 0, h), syncWaves);
+  updateLaneMp(
+    match.lanes[0],
+    intents,
+    dt,
+    out0,
+    (h) => neuralForHero(match, 0, h),
+    peer0Clear,
+    true,
+  );
   setLaneSfxEnabled(match.viewTeam === 1);
-  updateLaneMp(match.lanes[1], intents, dt, out1, (h) => neuralForHero(match, 1, h), syncWaves);
+  updateLaneMp(
+    match.lanes[1],
+    intents,
+    dt,
+    out1,
+    (h) => neuralForHero(match, 1, h),
+    peer1Clear,
+    true,
+  );
   setLaneSfxEnabled(true);
 
   // Player sends from lane0 hit lane1 and vice versa
@@ -804,7 +916,7 @@ export function stepMpMatch(
   applyOutgoingCurseTo(match.lanes[0], match.lanes[1]);
   applyOutgoingCurseTo(match.lanes[1], match.lanes[0]);
 
-  if (syncWaves && laneReadyToStartWave(match.lanes[0]) && laneReadyToStartWave(match.lanes[1])) {
+  if (laneReadyToStartWave(match.lanes[0]) && laneReadyToStartWave(match.lanes[1])) {
     // Keep wave indices aligned if somehow drifted
     const w = Math.max(match.lanes[0].wave, match.lanes[1].wave);
     match.lanes[0].wave = w;

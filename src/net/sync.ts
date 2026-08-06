@@ -83,6 +83,17 @@ export function buildLaneSnap(state: GameState): LaneSnap {
     waveLivesLeft: state.waveLivesLeft,
     runLivesLeft: state.runLivesLeft,
     waveRespawnBlocked: state.waveRespawnBlocked,
+    respawnMinigame: state.respawnMinigame
+      ? {
+          cursor: state.respawnMinigame.cursor,
+          dir: state.respawnMinigame.dir,
+          zoneStart: state.respawnMinigame.zoneStart,
+          zoneEnd: state.respawnMinigame.zoneEnd,
+          speed: state.respawnMinigame.speed,
+          feedback: state.respawnMinigame.feedback,
+          lastHit: state.respawnMinigame.lastHit,
+        }
+      : null,
     heroes: allLaneHeroes(state).map(heroSnap),
     enemies: state.enemies.map((e) => ({
       id: e.id,
@@ -348,6 +359,17 @@ export function applyLaneSnap(
   state.waveLivesLeft = snap.waveLivesLeft ?? 0;
   state.runLivesLeft = snap.runLivesLeft ?? 0;
   state.waveRespawnBlocked = !!snap.waveRespawnBlocked;
+  state.respawnMinigame = snap.respawnMinigame
+    ? {
+        cursor: snap.respawnMinigame.cursor,
+        dir: snap.respawnMinigame.dir,
+        zoneStart: snap.respawnMinigame.zoneStart,
+        zoneEnd: snap.respawnMinigame.zoneEnd,
+        speed: snap.respawnMinigame.speed,
+        feedback: snap.respawnMinigame.feedback,
+        lastHit: snap.respawnMinigame.lastHit,
+      }
+    : null;
   state.pendingSends = snap.pendingSends.map((s) => ({ ...s }));
   state.beam = snap.beam ? { ...snap.beam } : null;
   state.fx = snap.fx.map((f) => ({ ...f }));

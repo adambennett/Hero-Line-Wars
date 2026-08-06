@@ -15,6 +15,7 @@ import {
   sanitizeContentFilters,
   type GameTypeContentFilters,
 } from "./contentFilters";
+import { uniqueImportName } from "./uniqueNames";
 
 export type SendLocation = "own" | "enemy";
 export type ArtifactPlacementMode = "free" | "locked";
@@ -68,7 +69,7 @@ export type GameTypeOptions = {
   respawnMinigame: boolean;
   artifactPlacement: ArtifactPlacementMode;
   allowBarracks: boolean;
-  /** Creative extras (v0.0.6). */
+  /** Creative extras (v0.0.7+). */
   relicDrop: RelicDropMode;
   enemyProjectileDmgMul: number;
   enemyCollisionDmgMul: number;
@@ -151,10 +152,17 @@ export type GameTypeDef = {
   description: string;
   /** Built-in types cannot be deleted. */
   builtin: boolean;
+  /**
+   * When false, hidden from all gametype selectors (SP/MP/Campaign).
+   * Soft-default true for old saves. Editor list always includes the type.
+   */
+  enabled?: boolean;
   options: GameTypeOptions;
 };
 
 const STORAGE_KEY = "hlw-game-types-v1";
+/** Builtin enable/disable map (id → enabled). Missing → true. */
+const BUILTIN_ENABLED_KEY = "hlw-game-types-enabled-v1";
 /** v2: SP/MP factory default is Outlast (v1 often stuck on Race/Standard). */
 const SELECTED_KEY = "hlw-game-type-selected-v2";
 
@@ -434,10 +442,11 @@ const EXTRA_BUILTIN_GAME_TYPES: GameTypeDef[] = [
   builtinType(
     "endless",
     "Endless",
-    "PvE endless survival. Sends go to your own lane. Survive as long as you can.",
+    "PvE endless survival. No rival lane — sends go to your own lane. Survive as long as you can.",
     {
       maxTurrets: -1,
       wavesToWin: 0,
+      endless: true,
       sendLocation: "own",
       laneClearSpeedPct: 0,
       artifactPlacement: "free",
@@ -570,7 +579,8 @@ const EXTRA_BUILTIN_GAME_TYPES: GameTypeDef[] = [
     {
       maxTurrets: -2,
       startingGold: 1000,
-      wavesToWin: 10,
+      wavesToWin: 20,
+      /** No rival lane (sends own) — not unlimited waves. */
       endless: true,
       sendLocation: "own",
       chestOpenMul: 1.5,
@@ -639,10 +649,35 @@ function sanitizeCustom(list: unknown): GameTypeDef[] {
       name,
       description: sanitizeDescription(r.description, name),
       builtin: false,
+      enabled: r.enabled === false ? false : true,
       options: clampOptions(r.options as Partial<GameTypeOptions>),
     });
   }
   return out;
+}
+
+function loadBuiltinEnabledMap(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(BUILTIN_ENABLED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "boolean") out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveBuiltinEnabledMap(map: Record<string, boolean>): void {
+  localStorage.setItem(BUILTIN_ENABLED_KEY, JSON.stringify(map));
+}
+
+export function isGameTypeEnabled(def: GameTypeDef): boolean {
+  return def.enabled !== false;
 }
 
 export function loadCustomGameTypes(): GameTypeDef[] {
@@ -660,19 +695,56 @@ export function saveCustomGameTypes(list: GameTypeDef[]): void {
     id: t.id,
     name: t.name,
     description: t.description,
+    enabled: t.enabled !== false,
     options: t.options,
   }));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(customs));
 }
 
-/** Built-ins first, then user types (newest custom last). */
+/**
+ * All game types for the editor (builtins + customs).
+ * Built-in enabled flags overlay from permanent storage.
+ */
 export function listGameTypes(): GameTypeDef[] {
-  return [...BUILTIN_GAME_TYPES, ...loadCustomGameTypes()];
+  const enabledMap = loadBuiltinEnabledMap();
+  const builtins = BUILTIN_GAME_TYPES.map((t) => ({
+    ...t,
+    enabled: enabledMap[t.id] === false ? false : true,
+  }));
+  return [...builtins, ...loadCustomGameTypes()];
+}
+
+/** Selector dropdowns hide disabled types. Soft-default enabled. */
+export function listEnabledGameTypes(): GameTypeDef[] {
+  return listGameTypes().filter((t) => isGameTypeEnabled(t));
+}
+
+/** Persist enabled bit (builtin map or custom library). */
+export function setGameTypeEnabled(id: string, enabled: boolean): void {
+  const nid = normalizeGameTypeId(id);
+  if (BUILTIN_GAME_TYPES.some((b) => b.id === nid)) {
+    const map = loadBuiltinEnabledMap();
+    if (enabled) delete map[nid];
+    else map[nid] = false;
+    saveBuiltinEnabledMap(map);
+    return;
+  }
+  const customs = loadCustomGameTypes().map((t) =>
+    t.id === nid ? { ...t, enabled } : t,
+  );
+  saveCustomGameTypes(customs);
 }
 
 /** All custom types except the given id. */
 export function loadCustomListSans(exceptId: string): GameTypeDef[] {
   return loadCustomGameTypes().filter((t) => t.id !== exceptId);
+}
+
+/** All taken game type names (builtins + customs). */
+export function listGameTypeNames(exceptId?: string): string[] {
+  return listGameTypes()
+    .filter((t) => t.id !== exceptId)
+    .map((t) => t.name);
 }
 
 /** Normalize legacy ids (standard → race). */
@@ -685,18 +757,21 @@ export function normalizeGameTypeId(id: string | null | undefined): string {
 export function getGameType(id: string | null | undefined): GameTypeDef {
   const all = listGameTypes();
   const nid = normalizeGameTypeId(id);
-  return all.find((t) => t.id === nid) ?? all[0]!;
+  return all.find((t) => t.id === nid) ?? all.find((t) => isGameTypeEnabled(t)) ?? all[0]!;
 }
 
 export function loadSelectedGameTypeId(): string {
   try {
     const id = localStorage.getItem(SELECTED_KEY);
     const nid = normalizeGameTypeId(id);
-    if (listGameTypes().some((t) => t.id === nid)) return nid;
+    const enabled = listEnabledGameTypes();
+    if (enabled.some((t) => t.id === nid)) return nid;
+    if (listGameTypes().some((t) => t.id === nid) && !enabled.length) return nid;
   } catch {
     /* ignore */
   }
-  return "outlast";
+  const first = listEnabledGameTypes()[0];
+  return first?.id ?? "outlast";
 }
 
 export function saveSelectedGameTypeId(id: string): void {
@@ -711,6 +786,36 @@ export function defaultGameTypeDescription(name: string): string {
   return `${name.trim() || "Custom"} rules — edit this blurb in the Game Type Editor.`;
 }
 
+/**
+ * Stamp a Game Type's full option set onto a lobby (authoritative for host start).
+ * Ensures SP/MP creative flags never drift from the selected type.
+ */
+export function applyGameTypeToLobby(
+  lobby: {
+    gameTypeId?: string;
+    maxTurrets: number;
+    startingGold: number;
+    wavesToWin: number;
+    friendlyFire: boolean;
+    utilityDraftLevel?: number;
+    [key: string]: unknown;
+  },
+  gameTypeId: string,
+): void {
+  const def = getGameType(gameTypeId);
+  const o = def.options;
+  const extras = gameTypeToMpExtras(o);
+  Object.assign(lobby, extras);
+  lobby.gameTypeId = def.id;
+  lobby.maxTurrets = o.maxTurrets;
+  lobby.startingGold = o.startingGold;
+  // endless = no rival lane only; wavesToWin 0 remains Unlimited.
+  lobby.wavesToWin = o.wavesToWin;
+  lobby.friendlyFire = o.endless ? false : o.friendlyFire;
+  lobby.utilityDraftLevel = o.utilityDraftLevel;
+  (lobby as { endless?: boolean }).endless = !!o.endless;
+}
+
 /** Map a Game Type into run launch options. */
 export function gameTypeToRunOptions(opts: GameTypeOptions): Partial<RunOptions> {
   const endless = !!opts.endless;
@@ -718,7 +823,7 @@ export function gameTypeToRunOptions(opts: GameTypeOptions): Partial<RunOptions>
   return {
     maxTurrets: derived.disableArtifacts ? 0 : opts.maxTurrets,
     startingGold: opts.startingGold,
-    wavesToWin: endless ? 0 : opts.wavesToWin,
+    wavesToWin: opts.wavesToWin,
     livesPerWave: opts.livesPerWave,
     livesPerRun: opts.livesPerRun,
     friendlyFire: endless ? false : opts.friendlyFire,
@@ -875,6 +980,7 @@ export function gameTypeToMpExtras(opts: GameTypeOptions) {
     sendLocation: opts.sendLocation,
     artifactPlacement: opts.artifactPlacement,
     allowBarracks: opts.allowBarracks,
+    endless: !!opts.endless,
     ...creativeSlice(opts),
     contentFilters: opts.contentFilters ?? emptyContentFilters(),
   };
@@ -886,14 +992,15 @@ export function gameTypeSelectHtml(
   disabled = false,
 ): string {
   const nid = normalizeGameTypeId(selectedId);
-  const opts = listGameTypes()
+  const opts = listEnabledGameTypes()
     .map((t) => {
       return `<option value="${escapeAttr(t.id)}" ${t.id === nid ? "selected" : ""}>${escapeAttr(t.name)}${t.builtin ? "" : " ★"}</option>`;
     })
     .join("");
+  const tip = listEnabledGameTypes().find((t) => t.id === nid) ?? getGameType(nid);
   return `<label class="run-field" data-tip="${escapeAttr("Named run rules. Description shown in lists.")}">
       <span>Game type</span>
-      <select data-field="${field}" id="${field}" ${disabled ? "disabled" : ""} data-tip="${escapeAttr(getGameType(nid).description)}">${opts}</select>
+      <select data-field="${field}" id="${field}" ${disabled ? "disabled" : ""} data-tip="${escapeAttr(tip.description)}">${opts}</select>
     </label>`;
 }
 
@@ -933,12 +1040,13 @@ export function importGameTypeJson(raw: unknown): GameTypeDef | string {
       ? (root.gameType as Record<string, unknown>)
       : root;
   if (typeof body.name !== "string" || !body.name.trim()) return "Missing name";
-  const name = body.name.trim().slice(0, 40);
+  const taken = listGameTypeNames();
+  const name = uniqueImportName(body.name.trim().slice(0, 40), taken);
   let id =
     typeof body.id === "string" && body.id && !BUILTIN_GAME_TYPES.some((b) => b.id === body.id)
       ? body.id.slice(0, 48)
       : newGameTypeId();
-  if (listGameTypes().some((t) => t.id === id && !t.builtin)) {
+  if (listGameTypes().some((t) => t.id === id)) {
     id = newGameTypeId();
   }
   return {
@@ -946,6 +1054,7 @@ export function importGameTypeJson(raw: unknown): GameTypeDef | string {
     name,
     description: sanitizeDescription(body.description, name),
     builtin: false,
+    enabled: body.enabled === false ? false : true,
     options: clampOptions(body.options as Partial<GameTypeOptions>),
   };
 }

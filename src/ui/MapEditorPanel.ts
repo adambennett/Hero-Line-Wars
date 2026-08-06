@@ -131,6 +131,7 @@ export class MapEditorPanel {
   private pendingTemplateKey: string | null = null;
   private pendingShape: MapShapeId | null = null;
   status = "";
+  nameConflictMsg: string | null = null;
 
   load(id: string | null): void {
     this.pendingConfirm = null;
@@ -295,6 +296,18 @@ export class MapEditorPanel {
   }
 
   private confirmOverlayHtml(): string {
+    if (this.nameConflictMsg) {
+      return `
+      <div class="menu-confirm-overlay" role="alertdialog" aria-modal="true" aria-labelledby="me-name-title" aria-describedby="me-name-body">
+        <div class="menu-confirm-card">
+          <h1 id="me-name-title">Name already used</h1>
+          <p id="me-name-body">${escape(this.nameConflictMsg)}</p>
+          <div class="menu-confirm-actions">
+            <button type="button" data-action="me-name-ok">Ok</button>
+          </div>
+        </div>
+      </div>`;
+    }
     if (!this.pendingConfirm) return "";
     const affected = countShapeAffectedObjects(this.draft);
     const copy =
@@ -457,8 +470,17 @@ export class MapEditorPanel {
         this.status = err;
         return true;
       }
-      saveCustomMap(this.draft);
+      const saveErr = saveCustomMap(this.draft);
+      if (saveErr) {
+        this.nameConflictMsg = saveErr;
+        this.status = "";
+        return true;
+      }
       this.status = "Saved to library.";
+      return true;
+    }
+    if (action === "me-name-ok") {
+      this.nameConflictMsg = null;
       return true;
     }
     if (action === "me-export") {

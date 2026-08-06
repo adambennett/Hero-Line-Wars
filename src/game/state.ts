@@ -45,7 +45,7 @@ import {
   tickGunnerWeapons,
 } from "../systems/gunner";
 import { tickMines, tickVectorMomentum } from "../systems/abilities";
-import { createOpponent, onPlayerWaveStart, updateOpponent, type OpponentState } from "../systems/opponent";
+import { createOpponent, onPlayerWaveStart, opponentEnemiesRemaining, updateOpponent, type OpponentState } from "../systems/opponent";
 import {
   createRespawnMinigame,
   pressRespawnMinigame,
@@ -192,6 +192,11 @@ export type EnemyUnit = Unit & {
   poisonStacks?: number;
   burnTimer?: number;
   burnDps?: number;
+  /**
+   * Last controller that damaged this unit (MP bags / kill credit).
+   * Set by damageEnemy / projectiles with ownerSlot.
+   */
+  lastHitSlot?: number | null;
 };
 
 export type TurretUnit = {
@@ -242,6 +247,8 @@ export type Projectile = {
   seek?: boolean;
   /** Hostile knockback impulse on hero hit. */
   knockback?: number;
+  /** Controller who fired this projectile (MP kill gold/XP bag credit). */
+  ownerSlot?: number | null;
 };
 
 export type MapOrb = {
@@ -578,7 +585,7 @@ export type RunOptions = {
   artifactPlacement?: "free" | "locked";
   /** Apply Barracks combat meta upgrades this run. */
   allowBarracks?: boolean;
-  /** Creative v0.0.6 extras — see `meta/creativeOptions`. */
+  /** Creative extras — see `meta/creativeOptions`. */
   relicDrop?: import("../meta/creativeOptions").RelicDropMode;
   enemyProjectileDmgMul?: number;
   enemyCollisionDmgMul?: number;
@@ -939,7 +946,8 @@ export function createState(
     (opts?.startingGold ?? STARTING_GOLD) + mods.startingGoldDelta,
   );
   const endless = !!opts?.endless;
-  const wavesToWin = endless ? 0 : (opts?.wavesToWin ?? WIN_WAVES);
+  // endless = no rival lane only; wavesToWin <= 0 means Unlimited.
+  const wavesToWin = opts?.wavesToWin ?? (endless ? 0 : WIN_WAVES);
   const livesPerWave = Math.max(0, opts?.livesPerWave ?? 0);
   const livesPerRun = Math.max(0, opts?.livesPerRun ?? 0);
   const friendlyFire = opts?.friendlyFire ?? false;
@@ -1584,6 +1592,7 @@ function updateProjectiles(state: GameState, dt: number): void {
         damageEnemy(state, e, p.damage, {
           fromBasic: p.fromBasic,
           slow: p.appliesSlow,
+          creditSlot: p.ownerSlot,
         });
         if (p.magnetPull) applyMagnetPull(state, e, p.magnetPull);
         if (p.appliesSlow) applySlow(e, 0.6, 1.5);
@@ -1954,11 +1963,18 @@ export function update(state: GameState, input: Input, dt: number): void {
     }
     if (remainingSpawns(state) <= 0 && state.enemies.length === 0) {
       state.spawning = false;
+      // Drafts / relics when local clear; break timer only ticks once both lanes empty.
       if (afterWaveClear(state, input)) return;
     }
   } else if (!state.pausedForDraft || !mayPause) {
-    state.waveTimer -= dt;
-    if (state.waveTimer <= 0) startWave(state);
+    const bothLanesClear =
+      state.endless ||
+      state.mpLane ||
+      opponentEnemiesRemaining(state.opponent) <= 0;
+    if (bothLanesClear) {
+      state.waveTimer -= dt;
+      if (state.waveTimer <= 0) startWave(state);
+    }
   }
 
   if (state.baseHp <= 0) {

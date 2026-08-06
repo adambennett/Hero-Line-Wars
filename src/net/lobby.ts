@@ -10,13 +10,20 @@ import type {
   MatchMode,
   MpTeam,
 } from "./types";
-import { isPveMode, modeCap, teamNeed } from "./types";
+import { clampMaxHumans, isPveMode, lobbyHumanCap, modeCap, modeFromMaxHumans, teamNeed } from "./types";
 
 export const MAX_TEAM_COMBATANTS = 3;
 
-export function newLobby(mode: MatchMode, hostName: string, heroId: HeroId = HERO_LIST[0]!.id): LobbyState {
+export function newLobby(
+  mode: MatchMode,
+  hostName: string,
+  heroId: HeroId = HERO_LIST[0]!.id,
+  maxHumans?: number,
+): LobbyState {
+  const humans = clampMaxHumans(maxHumans ?? modeCap(mode));
   return {
-    mode,
+    mode: modeFromMaxHumans(humans),
+    maxHumans: humans,
     slots: [
       {
         slot: 0,
@@ -73,7 +80,7 @@ export function lobbySeat(lobby: LobbyState, slot: number): LobbySeat | undefine
 }
 
 export function lobbyFreeSlot(lobby: LobbyState): number {
-  const cap = modeCap(lobby.mode);
+  const cap = lobbyHumanCap(lobby);
   for (let i = 1; i < cap; i++) {
     if (!lobbySeat(lobby, i)) return i;
   }
@@ -133,6 +140,11 @@ export function lobbyBalanced(lobby: LobbyState): boolean {
 export function lobbyCombatReady(lobby: LobbyState): boolean {
   if (lobby.slots.length < 1) return false;
   if (lobby.slots.some((s) => !s.ready)) return false;
+  if (lobby.endless) {
+    // No rival lane: only the home team needs combatants.
+    if (lobby.slots.some((s) => s.team === 1)) return false;
+    return lobbyCombatantCount(lobby, 0) >= 1 && lobbyCombatantCount(lobby, 0) <= MAX_TEAM_COMBATANTS;
+  }
   if (isPveMode(lobby.mode)) {
     if (!lobby.slots.every((s) => s.team === 0)) return false;
     return lobbyCombatantCount(lobby, 0) >= 1 && lobbyCombatantCount(lobby, 0) <= MAX_TEAM_COMBATANTS;
@@ -143,7 +155,7 @@ export function lobbyCombatReady(lobby: LobbyState): boolean {
 }
 
 export function lobbyFull(lobby: LobbyState): boolean {
-  return lobby.slots.length >= modeCap(lobby.mode);
+  return lobby.slots.length >= lobbyHumanCap(lobby);
 }
 
 export function newAiSeat(
@@ -186,18 +198,33 @@ export function assignTeam(lobby: LobbyState): MpTeam {
   return home <= away ? 0 : 1;
 }
 
+/** Set human seat capacity (1–6). Teams stay free; readiness is cleared when the cap shrinks. */
+export function setMaxHumans(lobby: LobbyState, maxHumans: number): void {
+  const next = clampMaxHumans(maxHumans);
+  const prev = lobbyHumanCap(lobby);
+  lobby.maxHumans = next;
+  lobby.mode = modeFromMaxHumans(next);
+  if (next === prev && lobby.slots.every((s) => s.slot < next)) return;
+  lobby.slots = lobby.slots.filter((s) => s.slot < next);
+  for (const s of lobby.slots) s.ready = false;
+  clampLobbyAiSeats(lobby);
+}
+
 export function setMode(lobby: LobbyState, mode: MatchMode): void {
-  // Same mode: leave seats/ready intact (callers may re-sync current mode).
-  if (lobby.mode === mode) return;
-  lobby.mode = mode;
+  // Legacy mode picker → map onto seat capacity.
   const cap = modeCap(mode);
-  lobby.slots = lobby.slots.filter((s) => s.slot < cap);
+  if (lobby.mode === mode && lobbyHumanCap(lobby) === cap) return;
+  lobby.mode = mode;
+  lobby.maxHumans = isPveMode(mode) ? cap : cap;
+  const seats = lobbyHumanCap(lobby);
+  lobby.slots = lobby.slots.filter((s) => s.slot < seats);
   for (const s of lobby.slots) {
     s.ready = false;
     if (isPveMode(mode)) s.team = 0;
   }
   if (!isPveMode(mode)) {
-    const need = teamNeed(mode);
+    // Soft rebalance only when seats overflow a "fair" split — free switch still works.
+    const need = Math.max(1, Math.ceil(seats / 2));
     let h = 0;
     let a = 0;
     for (const s of lobby.slots) {
@@ -210,7 +237,6 @@ export function setMode(lobby: LobbyState, mode: MatchMode): void {
       }
     }
   } else {
-    // PvE: AI allies stay on team 0; foe AI seats stay on team 1.
     for (const a of lobby.aiSeats ?? []) {
       if (a.team !== 0 && a.team !== 1) a.team = 0;
     }

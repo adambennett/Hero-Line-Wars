@@ -11,6 +11,7 @@ import {
 import { dist, normalize, type Vec2 } from "../game/math";
 import { gameplayCheats } from "../meta/cheats";
 import type { EnemyUnit, GameState, HexZone, Projectile } from "../game/state";
+import { withPlayerBag } from "../net/playerBag";
 import {
   hasRelic,
   killGoldRelicMul,
@@ -23,6 +24,17 @@ import { heroHasPassive, heroUsesGyroKit, heroUsesVectorKit, resolveHero } from 
 import { perksForState } from "./heroPerks";
 import { mitigateDamage } from "./defense";
 import { scalePlayerAbilityDamage } from "./creativeRuntime";
+
+function creditSlotFromState(state: GameState): number | null {
+  if (state.hero.controllerSlot != null && Number.isFinite(state.hero.controllerSlot)) {
+    return state.hero.controllerSlot;
+  }
+  if (state.activeBagKey != null) {
+    const n = Number(state.activeBagKey);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
 
 export function highGroundAt(state: GameState, p: Vec2): HighGroundZone | null {
   for (const z of state.map.highGrounds) {
@@ -274,7 +286,12 @@ export function pushProjectile(
   state: GameState,
   partial: Omit<Projectile, "alive"> & { alive?: boolean },
 ): void {
-  const first: Projectile = { alive: true, ...partial };
+  const inferredOwner = partial.hostile ? null : creditSlotFromState(state);
+  const first: Projectile = {
+    alive: true,
+    ...partial,
+    ownerSlot: partial.ownerSlot !== undefined ? partial.ownerSlot : inferredOwner,
+  };
   if (state.bounceHouse && !first.hostile && first.fromBasic) {
     first.bouncesLeft = Math.max(first.bouncesLeft ?? 0, 1);
   }
@@ -334,66 +351,82 @@ export function killEnemy(state: GameState, e: EnemyUnit): void {
   state.kills += 1;
   if (isBossKind(e.kind)) state.bossesKilled += 1;
   if (isEliteKind(e.kind)) state.elitesKilled += 1;
-  let gold = e.goldReward * killGoldRelicMul(state);
-  gold += state.hero.killGoldBonus + (state.baseBranchMods?.killGoldFlat ?? 0);
-  if (state.utilityBountyKills > 0) {
-    gold += 8;
-    state.utilityBountyKills -= 1;
+
+  // Per-player bags: kill gold/XP and kill-bound passives must land on the scorer's bag.
+  // Projectiles resolve outside withPlayerBag, so without this XP is written to lane state
+  // and wiped the next bag swap.
+  const award = (): void => {
+    let gold = e.goldReward * killGoldRelicMul(state);
+    gold += state.hero.killGoldBonus + (state.baseBranchMods?.killGoldFlat ?? 0);
+    if (state.utilityBountyKills > 0) {
+      gold += 8;
+      state.utilityBountyKills -= 1;
+    }
+    if (state.goldRush) gold *= 2;
+    if (state.pacifistPays) gold = 0;
+    state.gold += gold;
+    state.goldFromKills += gold;
+    state.peakGold = Math.max(state.peakGold, state.gold);
+    grantKillXp(state, e);
+    if (state.bloodTax && state.hero.alive) {
+      applyPlayerDamage(state, 2);
+    }
+    if (hasRelic(state, "blood_tithe")) {
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 4);
+    }
+    if (heroHasPassive(state.hero.heroId, "marksman")) {
+      state.hero.marksmanTimer = 2.5;
+    }
+    if (heroHasPassive(state.hero.heroId, "overcharge")) {
+      state.hero.overchargeTimer = 2;
+    }
+    if (heroHasPassive(state.hero.heroId, "riftmark") && state.hero.abilityCds[0] != null) {
+      state.hero.abilityCds[0] = Math.max(0, state.hero.abilityCds[0]! * 0.85);
+    }
+    if (heroHasPassive(state.hero.heroId, "nest_memory")) {
+      state.hero.hiveDrones = Math.min(5, (state.hero.hiveDrones ?? 0) + 1);
+    }
+    if (
+      heroHasPassive(state.hero.heroId, "venom_cache") &&
+      ((e.poisonStacks ?? 0) > 0 || (e.dotTimer ?? 0) > 0)
+    ) {
+      const perks = perksForState(state);
+      const rad = 26 * perks.abilityAreaMul * (0.85 + 0.15 * perks.passiveMul);
+      spawnPoisonCloud(state, e.x, e.y, {
+        radius: rad,
+        life: 1.6 * perks.passiveMul,
+        poisonDps: attackDamage(state) * 0.18 * perks.passiveMul,
+        poisonStacks: 1,
+        poisonDuration: 2.2,
+      });
+    }
+    if ((state.shopOwned.blood_engine ?? 0) > 0) {
+      state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
+      state.hero.bloodEngineStacks = Math.min(10, (state.hero.bloodEngineStacks ?? 0) + 1);
+    }
+    if ((state.shopOwned.nest_core ?? 0) > 0) {
+      state.hero.nestCoreKills = (state.hero.nestCoreKills ?? 0) + 1;
+      if ((state.hero.nestCoreKills ?? 0) >= 8) {
+        state.hero.nestCoreKills = 0;
+        state.pendingSends.push({ enemies: 1, hpScale: 1 });
+        state.toast = "Nest Core — queued 1 into next wave";
+        state.toastTimer = 1.2;
+      }
+    }
+  };
+
+  const slot =
+    e.lastHitSlot ??
+    creditSlotFromState(state);
+  if (state.playerBags && slot != null && state.playerBags[String(slot)]) {
+    withPlayerBag(state, slot, award);
+  } else {
+    award();
   }
-  if (state.goldRush) gold *= 2;
-  if (state.pacifistPays) gold = 0;
-  state.gold += gold;
-  state.goldFromKills += gold;
-  state.peakGold = Math.max(state.peakGold, state.gold);
-  grantKillXp(state, e);
-  if (state.bloodTax && state.hero.alive) {
-    applyPlayerDamage(state, 2);
-  }
+
   if (state.corpseExplosion) {
     damageEnemiesInRadius(state, e.x, e.y, 48, attackDamage(state) * 0.45);
     addFx(state, e.x, e.y, 48, "#ff804088", 0.3);
-  }
-  if (hasRelic(state, "blood_tithe")) {
-    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 4);
-  }
-  if (heroHasPassive(state.hero.heroId, "marksman")) {
-    state.hero.marksmanTimer = 2.5;
-  }
-  if (heroHasPassive(state.hero.heroId, "overcharge")) {
-    state.hero.overchargeTimer = 2;
-  }
-  if (heroHasPassive(state.hero.heroId, "riftmark") && state.hero.abilityCds[0] != null) {
-    state.hero.abilityCds[0] = Math.max(0, state.hero.abilityCds[0]! * 0.85);
-  }
-  if (heroHasPassive(state.hero.heroId, "nest_memory")) {
-    state.hero.hiveDrones = Math.min(5, (state.hero.hiveDrones ?? 0) + 1);
-  }
-  if (
-    heroHasPassive(state.hero.heroId, "venom_cache") &&
-    ((e.poisonStacks ?? 0) > 0 || (e.dotTimer ?? 0) > 0)
-  ) {
-    const perks = perksForState(state);
-    const rad = 26 * perks.abilityAreaMul * (0.85 + 0.15 * perks.passiveMul);
-    spawnPoisonCloud(state, e.x, e.y, {
-      radius: rad,
-      life: 1.6 * perks.passiveMul,
-      poisonDps: attackDamage(state) * 0.18 * perks.passiveMul,
-      poisonStacks: 1,
-      poisonDuration: 2.2,
-    });
-  }
-  if ((state.shopOwned.blood_engine ?? 0) > 0) {
-    state.hero.hp = Math.min(state.hero.maxHp, state.hero.hp + 8);
-    state.hero.bloodEngineStacks = Math.min(10, (state.hero.bloodEngineStacks ?? 0) + 1);
-  }
-  if ((state.shopOwned.nest_core ?? 0) > 0) {
-    state.hero.nestCoreKills = (state.hero.nestCoreKills ?? 0) + 1;
-    if ((state.hero.nestCoreKills ?? 0) >= 8) {
-      state.hero.nestCoreKills = 0;
-      state.pendingSends.push({ enemies: 1, hpScale: 1 });
-      state.toast = "Nest Core — queued 1 into next wave";
-      state.toastTimer = 1.2;
-    }
   }
 }
 
@@ -401,9 +434,19 @@ export function damageEnemy(
   state: GameState,
   e: EnemyUnit,
   damage: number,
-  opts?: { lifesteal?: boolean; splash?: boolean; fromBasic?: boolean; slow?: boolean },
+  opts?: {
+    lifesteal?: boolean;
+    splash?: boolean;
+    fromBasic?: boolean;
+    slow?: boolean;
+    /** Override kill credit (projectile owner, etc.). */
+    creditSlot?: number | null;
+  },
 ): void {
   if (!e.alive || damage <= 0) return;
+
+  const credit = opts?.creditSlot ?? creditSlotFromState(state);
+  if (credit != null) e.lastHitSlot = credit;
 
   let dmg = damage;
   const pid = resolveHero(state.hero.heroId).passive.id;

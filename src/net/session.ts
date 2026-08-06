@@ -15,6 +15,7 @@ import {
   lobbyTeamRoom,
   newAiSeat,
   newLobby,
+  setMaxHumans,
   setMode,
 } from "./lobby";
 import type {
@@ -27,11 +28,12 @@ import type {
   NetMode,
   NetMsg,
 } from "./types";
-import { isPveMode, modeCap } from "./types";
+import { isPveMode, lobbyHumanCap } from "./types";
 import { IntentRateLimiter, sanitizeIntent } from "./intentGuard";
 import { collectCustomsForMatch, getCustomHero, getCustomMap } from "../custom/registry";
 import { isCustomHeroId, isCustomMapId, type CustomHeroDef, type CustomMapDef } from "../custom/types";
 import { sanitizeCustomHero, sanitizeCustomMap } from "../custom/validate";
+import { applyGameTypeToLobby } from "../meta/gameTypes";
 
 export const CODE_ALPHA = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const PEER_PREFIX = "hlw-v1-";
@@ -132,12 +134,43 @@ export function netPeerSlots(): number[] {
   return S.peers.map((p) => p.slot);
 }
 
-export function disconnectNet(): void {
+/** True when PeerJS cloud / WebSocket relay failures look like flaky public infra. */
+function isRelayNetworkError(err: { type?: string; message?: string } | string | undefined): boolean {
+  const t = typeof err === "string" ? err : (err?.type ?? String(err?.message ?? ""));
+  const s = String(t).toLowerCase();
+  return (
+    s.includes("network") ||
+    s.includes("websocket") ||
+    s.includes("server-error") ||
+    s.includes("socket-error") ||
+    s.includes("disconnected") ||
+    s === "network" ||
+    s === "server-error" ||
+    s === "socket-closed"
+  );
+}
+
+function relayErrorHtml(err: { type?: string; message?: string } | string | undefined): string {
+  const t = typeof err === "string" ? err : (err?.type ?? err?.message ?? "unknown");
+  if (isRelayNetworkError(err)) {
+    return `<b style="color:#e85d04">Could not reach PeerJS cloud — retry, or try again later (public relay may be down).</b>`;
+  }
+  return `<b style="color:#e85d04">Relay error: ${String(t)}</b>`;
+}
+
+function destroyPeerQuiet(peer: PeerType | null | undefined): void {
+  if (!peer) return;
   try {
-    S.peer?.destroy();
+    peer.destroy();
   } catch {
     /* */
   }
+}
+
+/** Always destroy previous Peer / conns before opening a new host or join. */
+export function disconnectNet(): void {
+  const prev = S.peer;
+  S.peer = null;
   for (const p of S.peers) {
     try {
       p.conn.close();
@@ -145,12 +178,18 @@ export function disconnectNet(): void {
       /* */
     }
   }
+  S.peers = [];
+  if (prev) {
+    try {
+      prev.destroy();
+    } catch {
+      /* */
+    }
+  }
   S.mode = null;
   S.open = false;
-  S.peer = null;
   S.code = null;
   S.lobby = null;
-  S.peers = [];
   S.mySlot = 0;
   S.peerCustoms.maps.clear();
   S.peerCustoms.heroes.clear();
@@ -338,7 +377,7 @@ function wireHostConn(conn: DataConnection): void {
     send(conn, { k: "welcome", slot, team, lobby: S.lobby! });
     broadcastLobby();
     status(
-      `<b style="color:#3d9a6a">Player ${slot + 1} joined.</b> ${S.lobby!.slots.length} / ${modeCap(S.lobby!.mode)}`,
+      `<b style="color:#3d9a6a">Player ${slot + 1} joined.</b> ${S.lobby!.slots.length} / ${lobbyHumanCap(S.lobby!)}`,
     );
   });
   conn.on("close", () => {
@@ -372,7 +411,7 @@ function wireClientConn(conn: DataConnection): void {
 export async function quickHost(
   mode: MatchMode,
   name: string,
-  heroId: HeroId,
+  heroId: HeroId | "random",
   privacy: MatchPrivacy,
   mapChoice: MapId | string | "random",
   maxTurrets: number,
@@ -380,14 +419,16 @@ export async function quickHost(
   startingGold?: number,
   wavesToWin?: number,
   friendlyFire?: boolean,
+  maxHumans?: number,
 ): Promise<string | null> {
   disconnectNet();
   S.mode = "host";
   S.myName = name || "Host";
-  S.myHero = heroId;
+  S.myHero = heroId === "random" ? HERO_LIST[0]!.id : heroId;
   S.mySlot = 0;
   S.peers = [];
-  S.lobby = newLobby(mode, S.myName, heroId);
+  S.lobby = newLobby(mode, S.myName, heroId === "random" ? HERO_LIST[0]!.id : heroId, maxHumans);
+  if (S.lobby.slots[0]) S.lobby.slots[0]!.heroId = heroId;
   S.lobby.privacy = privacy;
   S.lobby.mapChoice = mapChoice;
   S.lobby.maxTurrets = maxTurrets;
@@ -397,49 +438,72 @@ export async function quickHost(
   status("Contacting the relay…");
 
   return new Promise((resolve) => {
-    let tries = 0;
+    let idTries = 0;
+    let networkRetries = 0;
+    let settled = false;
+    const finish = (code: string | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+    };
     const attempt = () => {
+      if (settled) return;
       let code: string;
-      if (preferredCode) {
+      if (preferredCode && idTries === 0 && networkRetries === 0) {
         code = preferredCode;
       } else if (privacy === "public") {
-        code = `PUB${mode.replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 4)}${tries}`;
+        code = `PUB${mode.replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 4)}${idTries}`;
+      } else if (preferredCode && networkRetries > 0) {
+        // Preferred code kept on network retry — different peer instance only.
+        code = preferredCode;
       } else {
         code = mkCode(6);
       }
+      destroyPeerQuiet(S.peer);
+      S.peer = null;
       const peer = new Peer(PEER_PREFIX + code.toLowerCase(), { debug: 0 });
       S.peer = peer;
+      let opened = false;
       peer.on("open", () => {
+        opened = true;
         S.code = code;
         if (S.lobby) S.lobby.code = code;
         status(
           privacy === "public"
-            ? `Public lobby open (${code}). Others can Find Match on this mode.`
+            ? `Public lobby open (${code}). Others can Find Match for this size.`
             : "Lobby open — share this code with friends.",
         );
         emitLobby();
-        resolve(code);
+        finish(code);
       });
       peer.on("connection", (conn) => wireHostConn(conn));
       peer.on("error", (err: { type?: string }) => {
-        if (err?.type === "unavailable-id" && tries++ < 20) {
-          try {
-            peer.destroy();
-          } catch {
-            /* */
-          }
+        if (settled && opened) return;
+        if (err?.type === "unavailable-id" && idTries++ < 20) {
+          destroyPeerQuiet(peer);
+          if (S.peer === peer) S.peer = null;
           attempt();
           return;
         }
-        status(`<b style="color:#e85d04">Relay error: ${err?.type ?? err}</b>`);
-        resolve(null);
+        // One automatic retry on flaky public relay / websocket before giving up.
+        if (!opened && isRelayNetworkError(err) && networkRetries++ < 1) {
+          destroyPeerQuiet(peer);
+          if (S.peer === peer) S.peer = null;
+          status("Relay hiccup — retrying…");
+          setTimeout(attempt, 450);
+          return;
+        }
+        if (S.peer === peer) S.peer = null;
+        destroyPeerQuiet(peer);
+        status(relayErrorHtml(err));
+        finish(null);
       });
     };
     attempt();
   });
 }
 
-export async function quickJoin(code: string, name: string, heroId: HeroId): Promise<void> {
+export async function quickJoin(code: string, name: string, heroId: HeroId | "random"): Promise<void> {
   const c = code.trim().toUpperCase();
   if (c.length < 4) {
     status("Enter the lobby code first.");
@@ -448,7 +512,7 @@ export async function quickJoin(code: string, name: string, heroId: HeroId): Pro
   disconnectNet();
   S.mode = "client";
   S.myName = name || "Guest";
-  S.myHero = heroId;
+  S.myHero = heroId === "random" ? HERO_LIST[0]!.id : heroId;
   status("Contacting the relay…");
   const peer = new Peer({ debug: 0 });
   S.peer = peer;
@@ -460,6 +524,8 @@ export async function quickJoin(code: string, name: string, heroId: HeroId): Pro
     });
     wireClientConn(conn);
     conn.on("open", () => {
+      // Apply random pick after seat is assigned
+      if (heroId === "random") localPickHero("random");
       status('<b style="color:#3d9a6a">Connected — waiting for the host.</b>');
     });
   });
@@ -468,13 +534,15 @@ export async function quickJoin(code: string, name: string, heroId: HeroId): Pro
     if (t === "peer-unavailable") {
       status(`<b style="color:#e85d04">No lobby with code ${c}.</b>`);
     } else {
-      status(`<b style="color:#e85d04">Relay error: ${t ?? err}</b>`);
+      destroyPeerQuiet(peer);
+      if (S.peer === peer) S.peer = null;
+      status(relayErrorHtml(err));
     }
   });
 }
 
 /** Try public rooms for a mode (sequential PUB{MODE}{n} peer ids). */
-export async function findPublicMatch(mode: MatchMode, name: string, heroId: HeroId): Promise<void> {
+export async function findPublicMatch(mode: MatchMode, name: string, heroId: HeroId | "random"): Promise<void> {
   const base = `PUB${mode.replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 4)}`;
   status(`Searching public ${mode} lobbies…`);
   for (let i = 0; i < 20; i++) {
@@ -485,12 +553,12 @@ export async function findPublicMatch(mode: MatchMode, name: string, heroId: Her
   status('<b style="color:#e85d04">No public lobby found.</b> Host one, or use a private code.');
 }
 
-function tryJoinOnce(code: string, name: string, heroId: HeroId): Promise<boolean> {
+function tryJoinOnce(code: string, name: string, heroId: HeroId | "random"): Promise<boolean> {
   return new Promise((resolve) => {
     disconnectNet();
     S.mode = "client";
     S.myName = name;
-    S.myHero = heroId;
+    S.myHero = heroId === "random" ? HERO_LIST[0]!.id : heroId;
     const peer = new Peer({ debug: 0 });
     S.peer = peer;
     let settled = false;
@@ -542,6 +610,12 @@ export function hostSetMode(mode: MatchMode): void {
   broadcastLobby();
 }
 
+export function hostSetMaxHumans(n: number): void {
+  if (S.mode !== "host" || !S.lobby) return;
+  setMaxHumans(S.lobby, n);
+  broadcastLobby();
+}
+
 export function hostSetOpts(
   mapChoice: MapId | string | "random",
   maxTurrets: number,
@@ -553,96 +627,124 @@ export function hostSetOpts(
 ): void {
   if (S.mode !== "host" || !S.lobby) return;
   S.lobby.mapChoice = mapChoice;
-  S.lobby.maxTurrets = maxTurrets;
-  S.lobby.startingGold = startingGold;
-  S.lobby.wavesToWin = wavesToWin;
-  S.lobby.friendlyFire = friendlyFire;
-  S.lobby.utilityDraftLevel = utilityDraftLevel;
+  // Prefer gameTypeId as the source of truth for every run option (SP/MP parity).
+  if (extras?.gameTypeId) {
+    applyGameTypeToLobby(S.lobby, extras.gameTypeId);
+  } else {
+    S.lobby.maxTurrets = maxTurrets;
+    S.lobby.startingGold = startingGold;
+    S.lobby.wavesToWin = wavesToWin;
+    S.lobby.friendlyFire = friendlyFire;
+    S.lobby.utilityDraftLevel = utilityDraftLevel;
+  }
+  // Host may still pass explicit core numbers (use type-applied values unless no type id).
+  if (!extras?.gameTypeId) {
+    /* already set above */
+  } else {
+    // Map + turrets/gold from host UI still allowed to differ only for mapChoice.
+    // Core numbers already came from the game type.
+  }
+  S.lobby.mapChoice = mapChoice;
   if (extras) {
     if (extras.ascension != null) S.lobby.ascension = extras.ascension;
-    if (extras.livesPerWave != null) S.lobby.livesPerWave = extras.livesPerWave;
-    if (extras.livesPerRun != null) S.lobby.livesPerRun = extras.livesPerRun;
-    if (extras.chestOpenMul != null) S.lobby.chestOpenMul = extras.chestOpenMul;
-    if (extras.chestDespawnSec != null) S.lobby.chestDespawnSec = extras.chestDespawnSec;
-    if (extras.chestSpawnChance != null) S.lobby.chestSpawnChance = extras.chestSpawnChance;
-    if (extras.enemyDensityMul != null) S.lobby.enemyDensityMul = extras.enemyDensityMul;
-    if (extras.enemyHpMul != null) S.lobby.enemyHpMul = extras.enemyHpMul;
-    if (extras.enemySpeedMul != null) S.lobby.enemySpeedMul = extras.enemySpeedMul;
-    if (extras.incomeMul != null) S.lobby.incomeMul = extras.incomeMul;
-    if (extras.respawnMul != null) S.lobby.respawnMul = extras.respawnMul;
-    if (extras.startingBaseLevel != null) S.lobby.startingBaseLevel = extras.startingBaseLevel;
-    if (extras.levelDraftSize != null) S.lobby.levelDraftSize = extras.levelDraftSize;
-    if (extras.relicDraftSize != null) S.lobby.relicDraftSize = extras.relicDraftSize;
-    if (extras.disableArtifacts != null) S.lobby.disableArtifacts = extras.disableArtifacts;
-    if (extras.disableChests != null) S.lobby.disableChests = extras.disableChests;
-    if (extras.disableElites != null) S.lobby.disableElites = extras.disableElites;
-    if (extras.disableBosses != null) S.lobby.disableBosses = extras.disableBosses;
-    if (extras.disableShop != null) S.lobby.disableShop = extras.disableShop;
-    if (extras.disableSends != null) S.lobby.disableSends = extras.disableSends;
-    if (extras.disableRelics != null) S.lobby.disableRelics = extras.disableRelics;
-    if (extras.fogAlways != null) S.lobby.fogAlways = extras.fogAlways;
-    if (extras.fogThicknessPct != null) S.lobby.fogThicknessPct = extras.fogThicknessPct;
-    if (extras.fogVisionRadius != null) S.lobby.fogVisionRadius = extras.fogVisionRadius;
-    if (extras.doubleElites != null) S.lobby.doubleElites = extras.doubleElites;
-    if (extras.suddenDeathBaseHp != null) S.lobby.suddenDeathBaseHp = extras.suddenDeathBaseHp;
-    if (extras.glassCannon != null) S.lobby.glassCannon = extras.glassCannon;
-    if (extras.goldRush != null) S.lobby.goldRush = extras.goldRush;
-    if (extras.wildChests != null) S.lobby.wildChests = extras.wildChests;
-    if (extras.crampedLane != null) S.lobby.crampedLane = extras.crampedLane;
-    if (extras.playerBaseInvincible != null) S.lobby.playerBaseInvincible = extras.playerBaseInvincible;
-    if (extras.enemyBaseInvincible != null) S.lobby.enemyBaseInvincible = extras.enemyBaseInvincible;
-    if (extras.waveBreakSec != null) S.lobby.waveBreakSec = extras.waveBreakSec;
-    if (extras.laneClearSpeedPct != null) S.lobby.laneClearSpeedPct = extras.laneClearSpeedPct;
-    if (extras.respawnMinigame != null) S.lobby.respawnMinigame = extras.respawnMinigame;
-    if (extras.sendLocation != null) S.lobby.sendLocation = extras.sendLocation;
-    if (extras.artifactPlacement != null) S.lobby.artifactPlacement = extras.artifactPlacement;
-    if (extras.allowBarracks != null) S.lobby.allowBarracks = extras.allowBarracks;
-    // Creative extras — assign any remaining defined keys onto the lobby.
-    const creativeKeys = [
-      "relicDrop",
-      "enemyProjectileDmgMul",
-      "enemyCollisionDmgMul",
-      "playerDmgLmbMul",
-      "playerDmgRmbMul",
-      "playerDmgMmbMul",
-      "wallBounciness",
-      "playerSpeedMul",
-      "playerSizeMul",
-      "enemySizeMul",
-      "critLottery",
-      "enemyMutation",
-      "randomizeUtilityWave",
-      "doubleAllProjectiles",
-      "immuneToProjectiles",
-      "randomizeHeroWave",
-      "randomizeMapWave",
-      "artifactDamageDoubled",
-      "artifactsFree",
-      "itemsFree",
-      "infiniteRerolls",
-      "thornsAura",
-      "bloodTax",
-      "echoBarrage",
-      "pacifistPays",
-      "berserkerEdge",
-      "slipNSlide",
-      "vampiricCreeps",
-      "corpseExplosion",
-      "bounceHouse",
-    ] as const;
-    for (const k of creativeKeys) {
-      const v = extras[k];
-      if (v != null) (S.lobby as Record<string, unknown>)[k] = v;
+    // When no gameTypeId, fall through individual fields (legacy) for safety.
+    if (!extras.gameTypeId) {
+      if (extras.livesPerWave != null) S.lobby.livesPerWave = extras.livesPerWave;
+      if (extras.livesPerRun != null) S.lobby.livesPerRun = extras.livesPerRun;
+      if (extras.chestOpenMul != null) S.lobby.chestOpenMul = extras.chestOpenMul;
+      if (extras.chestDespawnSec != null) S.lobby.chestDespawnSec = extras.chestDespawnSec;
+      if (extras.chestSpawnChance != null) S.lobby.chestSpawnChance = extras.chestSpawnChance;
+      if (extras.enemyDensityMul != null) S.lobby.enemyDensityMul = extras.enemyDensityMul;
+      if (extras.enemyHpMul != null) S.lobby.enemyHpMul = extras.enemyHpMul;
+      if (extras.enemySpeedMul != null) S.lobby.enemySpeedMul = extras.enemySpeedMul;
+      if (extras.incomeMul != null) S.lobby.incomeMul = extras.incomeMul;
+      if (extras.respawnMul != null) S.lobby.respawnMul = extras.respawnMul;
+      if (extras.startingBaseLevel != null) S.lobby.startingBaseLevel = extras.startingBaseLevel;
+      if (extras.levelDraftSize != null) S.lobby.levelDraftSize = extras.levelDraftSize;
+      if (extras.relicDraftSize != null) S.lobby.relicDraftSize = extras.relicDraftSize;
+      if (extras.disableArtifacts != null) S.lobby.disableArtifacts = extras.disableArtifacts;
+      if (extras.disableChests != null) S.lobby.disableChests = extras.disableChests;
+      if (extras.disableElites != null) S.lobby.disableElites = extras.disableElites;
+      if (extras.disableBosses != null) S.lobby.disableBosses = extras.disableBosses;
+      if (extras.disableShop != null) S.lobby.disableShop = extras.disableShop;
+      if (extras.disableSends != null) S.lobby.disableSends = extras.disableSends;
+      if (extras.disableRelics != null) S.lobby.disableRelics = extras.disableRelics;
+      if (extras.disableBonuses != null) S.lobby.disableBonuses = extras.disableBonuses;
+      if (extras.disableBaseUpgrades != null) S.lobby.disableBaseUpgrades = extras.disableBaseUpgrades;
+      if (extras.contentFilters != null) S.lobby.contentFilters = extras.contentFilters;
+      if (extras.fogAlways != null) S.lobby.fogAlways = extras.fogAlways;
+      if (extras.fogThicknessPct != null) S.lobby.fogThicknessPct = extras.fogThicknessPct;
+      if (extras.fogVisionRadius != null) S.lobby.fogVisionRadius = extras.fogVisionRadius;
+      if (extras.doubleElites != null) S.lobby.doubleElites = extras.doubleElites;
+      if (extras.suddenDeathBaseHp != null) S.lobby.suddenDeathBaseHp = extras.suddenDeathBaseHp;
+      if (extras.glassCannon != null) S.lobby.glassCannon = extras.glassCannon;
+      if (extras.goldRush != null) S.lobby.goldRush = extras.goldRush;
+      if (extras.wildChests != null) S.lobby.wildChests = extras.wildChests;
+      if (extras.crampedLane != null) S.lobby.crampedLane = extras.crampedLane;
+      if (extras.playerBaseInvincible != null) S.lobby.playerBaseInvincible = extras.playerBaseInvincible;
+      if (extras.enemyBaseInvincible != null) S.lobby.enemyBaseInvincible = extras.enemyBaseInvincible;
+      if (extras.waveBreakSec != null) S.lobby.waveBreakSec = extras.waveBreakSec;
+      if (extras.laneClearSpeedPct != null) S.lobby.laneClearSpeedPct = extras.laneClearSpeedPct;
+      if (extras.respawnMinigame != null) S.lobby.respawnMinigame = extras.respawnMinigame;
+      if (extras.sendLocation != null) S.lobby.sendLocation = extras.sendLocation;
+      if (extras.artifactPlacement != null) S.lobby.artifactPlacement = extras.artifactPlacement;
+      if (extras.allowBarracks != null) S.lobby.allowBarracks = extras.allowBarracks;
+      if (extras.endless != null) {
+        S.lobby.endless = extras.endless;
+        if (extras.endless) {
+          // Keep ally AI; drop rival-lane fillers / human seats on team 1.
+          S.lobby.aiSeats = (S.lobby.aiSeats ?? []).filter((a) => a.team === 0);
+          for (const s of S.lobby.slots) {
+            if (s.team === 1) s.team = 0;
+          }
+        }
+      }
+      const creativeKeys = [
+        "relicDrop",
+        "enemyProjectileDmgMul",
+        "enemyCollisionDmgMul",
+        "playerDmgLmbMul",
+        "playerDmgRmbMul",
+        "playerDmgMmbMul",
+        "wallBounciness",
+        "playerSpeedMul",
+        "playerSizeMul",
+        "enemySizeMul",
+        "critLottery",
+        "enemyMutation",
+        "randomizeUtilityWave",
+        "doubleAllProjectiles",
+        "immuneToProjectiles",
+        "randomizeHeroWave",
+        "randomizeMapWave",
+        "artifactDamageDoubled",
+        "artifactsFree",
+        "itemsFree",
+        "infiniteRerolls",
+        "thornsAura",
+        "bloodTax",
+        "echoBarrage",
+        "pacifistPays",
+        "berserkerEdge",
+        "slipNSlide",
+        "vampiricCreeps",
+        "corpseExplosion",
+        "bounceHouse",
+      ] as const;
+      for (const k of creativeKeys) {
+        const v = extras[k];
+        if (v != null) (S.lobby as Record<string, unknown>)[k] = v;
+      }
     }
   }
   netBroadcast({
     k: "opts",
-    mapChoice,
-    maxTurrets,
-    startingGold,
-    wavesToWin,
-    friendlyFire,
-    utilityDraftLevel,
+    mapChoice: S.lobby.mapChoice,
+    maxTurrets: S.lobby.maxTurrets,
+    startingGold: S.lobby.startingGold,
+    wavesToWin: S.lobby.wavesToWin,
+    friendlyFire: S.lobby.friendlyFire,
+    utilityDraftLevel: S.lobby.utilityDraftLevel ?? utilityDraftLevel,
     extras,
   });
   broadcastLobby();
@@ -657,6 +759,8 @@ export function hostStartMatch(
   utilityDraftLevel = 10,
 ): Extract<NetMsg, { k: "start" }> | null {
   if (!canStartMatch() || !S.lobby) return null;
+  // Final stamp — selected game type options always win over stale lobby fields.
+  if (S.lobby.gameTypeId) applyGameTypeToLobby(S.lobby, S.lobby.gameTypeId);
   const mid = `m${Date.now().toString(36)}`;
   pushLocalCustoms(mapId);
   const customs = collectCustomsForMatch({
@@ -675,11 +779,11 @@ export function hostStartMatch(
     mid,
     lobby: structuredClone(S.lobby),
     mapId,
-    maxTurrets,
-    startingGold,
-    wavesToWin,
-    friendlyFire,
-    utilityDraftLevel,
+    maxTurrets: S.lobby.maxTurrets ?? maxTurrets,
+    startingGold: S.lobby.startingGold ?? startingGold,
+    wavesToWin: S.lobby.wavesToWin ?? wavesToWin,
+    friendlyFire: S.lobby.friendlyFire ?? friendlyFire,
+    utilityDraftLevel: S.lobby.utilityDraftLevel ?? utilityDraftLevel,
     seed: (Math.random() * 1e9) | 0,
     customMaps: customs.maps,
     customHeroes: customs.heroes,
@@ -699,16 +803,23 @@ export function localSwitchTeam(): void {
   emitLobby();
 }
 
-export function localPickHero(heroId: HeroId): void {
-  S.myHero = heroId;
+export function localPickHero(heroId: HeroId | "random"): void {
+  if (heroId !== "random") S.myHero = heroId;
   if (!S.lobby) return;
   const seat = lobbySeat(S.lobby, S.mySlot);
   if (!seat) return;
   seat.heroId = heroId;
+  if (heroId !== "random") S.myHero = heroId;
   seat.ready = false;
   pushLocalCustoms(S.lobby.mapChoice);
   if (S.mode === "host") broadcastLobby();
-  else netSendToHost({ k: "hero", heroId });
+  else netSendToHost({ k: "hero", heroId: heroId === "random" ? HERO_LIST[0]!.id : heroId });
+  // Host/clients: peers need random picks too. Encode via a reserved approach:
+  // When random, keep local seat random; still send a placeholder hero to old peers.
+  if (heroId === "random") {
+    // Re-broadcast full lobby so random selection is visible.
+    if (S.mode === "host") broadcastLobby();
+  }
   emitLobby();
 }
 
@@ -762,6 +873,7 @@ export function hostAddAiSeat(
   heroId?: import("./types").LobbyAiHeroPick,
 ): boolean {
   if (S.mode !== "host" || !S.lobby) return false;
+  if (S.lobby.endless && team === 1) return false;
   if (lobbyTeamRoom(S.lobby, team) <= 0) return false;
   if (!S.lobby.aiSeats) S.lobby.aiSeats = [];
   S.lobby.aiSeats.push(newAiSeat(team, ai, heroId ?? "random"));

@@ -5,6 +5,7 @@ import { HERO_LIST, type HeroId } from "../data/heroes";
 import { resolveMapChoice, type MapId, mapRespawn } from "../data/maps";
 import { resolveHero } from "../custom/registry";
 import { createState, type GameState, type HeroRuntime } from "../game/state";
+import { applyPlayerSize } from "../systems/creativeRuntime";
 import { gunnerWeaponAt } from "../data/gunnerWeapons";
 import { composeRunModifiers } from "../meta/modifiers";
 import { loadMetaStore } from "../meta/store";
@@ -19,6 +20,18 @@ import {
 } from "./types";
 import { captureBagFromState, createPlayerBag, ensureLaneBags } from "./playerBag";
 import { MAX_TEAM_COMBATANTS, resolveAiHeroPick } from "./lobby";
+import { resolveHeroPick } from "../ui/heroSelect";
+
+/** Resolve seat hero picks (Random → unlocked hero) at match create. */
+function resolveSeatHero(
+  pick: HeroId | string | "random",
+  seed: number,
+  used: Set<HeroId | string>,
+): HeroId | string {
+  const id = resolveHeroPick(pick as HeroId | "random", seed, used);
+  used.add(id);
+  return id;
+}
 
 export type MpMatch = {
   mode: MatchMode;
@@ -128,6 +141,7 @@ function populateLane(
     }
   }
   state.activeBagKey = String(primary.slot);
+  applyPlayerSize(state);
 }
 
 function takeAiFillers(
@@ -257,10 +271,18 @@ export function buildMpMatch(
     bounceHouse: lobby.bounceHouse,
   };
 
-  const usedHeroes = new Set<HeroId>(lobby.slots.map((s) => s.heroId));
+  const usedHeroes = new Set<HeroId>();
+  // Pre-seed avoid set without resolving random yet
+  for (const s of lobby.slots) {
+    if (s.heroId !== "random") usedHeroes.add(s.heroId as HeroId);
+  }
+  const usedForPick = usedHeroes as Set<HeroId | string>;
   const t0Ai = takeAiFillers(aiSeats, 0, team0.length, slotAi, slotCounter, seed, usedHeroes);
   const lane0Seats = [
-    ...team0.map((s) => ({ slot: s.slot, heroId: s.heroId })),
+    ...team0.map((s, i) => ({
+      slot: s.slot,
+      heroId: resolveSeatHero(s.heroId, seed + s.slot * 17 + i, usedForPick) as HeroId,
+    })),
     ...t0Ai,
   ];
   const metaRanks = lobby.allowBarracks ? loadMetaStore().ranks : {};
@@ -275,7 +297,21 @@ export function buildMpMatch(
   populateLane(lane0, lane0Seats.length ? lane0Seats : [{ slot: 0, heroId: "ranger" }], 10);
 
   let lane1: GameState;
-  if (isPveMode(lobby.mode)) {
+  if (lobby.endless) {
+    // No rival lane: ghost peer; home-lane AI fillers stay on lane0.
+    lane1 = createState(lane0Seats[0]?.heroId ?? "ranger", {
+      ...sharedOpts,
+      endless: true,
+      playerBaseInvincible: true,
+      modifiers: composeRunModifiers(ascension, {}, false),
+    });
+    lane1.mpLane = true;
+    lane1.aiControlled = true;
+    lane1.baseInvincible = true;
+    lane1.hero.alive = false;
+    lane1.hero.hp = 0;
+    lane0.endless = true;
+  } else if (isPveMode(lobby.mode)) {
     const t1Ai = takeAiFillers(aiSeats, 1, 0, slotAi, slotCounter, seed + 101, usedHeroes);
     const foeSeats =
       t1Ai.length > 0
@@ -306,7 +342,10 @@ export function buildMpMatch(
       usedHeroes,
     );
     const lane1Seats = [
-      ...team1Human.map((s) => ({ slot: s.slot, heroId: s.heroId })),
+      ...team1Human.map((s, i) => ({
+        slot: s.slot,
+        heroId: resolveSeatHero(s.heroId, seed + 300 + s.slot * 19 + i, usedForPick) as HeroId,
+      })),
       ...t1Ai,
     ];
     lane1 = createState(lane1Seats[0]?.heroId ?? "warden", {
@@ -365,8 +404,12 @@ export function buildSoloVsAiMatch(opts: {
   teamSize?: 1 | 2 | 3;
   /** Explicit AI allies on the player lane (0–2; player fills the first seat). */
   allies?: SoloAiMember[];
-  /** Explicit AI enemies on the rival lane (1–3). */
+  /** Explicit AI enemies on the rival lane (0–3). Empty = no foe heroes (abstract or no-rival). */
   enemies?: SoloAiMember[];
+  /** Solo no-rival survival: ghost peer lane, no enemy AI. */
+  noRivalLane?: boolean;
+  /** No rival lane flag on the player state (sends/own-lane UX). */
+  endless?: boolean;
   allyAiAggression?: number;
   chestOpenMul?: number;
   chestDespawnSec?: number;
@@ -454,8 +497,11 @@ export function buildSoloVsAiMatch(opts: {
     }));
   allies = allies.slice(0, MAX_TEAM_COMBATANTS - 1);
 
+  const noRival = !!opts.noRivalLane || !!opts.endless;
   let enemies: SoloAiMember[];
-  if (opts.enemies?.length) {
+  if (noRival) {
+    enemies = [];
+  } else if (opts.enemies?.length) {
     enemies = opts.enemies.slice(0, MAX_TEAM_COMBATANTS);
   } else {
     const primaryHero = opts.aiHeroId ?? ("random" as const);
@@ -479,6 +525,7 @@ export function buildSoloVsAiMatch(opts: {
     wavesToWin: opts.wavesToWin,
     friendlyFire: opts.friendlyFire,
     teamSize: Math.min(MAX_TEAM_COMBATANTS, 1 + allies.length) as 1 | 2 | 3,
+    endless: noRival,
     chestOpenMul: opts.chestOpenMul,
     chestDespawnSec: opts.chestDespawnSec,
     chestSpawnChance: opts.chestSpawnChance,
@@ -577,36 +624,53 @@ export function buildSoloVsAiMatch(opts: {
   }
   populateLane(lane0, playerSeats, 10);
 
-  const resolvedEnemies = enemies.map((e, i) => ({
-    ...e,
-    heroId: resolveMemberHero(e.heroId, 40 + i * 13),
-  }));
-  const foePrimary = resolvedEnemies[0]!;
-  const lane1 = createState(foePrimary.heroId, {
-    ...sharedBase,
-    playerBaseInvincible: opts.enemyBaseInvincible,
-    modifiers: opts.enemyModifiers,
-    ascension: opts.enemyModifiers?.ascension ?? opts.playerModifiers?.ascension ?? 0,
-  });
-  lane1.mpLane = true;
-  lane1.aiControlled = true;
-  lane1.baseInvincible = !!opts.enemyBaseInvincible;
-  const enemySeats: { slot: number; heroId: HeroId }[] = [];
-  for (let i = 0; i < resolvedEnemies.length; i++) {
-    const e = resolvedEnemies[i]!;
-    const useSlot = -1 - i;
-    if (pinSeats) {
-      const resolvedAi = resolveLobbyAi(e.ai, store);
-      // Legacy: opts.neural overrides the primary enemy brain when provided.
-      if (i === 0 && opts.neural) {
-        slotAi.set(useSlot, opts.neural);
-      } else {
-        slotAi.set(useSlot, neuralFromResolved(resolvedAi));
+  let lane1: GameState;
+  if (enemies.length === 0) {
+    // Ghost peer for dual-sim machinery when there is no rival lane / no foe heroes.
+    lane1 = createState(opts.playerHeroId, {
+      ...sharedBase,
+      playerBaseInvincible: true,
+      modifiers: opts.enemyModifiers,
+      ascension: opts.enemyModifiers?.ascension ?? opts.playerModifiers?.ascension ?? 0,
+    });
+    lane1.mpLane = true;
+    lane1.aiControlled = true;
+    lane1.baseInvincible = true;
+    lane1.hero.alive = false;
+    lane1.hero.hp = 0;
+  } else {
+    const resolvedEnemies = enemies.map((e, i) => ({
+      ...e,
+      heroId: resolveMemberHero(e.heroId, 40 + i * 13),
+    }));
+    const foePrimary = resolvedEnemies[0]!;
+    lane1 = createState(foePrimary.heroId, {
+      ...sharedBase,
+      endless: false,
+      playerBaseInvincible: opts.enemyBaseInvincible,
+      modifiers: opts.enemyModifiers,
+      ascension: opts.enemyModifiers?.ascension ?? opts.playerModifiers?.ascension ?? 0,
+    });
+    lane1.mpLane = true;
+    lane1.aiControlled = true;
+    lane1.baseInvincible = !!opts.enemyBaseInvincible;
+    const enemySeats: { slot: number; heroId: HeroId }[] = [];
+    for (let i = 0; i < resolvedEnemies.length; i++) {
+      const e = resolvedEnemies[i]!;
+      const useSlot = -1 - i;
+      if (pinSeats) {
+        const resolvedAi = resolveLobbyAi(e.ai, store);
+        // Legacy: opts.neural overrides the primary enemy brain when provided.
+        if (i === 0 && opts.neural) {
+          slotAi.set(useSlot, opts.neural);
+        } else {
+          slotAi.set(useSlot, neuralFromResolved(resolvedAi));
+        }
       }
+      enemySeats.push({ slot: useSlot, heroId: e.heroId });
     }
-    enemySeats.push({ slot: useSlot, heroId: e.heroId });
+    populateLane(lane1, enemySeats, 20);
   }
-  populateLane(lane1, enemySeats, 20);
 
   lane0.viewOpponentLane = false;
   lane1.viewOpponentLane = false;
@@ -617,7 +681,7 @@ export function buildSoloVsAiMatch(opts: {
     return `${e.ai.school} · ${e.ai.tier}`;
   });
   const aCount = 1 + allies.length;
-  const bCount = enemies.length;
+  const bCount = Math.max(1, enemies.length);
 
   return {
     mode: aCount >= 3 || bCount >= 3 ? "3v3" : aCount === 2 || bCount === 2 ? "2v2" : "1v1",
@@ -633,7 +697,12 @@ export function buildSoloVsAiMatch(opts: {
     laneAi: [null, opts.neural ?? null],
     slotAi: slotAi.size ? slotAi : undefined,
     soloOffline: true,
-    opponentLabel: opts.opponentLabel ?? (labelParts.length === 1 ? labelParts[0]! : `${bCount} AI`),
+    opponentLabel:
+      enemies.length === 0
+        ? noRival
+          ? "No rival"
+          : "Abstract"
+        : (opts.opponentLabel ?? (labelParts.length === 1 ? labelParts[0]! : `${bCount} AI`)),
   };
 }
 

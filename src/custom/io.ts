@@ -10,7 +10,7 @@ import {
   type CustomMapBundle,
   type CustomMapDef,
 } from "./types";
-import { saveCustomHero, saveCustomMap } from "./registry";
+import { importCustomHero, importCustomMap } from "./registry";
 import { abilityTemplate, passiveTemplate } from "./catalog";
 
 function downloadJson(filename: string, data: unknown): void {
@@ -111,7 +111,8 @@ export async function importCustomMapFromFile(file: File): Promise<string> {
     if (typeof parsed === "string") return parsed;
     // Always assign a fresh id on import so duplicates don't collide
     parsed.id = newCustomMapId();
-    saveCustomMap(parsed);
+    const saved = importCustomMap(parsed);
+    if (!saved) return "Import failed";
     return "";
   } catch (e) {
     return e instanceof Error ? e.message : "Import failed";
@@ -124,7 +125,8 @@ export async function importCustomHeroFromFile(file: File): Promise<string> {
     const parsed = parseCustomHeroBundle(JSON.parse(text));
     if (typeof parsed === "string") return parsed;
     parsed.id = newCustomHeroId();
-    saveCustomHero(parsed);
+    const saved = importCustomHero(parsed);
+    if (!saved) return "Import failed";
     return "";
   } catch (e) {
     return e instanceof Error ? e.message : "Import failed";

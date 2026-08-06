@@ -12,6 +12,7 @@ import {
   isCustomMapId,
 } from "./types";
 import { sanitizeCustomHero, sanitizeCustomMap } from "./validate";
+import { isNameTaken, uniqueImportName, uniqueNameError } from "../meta/uniqueNames";
 
 const MAP_STORE_KEY = "hlw-custom-maps-v1";
 const HERO_STORE_KEY = "hlw-custom-heroes-v1";
@@ -106,24 +107,88 @@ export function getCustomHero(id: string): CustomHeroDef | null {
   );
 }
 
-export function saveCustomMap(def: CustomMapDef): void {
+export function listMapNames(exceptId?: string): string[] {
+  ensureLoaded();
+  const names = MAP_LIST.map((m) => m.name);
+  for (const m of libraryMaps) {
+    if (m.id !== exceptId) names.push(m.name);
+  }
+  for (const m of sessionMaps.values()) {
+    if (m.id !== exceptId) names.push(m.name);
+  }
+  return names;
+}
+
+export function listHeroNames(exceptId?: string): string[] {
+  ensureLoaded();
+  const names = HERO_LIST.map((h) => h.name);
+  for (const h of libraryHeroes) {
+    if (h.id !== exceptId) names.push(h.name);
+  }
+  for (const h of sessionHeroes.values()) {
+    if (h.id !== exceptId) names.push(h.name);
+  }
+  return names;
+}
+
+/**
+ * Save a custom map. Returns an error string if the display name collides
+ * with a built-in or another custom map (case-sensitive).
+ */
+export function saveCustomMap(def: CustomMapDef): string | null {
   ensureLoaded();
   const clean = sanitizeCustomMap(def);
-  if (!clean) return;
+  if (!clean) return "Invalid map";
+  if (isNameTaken(clean.name, listMapNames(clean.id))) {
+    return uniqueNameError("map", clean.name);
+  }
   const i = libraryMaps.findIndex((m) => m.id === clean.id);
   if (i >= 0) libraryMaps[i] = clean;
   else libraryMaps.push(clean);
   writeMaps();
+  return null;
 }
 
-export function saveCustomHero(def: CustomHeroDef): void {
+/**
+ * Save a custom hero. Returns an error string on name collision.
+ */
+export function saveCustomHero(def: CustomHeroDef): string | null {
   ensureLoaded();
   const clean = sanitizeCustomHero(def);
-  if (!clean) return;
+  if (!clean) return "Invalid hero";
+  if (isNameTaken(clean.name, listHeroNames(clean.id))) {
+    return uniqueNameError("hero", clean.name);
+  }
   const i = libraryHeroes.findIndex((h) => h.id === clean.id);
   if (i >= 0) libraryHeroes[i] = clean;
   else libraryHeroes.push(clean);
   writeHeroes();
+  return null;
+}
+
+/** Import-friendly: auto-rename on name collision then save. */
+export function importCustomMap(def: CustomMapDef): CustomMapDef | null {
+  ensureLoaded();
+  const clean = sanitizeCustomMap(def);
+  if (!clean) return null;
+  clean.name = uniqueImportName(clean.name, listMapNames());
+  const i = libraryMaps.findIndex((m) => m.id === clean.id);
+  if (i >= 0) libraryMaps[i] = clean;
+  else libraryMaps.push(clean);
+  writeMaps();
+  return clean;
+}
+
+export function importCustomHero(def: CustomHeroDef): CustomHeroDef | null {
+  ensureLoaded();
+  const clean = sanitizeCustomHero(def);
+  if (!clean) return null;
+  clean.name = uniqueImportName(clean.name, listHeroNames());
+  const i = libraryHeroes.findIndex((h) => h.id === clean.id);
+  if (i >= 0) libraryHeroes[i] = clean;
+  else libraryHeroes.push(clean);
+  writeHeroes();
+  return clean;
 }
 
 export function deleteCustomMap(id: string): void {

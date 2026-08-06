@@ -139,15 +139,24 @@ export function updateOpponent(state: GameState, dt: number): void {
   opp.sendFlash = Math.max(0, opp.sendFlash - dt);
   opp.thinkCd -= dt;
 
-  const waveActive = state.spawning || state.enemies.length > 0;
+  const playerWaveActive = state.spawning || state.enemies.length > 0;
+  const oppFighting =
+    Math.ceil(opp.enemiesAlive) > 0 ||
+    // Still spawning their abstract wave while player mid-wave
+    (playerWaveActive && opp.enemiesMax > 0 && opp.enemiesAlive > 0) ||
+    // After player clear: keep fighting until opp creeps die (never auto-wipe)
+    (!playerWaveActive && Math.ceil(opp.enemiesAlive) > 0);
+  const waveActive = playerWaveActive || oppFighting;
   const wave = Math.max(1, state.wave);
 
-  // Mirror wave cadence abstractly
-  if (waveActive) {
-    const expected =
-      Math.round(ENEMIES_PER_WAVE_BASE + (wave - 1) * WAVE_SCALE.enemiesPerWave) +
-      opp.incomingFromPlayer;
-    opp.enemiesMax = Math.max(opp.enemiesMax, expected);
+  // Mirror wave cadence abstractly — keep clearing regardless of player lane empty.
+  if (oppFighting || playerWaveActive) {
+    if (playerWaveActive) {
+      const expected =
+        Math.round(ENEMIES_PER_WAVE_BASE + (wave - 1) * WAVE_SCALE.enemiesPerWave) +
+        opp.incomingFromPlayer;
+      opp.enemiesMax = Math.max(opp.enemiesMax, expected);
+    }
     // Decay alive count as "AI clears" over the wave
     const clearRate = 0.55 + opp.level * 0.04 - opp.pressure * 0.25;
     opp.enemiesAlive = Math.max(0, opp.enemiesAlive - clearRate * dt);
@@ -174,10 +183,12 @@ export function updateOpponent(state: GameState, dt: number): void {
       opp.heroHp = Math.min(opp.heroMaxHp, opp.heroHp + 6);
     }
   } else {
-    opp.enemiesAlive = 0;
-    opp.enemiesMax = 0;
+    // BOTH lanes clear — settle abstract enemy tracking. Never wipe while creeps remain.
+    if (Math.ceil(opp.enemiesAlive) <= 0) {
+      opp.enemiesAlive = 0;
+      opp.enemiesMax = 0;
+    }
     // Keep incomingFromPlayer — player sends wait for the next enemy-lane wave.
-    // Keep sendingToPlayer in sync with pending packs still on the player state.
     opp.pressure = Math.max(0, opp.pressure * 0.92);
     // Heal a bit between waves
     opp.heroHp = Math.min(opp.heroMaxHp, opp.heroHp + 8 * dt);
@@ -214,7 +225,13 @@ export function updateOpponent(state: GameState, dt: number): void {
 
   const queued = opp.incomingFromPlayer;
   const live = Math.ceil(opp.enemiesAlive);
-  const count = Math.min(14, Math.max(live + (queued > 0 && !waveActive ? Math.min(8, queued) : 0), waveActive ? 1 : queued > 0 ? 1 : 0));
+  const count = Math.min(
+    14,
+    Math.max(
+      live + (queued > 0 && !waveActive ? Math.min(8, queued) : 0),
+      waveActive ? 1 : queued > 0 ? 1 : 0,
+    ),
+  );
   const colors = ["#c45c5c", "#d08040", "#a34bd4", "#6a90c8"];
   opp.vizEnemies = [];
   for (let i = 0; i < count; i++) {

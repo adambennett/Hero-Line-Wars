@@ -62,7 +62,7 @@ import { applyRunPayout, loadMetaStore } from "../meta/store";
 import { careerDeltaFromState } from "../meta/runStats";
 import { evaluateChallenges, CHALLENGES } from "../meta/challenges";
 import { gameplayCheats } from "../meta/cheats";
-import { canPauseSimulation, isMultiHumanGame } from "./pause";
+import { canPauseSimulation } from "./pause";
 import { pendingDraftCount } from "../systems/drafts";
 import { chooseBaseBranch } from "../systems/baseUpgrade";
 import { BASE_BRANCHES } from "../data/baseBranches";
@@ -316,32 +316,34 @@ export class Game {
       focusGame();
     });
     this.relicSkip.addEventListener("click", () => {
-      if (!this.state) return;
-      if (this.state.levelDraft) {
+      const draft = this.draftSourceState();
+      if (!draft) return;
+      if (draft.levelDraft) {
         if (this.mpMatch) this.mpUiIntent.skipLevel = true;
-        else skipLevelUp(this.state);
-      } else if (this.state.relicDraft) {
+        else skipLevelUp(draft);
+      } else if (draft.relicDraft) {
         if (this.mpMatch) this.mpUiIntent.skipRelic = true;
-        else skipRelic(this.state);
+        else skipRelic(draft);
       }
       this.lastDraftKey = "";
       this.relicDraft.classList.add("hidden");
       focusGame();
     });
     this.draftReroll.addEventListener("click", () => {
-      if (!this.state) return;
-      if (this.state.levelDraft) {
+      const draft = this.draftSourceState();
+      if (!draft) return;
+      if (draft.levelDraft) {
         if (this.mpMatch) {
           this.mpUiIntent.rerollLevel = true;
           this.lastDraftKey = "";
-        } else if (rerollLevelDraft(this.state)) {
+        } else if (rerollLevelDraft(draft)) {
           this.lastDraftKey = "";
         }
-      } else if (this.state.relicDraft) {
+      } else if (draft.relicDraft) {
         if (this.mpMatch) {
           this.mpUiIntent.rerollRelic = true;
           this.lastDraftKey = "";
-        } else if (rerollRelicDraft(this.state)) {
+        } else if (rerollRelicDraft(draft)) {
           this.lastDraftKey = "";
         }
       }
@@ -526,8 +528,8 @@ export class Game {
     };
 
     if (merged.endless) {
-      merged.teamSize = 1;
-      merged.wavesToWin = 0;
+      // No rival lane: drop enemy fillers, keep ally AI + waves-to-win.
+      merged.aiEnemies = [];
       merged.friendlyFire = false;
     }
 
@@ -536,19 +538,19 @@ export class Game {
     const allies = merged.aiAllies ?? [];
     const enemies = merged.aiEnemies ?? [];
     const wantsDual =
-      !merged.endless &&
-      (allies.length > 0 ||
-        enemies.length > 1 ||
-        enemies.some((e) => e.ai.kind === "neural") ||
-        teamSize > 1 ||
-        opp.kind === "neural");
+      allies.length > 0 ||
+      (!merged.endless &&
+        (enemies.length > 1 ||
+          enemies.some((e) => e.ai.kind === "neural") ||
+          teamSize > 1 ||
+          opp.kind === "neural"));
 
-    // Dual-lane when AI allies, multi-enemy, neural foe, or team-size preset > 1
+    // Dual-lane when AI allies (even no-rival), multi-enemy, neural foe, or team-size > 1
     if (wantsDual) {
       this.beginSoloVsAi(
         heroId,
         merged,
-        opp.kind === "neural" ? opp : null,
+        !merged.endless && opp.kind === "neural" ? opp : null,
         teamSize,
       );
       return;
@@ -596,11 +598,13 @@ export class Game {
       opts.modifiers ?? composeRunModifiers(opts.ascension, allowMeta ? meta.ranks : {}, allowMeta);
     const enemyMods = composeRunModifiers(opts.ascension, {}, false);
     const agg = playerMods.opponentAggressionMul;
-    const neural = opp
-      ? createNeuralLaneAi(opp.genome, Math.max(0, opp.hesitation / agg), opp.label)
-      : null;
+    const noRival = !!opts.endless;
+    const neural =
+      !noRival && opp
+        ? createNeuralLaneAi(opp.genome, Math.max(0, opp.hesitation / agg), opp.label)
+        : null;
     const allies = opts.aiAllies;
-    const enemies = opts.aiEnemies;
+    const enemies = noRival ? [] : opts.aiEnemies;
     this.mpMatch = buildSoloVsAiMatch({
       playerHeroId: heroId,
       mapId: opts.mapId,
@@ -616,6 +620,8 @@ export class Game {
       teamSize,
       allies,
       enemies,
+      noRivalLane: noRival,
+      endless: noRival,
       allyAiAggression: opts.allyAiAggression,
       chestOpenMul: opts.chestOpenMul,
       chestDespawnSec: opts.chestDespawnSec,
@@ -698,10 +704,10 @@ export class Game {
     this.invPanel.classList.add("hidden");
     this.laneChrome.classList.remove("hidden");
     this.baseHpRail.classList.remove("hidden");
-    this.opponentPanel.classList.remove("hidden");
+    this.opponentPanel.classList.toggle("hidden", noRival);
     this.hud.classList.remove("hidden");
     this.waveBannerEl.classList.remove("hidden");
-    this.laneFlipBtn.classList.remove("hidden");
+    this.laneFlipBtn.classList.toggle("hidden", noRival);
     this.laneFlipBtn.textContent = "View lane";
     this.laneFlipBtn.classList.remove("active");
     this.mapNameEl.textContent = this.state.map.name;
@@ -1451,142 +1457,176 @@ export class Game {
   }
 
   /**
-   * Draft panel. With more than one human the match keeps running behind it, so
-   * the panel renders compact and advertises how many rewards are still queued.
+   * Draft UI always uses the *local player's* economy bag / lane — never the
+   * spectated enemy lane. Watching them must not show a blocking choose UI.
+   * Presentation is the full centered choose-N panel (not the compact bottom strip).
    */
+  private draftSourceState(): GameState | null {
+    if (!this.state) return null;
+    if (this.mpMatch) {
+      const mine = this.mpMatch.lanes[this.mpMatch.myTeam];
+      focusBag(mine, this.mpMatch.mySlot);
+      return mine;
+    }
+    // SP never draws opponent drafts into this overlay.
+    if (this.state.viewOpponentLane) return null;
+    return this.state;
+  }
+
+  private localHasPendingDraft(s: GameState): boolean {
+    return !!(
+      s.pausedForDraft &&
+      (s.relicDraft ||
+        s.levelDraft ||
+        s.utilityDraft ||
+        s.curseDraft ||
+        s.chestDraft ||
+        s.baseBranchDraft)
+    );
+  }
+
   private syncDraft(): void {
     if (!this.state) return;
-    const compact = isMultiHumanGame(this.mpMatch ?? this.state);
-    this.relicDraft.classList.toggle("compact-draft", compact);
-    this.renderDraft();
+    // Always full-size choose UI (user-facing restore after compact multi-human style).
+    this.relicDraft.classList.remove("compact-draft");
+    const src = this.draftSourceState();
+    if (!src || !this.localHasPendingDraft(src)) {
+      this.lastDraftKey = "";
+      this.relicDraft.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
+      return;
+    }
+    this.renderDraft(src);
     if (this.relicDraft.classList.contains("hidden")) return;
-    const queued = pendingDraftCount(this.state);
+    const queued = pendingDraftCount(src);
     if (queued > 0) {
       this.draftBlurb.textContent = `${this.draftBlurb.textContent} · ${queued} more reward${queued > 1 ? "s" : ""} queued`;
     }
   }
 
-  private renderDraft(): void {
-    if (!this.state) return;
-    if (this.state.pausedForDraft && this.state.curseDraft) {
+  private renderDraft(src?: GameState): void {
+    const state = src ?? this.draftSourceState();
+    if (!state || !this.localHasPendingDraft(state)) {
+      this.lastDraftKey = "";
+      this.relicDraft.classList.add("hidden");
+      this.draftActions.classList.add("hidden");
+      return;
+    }
+    if (state.curseDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.add("hidden");
       this.draftTitle.textContent = "Hex Storm — Choose a Curse";
       this.draftBlurb.textContent = "Send one soft-lock to the enemy lane.";
-      const key = `C:${this.state.curseDraft.join(",")}`;
+      const key = `C:${state.curseDraft.join(",")}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      for (const id of this.state.curseDraft) {
+      for (const id of state.curseDraft) {
         const def = CURSES[id];
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card level-card";
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseCurse = id;
-          else chooseCurse(this.state, id);
+          else chooseCurse(state, id);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
           this.canvas.focus({ preventScroll: true });
         });
         this.relicChoices.appendChild(btn);
       }
       return;
     }
-    if (this.state.pausedForDraft && this.state.chestDraft) {
+    if (state.chestDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.add("hidden");
       this.draftTitle.textContent = "Chest Reward";
       this.draftBlurb.textContent = "Pick one of two rewards.";
-      const key = `H:${this.state.chestDraft.map((o) => o.label).join("|")}`;
+      const key = `H:${state.chestDraft.map((o) => o.label).join("|")}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      this.state.chestDraft.forEach((opt, index) => {
+      state.chestDraft.forEach((opt, index) => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card level-card";
         btn.innerHTML = `<span class="relic-tag">Chest</span><strong>${opt.label}</strong><span>${opt.blurb}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseChest = index;
-          else chooseChestReward(this.state, index);
+          else chooseChestReward(state, index);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
           this.canvas.focus({ preventScroll: true });
         });
         this.relicChoices.appendChild(btn);
       });
       return;
     }
-    if (this.state.pausedForDraft && this.state.utilityDraft) {
+    if (state.utilityDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.add("hidden");
       this.draftTitle.textContent =
-        this.state.utilityDraftLevel < 0
+        state.utilityDraftLevel < 0
           ? "Utility Ability (Run Start)"
-          : `Utility Ability (Lv ${this.state.utilityDraftLevel})`;
+          : `Utility Ability (Lv ${state.utilityDraftLevel})`;
       this.draftBlurb.textContent = "Choose one global utility for the Spacebar slot.";
-      const key = `U:${this.state.utilityDraft.join(",")}`;
+      const key = `U:${state.utilityDraft.join(",")}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      for (const id of this.state.utilityDraft) {
+      for (const id of state.utilityDraft) {
         const def = UTILITIES[id];
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card level-card";
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}<br/>${def.hint}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseUtility = id;
-          else chooseUtility(this.state, id);
+          else chooseUtility(state, id);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
       return;
     }
-    if (this.state.pausedForDraft && this.state.baseBranchDraft) {
+    if (state.baseBranchDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.add("hidden");
-      this.draftTitle.textContent = `Base Upgrade (Lv ${this.state.baseLevel})`;
+      this.draftTitle.textContent = `Base Upgrade (Lv ${state.baseLevel})`;
       this.draftBlurb.textContent = "";
-      const key = `B:${this.state.baseBranchDraft.join(",")}`;
+      const key = `B:${state.baseBranchDraft.join(",")}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      for (const id of this.state.baseBranchDraft) {
+      for (const id of state.baseBranchDraft) {
         const def = BASE_BRANCHES[id];
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card level-card";
         btn.innerHTML = `<span class="relic-tag">${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseBaseBranch = id;
-          else chooseBaseBranch(this.state, id);
+          else chooseBaseBranch(state, id);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
       return;
     }
-    if (this.state.pausedForDraft && this.state.levelDraft) {
+    if (state.levelDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.remove("hidden");
-      this.draftTitle.textContent = `Level Up! (Lv ${this.state.level})`;
+      this.draftTitle.textContent = `Level Up! (Lv ${state.level})`;
       this.draftBlurb.textContent = "";
-      this.paintDraftActionButtons(true);
-      const key = `L:${this.state.levelDraft.join(",")}:r${this.state.rerollTokens}`;
+      this.paintDraftActionButtons(true, state);
+      const key = `L:${state.levelDraft.join(",")}:r${state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      for (const id of this.state.levelDraft) {
+      for (const id of state.levelDraft) {
         const def = LEVEL_PASSIVES[id];
         const btn = document.createElement("button");
         btn.type = "button";
@@ -1596,36 +1636,34 @@ export class Game {
           : "";
         btn.innerHTML = `<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}${heroTag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseLevel = id;
-          else chooseLevelUp(this.state, id);
+          else chooseLevelUp(state, id);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
-    } else if (this.state.pausedForDraft && this.state.relicDraft) {
+    } else if (state.relicDraft) {
       this.relicDraft.classList.remove("hidden");
       this.draftActions.classList.remove("hidden");
       this.draftTitle.textContent = "Choose a Relic";
       this.draftBlurb.textContent = "";
-      this.paintDraftActionButtons(true);
-      const key = `R:${this.state.relicDraft.join(",")}:r${this.state.rerollTokens}`;
+      this.paintDraftActionButtons(true, state);
+      const key = `R:${state.relicDraft.join(",")}:r${state.rerollTokens}`;
       if (key === this.lastDraftKey) return;
       this.lastDraftKey = key;
       this.relicChoices.innerHTML = "";
-      for (const id of this.state.relicDraft) {
+      for (const id of state.relicDraft) {
         const def = RELICS[id];
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "relic-card";
         btn.innerHTML = `${relicArtImg(id, "relic-art relic-card-art")}<span class="relic-tag" style="color:${RARITY_COLOR[def.rarity]}">${RARITY_LABEL[def.rarity]} · ${def.tag}</span><strong>${def.name}</strong><span>${def.blurb}</span>`;
         btn.addEventListener("click", () => {
-          if (!this.state) return;
           if (this.mpMatch) this.mpUiIntent.chooseRelic = id;
-          else chooseRelic(this.state, id);
+          else chooseRelic(state, id);
           this.lastDraftKey = "";
-          if (!this.mpMatch && !this.state.pausedForDraft) this.relicDraft.classList.add("hidden");
+          if (!this.mpMatch && !state.pausedForDraft) this.relicDraft.classList.add("hidden");
         });
         this.relicChoices.appendChild(btn);
       }
@@ -1636,11 +1674,12 @@ export class Game {
     }
   }
 
-  private paintDraftActionButtons(showReroll: boolean): void {
-    if (!this.state) return;
+  private paintDraftActionButtons(showReroll: boolean, src?: GameState): void {
+    const state = src ?? this.draftSourceState() ?? this.state;
+    if (!state) return;
     this.relicSkip.classList.remove("hidden");
-    const tokens = this.state.rerollTokens;
-    const infinite = !!this.state.infiniteRerolls;
+    const tokens = state.rerollTokens;
+    const infinite = !!state.infiniteRerolls;
     if (!showReroll) {
       this.draftReroll.classList.add("hidden");
       return;
@@ -2245,8 +2284,9 @@ export class Game {
         s.wavesToWin <= 0 &&
         s.waveTimer <= 0 &&
         (() => {
-          const other = this.mpMatch!.lanes[(1 - this.mpMatch!.viewTeam) as 0 | 1];
-          return other.spawning || other.enemies.length > 0 || other.pausedForDraft;
+          const other = this.mpMatch!.lanes[(1 - this.mpMatch!.myTeam) as 0 | 1];
+          // Enemy draft UI must not block your wave cadence banner / break sense.
+          return other.spawning || other.enemies.length > 0;
         })();
       this.waveNumberEl.textContent = waitingOpp
         ? `Wave ${s.wave} · waiting on enemy lane…`
@@ -2415,7 +2455,6 @@ export class Game {
       this.abilityEl.innerHTML = heroSlots + utilSlot;
     }
 
-    this.toastEl.textContent =
-      s.toastTimer > 0 ? s.toast : s.nearShop && !s.shopOpen ? "F — open shop" : "";
+    this.toastEl.textContent = "";
   }
 }

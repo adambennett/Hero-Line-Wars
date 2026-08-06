@@ -25,6 +25,7 @@ import {
 import { clamp, normalize } from "../game/math";
 import type { GameState, HeroRuntime, RunOptions } from "../game/state";
 import { resolveHero, resolveMap } from "../custom/registry";
+import { withPlayerBag } from "../net/playerBag";
 
 export type CreativeRuntime = typeof CREATIVE_OPTION_DEFAULTS;
 
@@ -202,15 +203,38 @@ export function applyEnemySize(state: GameState, e: { radius: number }): void {
 
 export function applyCreativeWaveStart(state: GameState): void {
   if (state.infiniteRerolls) {
-    state.rerollTokens = Math.max(state.rerollTokens, 99);
+    if (state.playerBags) {
+      for (const key of Object.keys(state.playerBags)) {
+        withPlayerBag(state, Number(key), () => {
+          state.rerollTokens = Math.max(state.rerollTokens, 99);
+        });
+      }
+    } else {
+      state.rerollTokens = Math.max(state.rerollTokens, 99);
+    }
+  }
+
+  // Do not scramble utility/hero on the first wave of a match (wave index 1).
+  if (state.wave <= 1) {
+    applyPlayerSize(state);
+    return;
   }
 
   if (state.randomizeUtilityWave) {
     const picks = draftUtilities(6);
     if (picks.length) {
-      state.utilityId = picks[Math.floor(Math.random() * picks.length)]!;
-      state.utilityCd = 0;
-      state.utilityDraftOffered = true;
+      const apply = () => {
+        state.utilityId = picks[Math.floor(Math.random() * picks.length)]!;
+        state.utilityCd = 0;
+        state.utilityDraftOffered = true;
+      };
+      if (state.playerBags) {
+        for (const key of Object.keys(state.playerBags)) {
+          withPlayerBag(state, Number(key), apply);
+        }
+      } else {
+        apply();
+      }
       state.toast = "Utility scrambled!";
       state.toastTimer = 1.6;
     }
@@ -224,8 +248,11 @@ export function applyCreativeWaveStart(state: GameState): void {
 }
 
 export function applyPlayerSize(state: GameState): void {
-  const base = resolveHero(state.hero.heroId).radius;
-  state.hero.radius = Math.max(4, base * state.playerSizeMul);
+  const mul = state.playerSizeMul;
+  for (const h of [state.hero, ...state.allies]) {
+    const base = resolveHero(h.heroId).radius;
+    h.radius = Math.max(4, base * mul);
+  }
 }
 
 export function randomizeHeroKeepingProgress(state: GameState): void {
@@ -248,9 +275,11 @@ export function randomizeHeroKeepingProgress(state: GameState): void {
   state.toastTimer = 1.8;
 }
 
-/** End-of-wave map shuffle (before next wave starts). */
+/** End-of-wave map shuffle (only after completing wave 1+ → advance 1→2, 2→3, …). */
 export function maybeRandomizeMap(state: GameState): void {
   if (!state.randomizeMapWave) return;
+  // Wave field is the wave just cleared; never fire before any wave completed.
+  if (state.wave < 1) return;
   const resolved = pickRandomMap(state.contentFilters?.maps);
   const map: MapDef = structuredClone(resolveMap(resolved));
   const ratio = state.map.base.maxHp > 0 ? state.baseHp / state.map.base.maxHp : 1;

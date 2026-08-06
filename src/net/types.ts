@@ -30,13 +30,19 @@ export type LobbySeat = {
   slot: number;
   team: MpTeam;
   name: string;
-  heroId: HeroId;
+  /** Concrete hero or `random` (resolved at match start). */
+  heroId: HeroId | "random";
   ready: boolean;
   here: boolean;
 };
 
 export type LobbyState = {
   mode: MatchMode;
+  /**
+   * Human seat capacity (1–6). Lobby seats open up to this count.
+   * Teams / PvE vs PvP are chosen via switch-team + AI roster / game type flags.
+   */
+  maxHumans?: number;
   slots: LobbySeat[];
   /** Optional AI fillers on either team (beyond human seats from the mode). */
   aiSeats?: LobbyAiSeat[];
@@ -48,6 +54,8 @@ export type LobbyState = {
   friendlyFire: boolean;
   /** −1 = Run Start, 0 = Never. */
   utilityDraftLevel?: number;
+  /** Selected named game type id (display sync for clients). */
+  gameTypeId?: string;
   /** 0 = unlimited. */
   livesPerWave?: number;
   /** 0 = unlimited. */
@@ -92,6 +100,8 @@ export type LobbyState = {
   allowBarracks?: boolean;
   respawnMinigame?: boolean;
   sendLocation?: "own" | "enemy";
+  /** No rival lane — ally AI only; foe lane / team-1 fillers are disabled. */
+  endless?: boolean;
   /** Creative extras — see creativeOptions. */
   relicDrop?: import("../meta/creativeOptions").RelicDropMode;
   enemyProjectileDmgMul?: number;
@@ -127,6 +137,8 @@ export type LobbyState = {
 
 /** Host-synced creative / run extras carried on lobby + start. */
 export type MpRunExtras = {
+  /** Named game type id — clients use this to show Host settings correctly. */
+  gameTypeId?: string;
   utilityDraftLevel?: number;
   ascension?: number;
   livesPerWave?: number;
@@ -169,6 +181,8 @@ export type MpRunExtras = {
   allowBarracks?: boolean;
   respawnMinigame?: boolean;
   sendLocation?: "own" | "enemy";
+  /** No rival lane — co-op / solo survival without a team-1 foe lane. */
+  endless?: boolean;
   relicDrop?: import("../meta/creativeOptions").RelicDropMode;
   enemyProjectileDmgMul?: number;
   enemyCollisionDmgMul?: number;
@@ -356,6 +370,16 @@ export type LaneSnap = {
   waveLivesLeft: number;
   runLivesLeft: number;
   waveRespawnBlocked: boolean;
+  /** Precision respawn bar (host-ticked; clients render from snapshot). */
+  respawnMinigame?: {
+    cursor: number;
+    dir: 1 | -1;
+    zoneStart: number;
+    zoneEnd: number;
+    speed: number;
+    feedback: number;
+    lastHit: boolean | null;
+  } | null;
   heroes: HeroSnap[];
   enemies: EnemySnap[];
   turrets: {
@@ -511,6 +535,28 @@ export function modeCap(mode: MatchMode): number {
   if (mode === "3p-pve") return 3;
   if (mode === "2p-pve") return 2;
   return 2;
+}
+
+/** Clamp human lobby seat count. */
+export function clampMaxHumans(n: number): number {
+  return Math.max(1, Math.min(6, Math.floor(n) || 1));
+}
+
+/**
+ * Wire-compatible MatchMode whose legacy `modeCap` is ≥ requested humans.
+ * Used so older peers still understand room size buckets.
+ */
+export function modeFromMaxHumans(n: number): MatchMode {
+  const p = clampMaxHumans(n);
+  if (p <= 2) return "1v1";
+  if (p <= 4) return "2v2";
+  return "3v3";
+}
+
+/** Human seat capacity for a lobby (prefers explicit maxHumans). */
+export function lobbyHumanCap(lobby: { mode: MatchMode; maxHumans?: number }): number {
+  if (lobby.maxHumans != null) return clampMaxHumans(lobby.maxHumans);
+  return modeCap(lobby.mode);
 }
 
 export function teamNeed(mode: MatchMode): number {

@@ -188,14 +188,9 @@ export function gameTypeOptionsFieldsHtml(
       o.enemyMutation !== d.enemyMutation,
     ].filter(Boolean).length;
 
-  const wavesField = o.endless
-    ? `<label class="run-field"${tip("wavesToWin")}>
-          <span>Waves to win</span>
-          <select disabled${tip("wavesToWin")}>
-            <option selected>Until you fall</option>
-          </select>
-        </label>`
-    : `<label class="run-field"${tip("wavesToWin")}>
+  // No-rival (endless) only removes the enemy lane — waves-to-win is independent.
+  // 0 = Unlimited from the real pool; never invent a fake "Until you fall" option.
+  const wavesField = `<label class="run-field"${tip("wavesToWin")}>
           <span>Waves to win</span>
           <select data-gt="wavesToWin" id="${prefix}-wavesToWin" ${dis}${tip("wavesToWin")}>${waveOpts}</select>
         </label>`;
